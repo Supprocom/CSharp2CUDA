@@ -136,8 +136,7 @@ internal sealed class CudaSyntaxValidator(
                 ReportUnsupportedCall(node, method.ToDisplayString());
             }
 
-            if (arguments.Count > 1 &&
-                arguments.Any(argument => !IsOrderIndependent(argument.Expression)))
+            if (!HasSafeArgumentOrder(arguments))
             {
                 ReportUnsupportedCall(node, method.ToDisplayString());
             }
@@ -238,7 +237,8 @@ internal sealed class CudaSyntaxValidator(
         {
             if (operatorMethod.ContainingType.ToDisplayString() != "CSharp2CUDA.CudaInt32" ||
                 operation.OperatorKind is not BinaryOperatorKind.Equals and
-                    not BinaryOperatorKind.NotEquals)
+                    not BinaryOperatorKind.NotEquals ||
+                !CanEvaluateInEitherOrder(node.Left, node.Right))
             {
                 ReportUnsupportedSyntax(node);
             }
@@ -271,16 +271,16 @@ internal sealed class CudaSyntaxValidator(
                 ReportUnsupportedSyntax(node);
                 return;
             }
+            if (!CanEvaluateInEitherOrder(node.Left, node.Right))
+            {
+                ReportUnsupportedSyntax(node);
+                return;
+            }
             if (operation.OperatorKind == BinaryOperatorKind.Add)
             {
                 pointerHelper = operation.LeftOperand.Type is IPointerTypeSymbol
                     ? "csharp2cuda_pointer_add"
                     : "csharp2cuda_pointer_add_reverse";
-                if (!IsOrderIndependent(node.Left) || !IsOrderIndependent(node.Right))
-                {
-                    ReportUnsupportedSyntax(node);
-                    return;
-                }
                 plan.PlanBinaryHelper(node, pointerHelper);
             }
             return;
@@ -316,21 +316,26 @@ internal sealed class CudaSyntaxValidator(
             return;
         }
 
-        if (helper is not null)
+        if (operation.OperatorKind is not BinaryOperatorKind.ConditionalAnd and
+                not BinaryOperatorKind.ConditionalOr &&
+            !CanEvaluateInEitherOrder(node.Left, node.Right))
         {
-            if (!IsOrderIndependent(node.Left) || !IsOrderIndependent(node.Right))
-            {
-                ReportUnsupportedSyntax(node);
-                return;
-            }
-            plan.PlanBinaryHelper(node, helper);
+            ReportUnsupportedSyntax(node);
+            return;
         }
+
+        if (helper is not null)
+            plan.PlanBinaryHelper(node, helper);
     }
 
     private void ValidateAssignment(AssignmentExpressionSyntax node)
     {
         if (node.IsKind(SyntaxKind.SimpleAssignmentExpression))
+        {
+            if (!CanEvaluateAssignmentInCppOrder(node.Left, node.Right))
+                ReportUnsupportedSyntax(node);
             return;
+        }
         if (semanticModel.GetOperation(node) is not ICompoundAssignmentOperation operation ||
             operation.OperatorMethod is not null)
         {
@@ -355,7 +360,7 @@ internal sealed class CudaSyntaxValidator(
             _ => false
         };
 
-        if (!supported || helper is not null && !IsOrderIndependent(node.Right))
+        if (!supported || !CanEvaluateInEitherOrder(node.Left, node.Right))
         {
             ReportUnsupportedSyntax(node);
             return;
@@ -553,7 +558,53 @@ internal sealed class CudaSyntaxValidator(
         return plan.IsFixedLocalArray(declaration);
     }
 
-    private bool IsOrderIndependent(ExpressionSyntax expression)
+    private bool HasSafeArgumentOrder(SeparatedSyntaxList<ArgumentSyntax> arguments)
+    {
+        for (var first = 0; first < arguments.Count; first++)
+        {
+            for (var second = first + 1; second < arguments.Count; second++)
+            {
+                if (!CanEvaluateInEitherOrder(
+                        arguments[first].Expression,
+                        arguments[second].Expression))
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private bool CanEvaluateAssignmentInCppOrder(
+        ExpressionSyntax target,
+        ExpressionSyntax value)
+    {
+        if (HasStorageConflict(target, value))
+            return false;
+        if (HasNoObservableEffectInTarget(target) && HasNoObservableEffect(value))
+            return true;
+        if (HasOnlyIsolatedLocalEffects(target) && HasNoObservableEffect(value))
+            return true;
+        if (HasIsolatedTargetEffects(target))
+            return true;
+        return HasInvariantTargetLocation(target) || IsInvariantValue(value);
+    }
+
+    private bool CanEvaluateInEitherOrder(ExpressionSyntax first, ExpressionSyntax second)
+    {
+        if (HasStorageConflict(first, second))
+            return false;
+        if (HasNoObservableEffect(first) && HasNoObservableEffect(second))
+            return true;
+        if (HasOnlyIsolatedLocalEffects(first) && HasNoObservableEffect(second) ||
+            HasOnlyIsolatedLocalEffects(second) && HasNoObservableEffect(first))
+        {
+            return true;
+        }
+        return IsInvariantValue(first) || IsInvariantValue(second);
+    }
+
+    private bool HasNoObservableEffect(ExpressionSyntax expression)
     {
         foreach (var node in expression.DescendantNodesAndSelf())
         {
@@ -573,6 +624,297 @@ internal sealed class CudaSyntaxValidator(
             }
         }
         return true;
+    }
+
+    private bool HasOnlyIsolatedLocalEffects(ExpressionSyntax expression)
+    {
+        var hasEffect = false;
+        foreach (var node in expression.DescendantNodesAndSelf())
+        {
+            if (node is InvocationExpressionSyntax invocation)
+            {
+                var method = semanticModel.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
+                if (method is null || !plan.IsPureCall(method))
+                    return false;
+            }
+
+            ExpressionSyntax? target = node switch
+            {
+                AssignmentExpressionSyntax assignment => assignment.Left,
+                PrefixUnaryExpressionSyntax prefix when
+                    prefix.IsKind(SyntaxKind.PreIncrementExpression) ||
+                    prefix.IsKind(SyntaxKind.PreDecrementExpression) => prefix.Operand,
+                PostfixUnaryExpressionSyntax postfix => postfix.Operand,
+                _ => null
+            };
+            if (target is null)
+                continue;
+            hasEffect = true;
+            if (!IsIsolatedLocalTarget(target))
+                return false;
+        }
+        return hasEffect;
+    }
+
+    private bool IsIsolatedLocalTarget(ExpressionSyntax target)
+    {
+        while (target is ParenthesizedExpressionSyntax parenthesized)
+            target = parenthesized.Expression;
+        var symbol = semanticModel.GetSymbolInfo(target).Symbol;
+        return symbol switch
+        {
+            ILocalSymbol local => !IsStorageExposed(local),
+            IParameterSymbol { RefKind: RefKind.None } parameter =>
+                !IsStorageExposed(parameter),
+            _ => false
+        };
+    }
+
+    private bool HasIsolatedTargetEffects(ExpressionSyntax target)
+    {
+        if (!HasOnlyIsolatedLocalEffects(target))
+            return false;
+        return target switch
+        {
+            ParenthesizedExpressionSyntax parenthesized =>
+                HasIsolatedTargetEffects(parenthesized.Expression),
+            PrefixUnaryExpressionSyntax prefix when
+                prefix.IsKind(SyntaxKind.PointerIndirectionExpression) =>
+                IsInvariantValue(prefix.Operand),
+            ElementAccessExpressionSyntax element =>
+                IsInvariantValue(element.Expression) &&
+                element.ArgumentList.Arguments.All(argument =>
+                    IsInvariantValue(argument.Expression) ||
+                    IsIsolatedIndexMutation(argument.Expression)),
+            MemberAccessExpressionSyntax member when
+                member.IsKind(SyntaxKind.SimpleMemberAccessExpression) =>
+                HasIsolatedTargetEffects(member.Expression),
+            MemberAccessExpressionSyntax member when
+                member.IsKind(SyntaxKind.PointerMemberAccessExpression) =>
+                IsInvariantValue(member.Expression),
+            _ => false
+        };
+    }
+
+    private bool IsIsolatedIndexMutation(ExpressionSyntax expression)
+    {
+        while (expression is ParenthesizedExpressionSyntax parenthesized)
+            expression = parenthesized.Expression;
+        return expression switch
+        {
+            PrefixUnaryExpressionSyntax prefix when
+                prefix.IsKind(SyntaxKind.PreIncrementExpression) ||
+                prefix.IsKind(SyntaxKind.PreDecrementExpression) =>
+                IsIsolatedLocalTarget(prefix.Operand),
+            PostfixUnaryExpressionSyntax postfix =>
+                IsIsolatedLocalTarget(postfix.Operand),
+            _ => false
+        };
+    }
+
+    private bool HasNoObservableEffectInTarget(ExpressionSyntax target)
+    {
+        return target switch
+        {
+            IdentifierNameSyntax => true,
+            ParenthesizedExpressionSyntax parenthesized =>
+                HasNoObservableEffectInTarget(parenthesized.Expression),
+            PrefixUnaryExpressionSyntax prefix when
+                prefix.IsKind(SyntaxKind.PointerIndirectionExpression) =>
+                HasNoObservableEffect(prefix.Operand),
+            ElementAccessExpressionSyntax element =>
+                HasNoObservableEffect(element.Expression) &&
+                element.ArgumentList.Arguments.All(argument =>
+                    HasNoObservableEffect(argument.Expression)),
+            MemberAccessExpressionSyntax member when
+                member.IsKind(SyntaxKind.SimpleMemberAccessExpression) =>
+                HasNoObservableEffectInTarget(member.Expression),
+            MemberAccessExpressionSyntax member when
+                member.IsKind(SyntaxKind.PointerMemberAccessExpression) =>
+                HasNoObservableEffect(member.Expression),
+            _ => HasNoObservableEffect(target)
+        };
+    }
+
+    private bool HasInvariantTargetLocation(ExpressionSyntax target)
+    {
+        return target switch
+        {
+            IdentifierNameSyntax identifier =>
+                semanticModel.GetSymbolInfo(identifier).Symbol is ILocalSymbol or
+                    IParameterSymbol,
+            ParenthesizedExpressionSyntax parenthesized =>
+                HasInvariantTargetLocation(parenthesized.Expression),
+            PrefixUnaryExpressionSyntax prefix when
+                prefix.IsKind(SyntaxKind.PointerIndirectionExpression) =>
+                IsInvariantValue(prefix.Operand),
+            ElementAccessExpressionSyntax element =>
+                IsInvariantValue(element.Expression) &&
+                element.ArgumentList.Arguments.All(argument =>
+                    IsInvariantValue(argument.Expression)),
+            MemberAccessExpressionSyntax member when
+                member.IsKind(SyntaxKind.SimpleMemberAccessExpression) =>
+                HasInvariantTargetLocation(member.Expression),
+            MemberAccessExpressionSyntax member when
+                member.IsKind(SyntaxKind.PointerMemberAccessExpression) =>
+                IsInvariantValue(member.Expression),
+            _ => false
+        };
+    }
+
+    private bool IsInvariantValue(ExpressionSyntax expression)
+    {
+        return expression switch
+        {
+            LiteralExpressionSyntax => true,
+            IdentifierNameSyntax identifier => IsInvariantIdentifier(identifier),
+            ParenthesizedExpressionSyntax parenthesized =>
+                IsInvariantValue(parenthesized.Expression),
+            CheckedExpressionSyntax checkedExpression when
+                checkedExpression.IsKind(SyntaxKind.UncheckedExpression) =>
+                IsInvariantValue(checkedExpression.Expression),
+            CastExpressionSyntax cast => IsInvariantValue(cast.Expression),
+            PrefixUnaryExpressionSyntax prefix when
+                prefix.IsKind(SyntaxKind.UnaryPlusExpression) ||
+                prefix.IsKind(SyntaxKind.UnaryMinusExpression) ||
+                prefix.IsKind(SyntaxKind.LogicalNotExpression) ||
+                prefix.IsKind(SyntaxKind.BitwiseNotExpression) ||
+                prefix.IsKind(SyntaxKind.AddressOfExpression) =>
+                IsInvariantValue(prefix.Operand),
+            BinaryExpressionSyntax binary when
+                !binary.IsKind(SyntaxKind.DivideExpression) &&
+                !binary.IsKind(SyntaxKind.ModuloExpression) =>
+                IsInvariantValue(binary.Left) && IsInvariantValue(binary.Right),
+            ConditionalExpressionSyntax conditional =>
+                IsInvariantValue(conditional.Condition) &&
+                IsInvariantValue(conditional.WhenTrue) &&
+                IsInvariantValue(conditional.WhenFalse),
+            MemberAccessExpressionSyntax member => IsInvariantMember(member),
+            InvocationExpressionSyntax invocation => IsInvariantCall(invocation),
+            _ => false
+        };
+    }
+
+    private bool IsInvariantIdentifier(IdentifierNameSyntax identifier)
+    {
+        var symbol = semanticModel.GetSymbolInfo(identifier).Symbol;
+        return symbol switch
+        {
+            ILocalSymbol local => !IsStorageExposed(local),
+            IParameterSymbol { RefKind: RefKind.None } parameter =>
+                !IsStorageExposed(parameter),
+            IPropertySymbol property => plan.IsDimensionProperty(property),
+            _ => false
+        };
+    }
+
+    private bool IsInvariantMember(MemberAccessExpressionSyntax member)
+    {
+        if (plan.TryGetDimensionReplacement(member, out _))
+            return true;
+        return member.IsKind(SyntaxKind.SimpleMemberAccessExpression) &&
+            semanticModel.GetSymbolInfo(member).Symbol is IFieldSymbol { IsStatic: false } &&
+            IsInvariantValue(member.Expression);
+    }
+
+    private bool IsInvariantCall(InvocationExpressionSyntax invocation)
+    {
+        if (semanticModel.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method ||
+            !plan.IsPureCall(method) ||
+            plan.GetCallPlan(method) is not { Kind: not CudaCallKind.PlannedFunction } ||
+            method.Parameters.Any(parameter =>
+                parameter.RefKind != RefKind.None ||
+                parameter.Type is IPointerTypeSymbol))
+        {
+            return false;
+        }
+        return invocation.ArgumentList.Arguments.All(argument =>
+            IsInvariantValue(argument.Expression));
+    }
+
+    private bool IsStorageExposed(ISymbol symbol)
+    {
+        var method = symbol.ContainingSymbol as IMethodSymbol;
+        var syntax = method?.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() as
+            MethodDeclarationSyntax;
+        if (syntax is null)
+            return true;
+
+        foreach (var node in syntax.DescendantNodes())
+        {
+            if (node is PrefixUnaryExpressionSyntax prefix &&
+                prefix.IsKind(SyntaxKind.AddressOfExpression) &&
+                SymbolEqualityComparer.Default.Equals(
+                    GetExposedStorageSymbol(prefix.Operand),
+                    symbol))
+            {
+                return true;
+            }
+            if (node is ArgumentSyntax argument &&
+                argument.RefKindKeyword != default &&
+                SymbolEqualityComparer.Default.Equals(
+                    GetExposedStorageSymbol(argument.Expression),
+                    symbol))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private bool HasStorageConflict(ExpressionSyntax first, ExpressionSyntax second)
+    {
+        var firstWrites = GetWrittenSymbols(first);
+        var secondWrites = GetWrittenSymbols(second);
+        return firstWrites.Overlaps(GetReferencedSymbols(second)) ||
+            secondWrites.Overlaps(GetReferencedSymbols(first));
+    }
+
+    private HashSet<ISymbol> GetWrittenSymbols(ExpressionSyntax expression)
+    {
+        var symbols = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        foreach (var node in expression.DescendantNodesAndSelf())
+        {
+            ExpressionSyntax? target = node switch
+            {
+                AssignmentExpressionSyntax assignment => assignment.Left,
+                PrefixUnaryExpressionSyntax prefix when
+                    prefix.IsKind(SyntaxKind.PreIncrementExpression) ||
+                    prefix.IsKind(SyntaxKind.PreDecrementExpression) => prefix.Operand,
+                PostfixUnaryExpressionSyntax postfix => postfix.Operand,
+                _ => null
+            };
+            if (target is not null && semanticModel.GetSymbolInfo(target).Symbol is { } symbol)
+                symbols.Add(symbol);
+        }
+        return symbols;
+    }
+
+    private HashSet<ISymbol> GetReferencedSymbols(ExpressionSyntax expression)
+    {
+        var symbols = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        foreach (var identifier in expression.DescendantNodesAndSelf()
+                     .OfType<IdentifierNameSyntax>())
+        {
+            var symbol = semanticModel.GetSymbolInfo(identifier).Symbol;
+            if (symbol is ILocalSymbol or IParameterSymbol or IFieldSymbol)
+                symbols.Add(symbol);
+        }
+        return symbols;
+    }
+
+    private ISymbol? GetExposedStorageSymbol(ExpressionSyntax expression)
+    {
+        while (expression is ParenthesizedExpressionSyntax parenthesized)
+            expression = parenthesized.Expression;
+        if (expression is IdentifierNameSyntax)
+            return semanticModel.GetSymbolInfo(expression).Symbol;
+        if (expression is MemberAccessExpressionSyntax member &&
+            member.IsKind(SyntaxKind.SimpleMemberAccessExpression))
+        {
+            return GetExposedStorageSymbol(member.Expression);
+        }
+        return null;
     }
 
     private static bool PlanArithmetic(

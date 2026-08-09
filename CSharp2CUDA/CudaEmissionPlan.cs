@@ -396,13 +396,21 @@ internal sealed class CudaEmissionPlan
         if (unit.Model.GetDeclaredSymbol(syntax) is not INamedTypeSymbol symbol)
             return;
 
+        var externalAttribute = GetAttribute(symbol, ExternalAttributeName);
+        if (externalAttribute is not null && GetNamedBoolean(
+                externalAttribute,
+                nameof(CudaExternalAttribute.IsPure),
+                false))
+        {
+            ReportUnsupportedSyntax(syntax);
+        }
         var name = RegisterIdentifier(symbol, syntax.Identifier.ValueText, syntax.Identifier.GetLocation());
         var structure = new CudaStructPlan(
             syntax,
             symbol,
             unit.Model,
             name,
-            HasAttribute(symbol, ExternalAttributeName));
+            externalAttribute is not null);
         structures.Add(structure);
         structPlans[symbol] = structure;
     }
@@ -415,7 +423,8 @@ internal sealed class CudaEmissionPlan
         if (unit.Model.GetDeclaredSymbol(syntax) is not IMethodSymbol symbol)
             return;
 
-        var external = HasAttribute(symbol, ExternalAttributeName);
+        var externalAttribute = GetAttribute(symbol, ExternalAttributeName);
+        var external = externalAttribute is not null;
         var device = GetAttribute(symbol, DeviceAttributeName);
         var global = GetAttribute(symbol, GlobalAttributeName);
         var kind = device is not null
@@ -441,6 +450,10 @@ internal sealed class CudaEmissionPlan
             kind,
             externC,
             external,
+            externalAttribute is not null && GetNamedBoolean(
+                externalAttribute,
+                nameof(CudaExternalAttribute.IsPure),
+                false),
             device is not null,
             global is not null);
         functions.Add(function);
@@ -572,6 +585,17 @@ internal sealed class CudaEmissionPlan
         foreach (var parameter in function.Symbol.Parameters)
             ValidateParameter(function, parameter);
 
+        if (function.IsPureExternal)
+        {
+            foreach (var parameter in function.Symbol.Parameters.Where(parameter =>
+                         parameter.Type is IPointerTypeSymbol &&
+                         !HasAttribute(parameter, ReadOnlyAttributeName)))
+            {
+                ReportUnsupportedSyntax(
+                    syntax.ParameterList.Parameters[parameter.Ordinal]);
+            }
+        }
+
         if (!function.IsExternal && syntax.Body is not null)
         {
             foreach (var declaration in syntax.Body.DescendantNodes()
@@ -667,15 +691,9 @@ internal sealed class CudaEmissionPlan
 
     private void ComputePureFunctions()
     {
-        foreach (var function in Functions.Where(static function => function.IsExternal))
+        foreach (var function in Functions.Where(static function =>
+                     function.IsExternal && function.IsPureExternal))
         {
-            if (function.Symbol.ReturnsVoid ||
-                function.Symbol.Parameters.Any(parameter =>
-                    parameter.RefKind != RefKind.None ||
-                    parameter.Type is IPointerTypeSymbol))
-            {
-                continue;
-            }
             pureFunctions.Add(function.Symbol);
         }
 
@@ -971,6 +989,7 @@ internal sealed record CudaFunctionPlan(
     CudaFunctionKind Kind,
     bool ExternC,
     bool IsExternal,
+    bool IsPureExternal,
     bool HasDeviceAttribute,
     bool HasGlobalAttribute);
 

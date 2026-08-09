@@ -46,6 +46,18 @@ Use `ReadOnlySpan<T>` to emit a `const` array. Dynamic lengths are rejected.
 Use `CudaExternalAttribute` for a type or method supplied by an earlier CUDA source unit. The
 declaration remains available to Roslyn, but the transpiler does not emit it again.
 
+External methods have unknown effects by default. Set `CudaExternalAttribute.IsPure` only for
+a method that does not write memory, change external state, throw, or trap.
+
+Its result must depend only on argument values and reachable read-only memory. Mark each pointer
+parameter with `CudaReadOnlyAttribute`. An incorrect contract can change program behavior.
+
+C# and CUDA C++ evaluate some expressions in different orders. The semantic plan accepts these
+expressions only when its effect analysis proves an equivalent result.
+
+Unsafe assignment targets, binary operands, compound assignments, and call arguments cause an
+error. The transpiler does not emit source for these inputs.
+
 The body validator accepts only syntax with an explicit CUDA rule. The `%` operator accepts
 only integral operands. Use `Cuda.FloatingRemainder` for floating-point operands.
 
@@ -55,6 +67,9 @@ only integral operands. Use `Cuda.FloatingRemainder` for floating-point operands
 Call `CudaTranspiler.Transpile` with C# source or a Roslyn `CSharpCompilation`. The result
 contains the CUDA source and all Roslyn diagnostics. An error always causes an empty CUDA
 source result.
+
+The compilation overload rejects `CSharpCompilationOptions.CheckOverflow` when its value is
+`true`. Generated integer helpers implement unchecked C# arithmetic.
 
 ```csharp
 var result = CudaTranspiler.Transpile(csharpSource);

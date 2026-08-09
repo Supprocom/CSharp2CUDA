@@ -47,6 +47,12 @@ public static class CudaTranspiler
         ValidateOptions(options);
 
         var diagnostics = compilation.GetDiagnostics().ToBuilder();
+        if (compilation.Options.CheckOverflow)
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.CheckedOverflowCompilation,
+                Location.None));
+        }
         if (diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
             return new CudaTranspilationResult(string.Empty, diagnostics.ToImmutable());
 

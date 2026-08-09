@@ -93,4 +93,12 @@ internal static class CudaDiagnostics
         Category,
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor CheckedOverflowCompilation = new(
+        "CS2CUDA012",
+        "Checked integer overflow is not supported",
+        "The compilation option for checked integer overflow does not have a CUDA translation",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
 }

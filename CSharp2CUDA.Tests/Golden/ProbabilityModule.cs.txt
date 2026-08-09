@@ -25,76 +25,76 @@ internal static unsafe class ProbabilityModule
         public double imaginary;
     }
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static double mathblocks_compensated_product_sum([CudaReadOnly] double* first, [CudaReadOnly] double* second, int count) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static double mathblocks_compensated_sum([CudaReadOnly] double* values, int count) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static MathBlockComplexValue mathblocks_complex_add(MathBlockComplexValue left, MathBlockComplexValue right) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static MathBlockComplexValue mathblocks_complex_conjugate(MathBlockComplexValue value) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static MathBlockComplexValue mathblocks_complex_divide(MathBlockComplexValue left, MathBlockComplexValue right) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static bool mathblocks_complex_finite(MathBlockComplexValue value) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static MathBlockComplexValue mathblocks_complex_from_polar(double magnitude, double phase) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static double mathblocks_complex_magnitude(MathBlockComplexValue value) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static MathBlockComplexValue mathblocks_complex_make(double real, double imaginary) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static MathBlockComplexValue mathblocks_complex_multiply(MathBlockComplexValue left, MathBlockComplexValue right) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static double mathblocks_complex_phase(MathBlockComplexValue value) => throw new NotSupportedException();
 
     [CudaExternal]
     private static void mathblocks_complex_shape(MathBlockSlot* output, int count) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static MathBlockComplexValue mathblocks_complex_square_root(MathBlockComplexValue value) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static MathBlockComplexValue mathblocks_complex_subtract(MathBlockComplexValue left, MathBlockComplexValue right) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static double mathblocks_cube_root(double value) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static double mathblocks_error_function(double value) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static double mathblocks_exponential(double value) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static double mathblocks_log_one_plus(double value) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static double mathblocks_maximum(double first, double second) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static double mathblocks_natural_logarithm(double value) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static double mathblocks_power(double value, double exponent) => throw new NotSupportedException();
 
     [CudaExternal]
     private static void mathblocks_set_vector_shape(MathBlockSlot* output, int count) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static double mathblocks_sine(double value) => throw new NotSupportedException();
 
-    [CudaExternal]
+    [CudaExternal(IsPure = true)]
     private static double mathblocks_square_root(double value) => throw new NotSupportedException();
     [CudaDevice]
     private static bool mathblocks_probability_integer(double value, int* result)

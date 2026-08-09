@@ -23,4 +23,7 @@ public sealed class CudaReadOnlyAttribute : Attribute;
     AttributeTargets.Struct | AttributeTargets.Method,
     AllowMultiple = false,
     Inherited = false)]
-public sealed class CudaExternalAttribute : Attribute;
+public sealed class CudaExternalAttribute : Attribute
+{
+    public bool IsPure { get; set; }
+}

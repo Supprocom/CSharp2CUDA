@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace CSharp2CUDA.Tests;
@@ -903,6 +904,219 @@ public sealed class CudaTranspilerTests
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA005");
     }
 
+    [Fact]
+    public void Transpile_RejectsUnsequencedSimpleAssignment()
+    {
+        const string source = """
+            using CSharp2CUDA;
+
+            [CudaTranslationUnit]
+            internal static unsafe class AssignmentModule
+            {
+                [CudaDevice]
+                private static int Next(int* state)
+                {
+                    return (*state)++;
+                }
+
+                [CudaDevice]
+                private static void Write(int* output, int* state)
+                {
+                    output[Next(state)] = Next(state);
+                }
+            }
+            """;
+
+        var result = CudaTranspiler.Transpile(source);
+
+        Assert.False(result.Succeeded);
+        Assert.Empty(result.Source);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA005");
+    }
+
+    [Theory]
+    [InlineData("uint")]
+    [InlineData("double")]
+    public void Transpile_RejectsUnsequencedNativeBinaryOperands(string type)
+    {
+        var source = $$"""
+            using CSharp2CUDA;
+
+            [CudaTranslationUnit]
+            internal static unsafe class BinaryModule
+            {
+                [CudaDevice]
+                private static {{type}} Next({{type}}* state)
+                {
+                    return (*state)++;
+                }
+
+                [CudaDevice]
+                private static {{type}} Read({{type}}* state)
+                {
+                    return Next(state) - Next(state);
+                }
+            }
+            """;
+
+        var result = CudaTranspiler.Transpile(source);
+
+        Assert.False(result.Succeeded);
+        Assert.Empty(result.Source);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA005");
+    }
+
+    [Fact]
+    public void Transpile_RejectsUnsequencedCompoundAssignmentTarget()
+    {
+        const string source = """
+            using CSharp2CUDA;
+
+            [CudaTranslationUnit]
+            internal static unsafe class CompoundModule
+            {
+                [CudaDevice]
+                private static int Next(int* state)
+                {
+                    return (*state)++;
+                }
+
+                [CudaDevice]
+                private static void Write(int* output, int* state)
+                {
+                    output[Next(state)] += *state;
+                }
+            }
+            """;
+
+        var result = CudaTranspiler.Transpile(source);
+
+        Assert.False(result.Succeeded);
+        Assert.Empty(result.Source);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA005");
+    }
+
+    [Fact]
+    public void Transpile_RejectsUnsequencedExternalFunctionOperands()
+    {
+        const string source = """
+            using System;
+            using CSharp2CUDA;
+
+            [CudaTranslationUnit]
+            internal static class ExternalModule
+            {
+                [CudaExternal]
+                private static int Next() => throw new NotSupportedException();
+
+                [CudaDevice]
+                private static int Read()
+                {
+                    return Next() - Next();
+                }
+            }
+            """;
+
+        var result = CudaTranspiler.Transpile(source);
+
+        Assert.False(result.Succeeded);
+        Assert.Empty(result.Source);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA005");
+    }
+
+    [Fact]
+    public void Transpile_AcceptsExplicitlyPureExternalFunctionOperands()
+    {
+        const string source = """
+            using System;
+            using CSharp2CUDA;
+
+            [CudaTranslationUnit]
+            internal static class ExternalModule
+            {
+                [CudaExternal(IsPure = true)]
+                private static int Sample() => throw new NotSupportedException();
+
+                [CudaDevice]
+                private static int Read()
+                {
+                    return Sample() - Sample();
+                }
+            }
+            """;
+
+        var result = CudaTranspiler.Transpile(source);
+
+        Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
+        Assert.Contains(
+            "csharp2cuda_i32_sub(Sample(), Sample())",
+            result.Source,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Transpile_RejectsPureExternalWritablePointer()
+    {
+        const string source = """
+            using System;
+            using CSharp2CUDA;
+
+            [CudaTranslationUnit]
+            internal static unsafe class ExternalModule
+            {
+                [CudaExternal(IsPure = true)]
+                private static int Read(int* value) => throw new NotSupportedException();
+
+                [CudaDevice]
+                private static int Call(int* value)
+                {
+                    return Read(value);
+                }
+            }
+            """;
+
+        var result = CudaTranspiler.Transpile(source);
+
+        Assert.False(result.Succeeded);
+        Assert.Empty(result.Source);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA005");
+    }
+
+    [Fact]
+    public void Transpile_RejectsCheckedOverflowCompilation()
+    {
+        const string source = """
+            using CSharp2CUDA;
+
+            [CudaTranslationUnit]
+            internal static class CheckedModule
+            {
+                [CudaDevice]
+                private static int Add(int left, int right)
+                {
+                    return left + right;
+                }
+            }
+            """;
+        var syntaxTree = CSharpSyntaxTree.ParseText(
+            source,
+            new CSharpParseOptions(LanguageVersion.CSharp14));
+        var references = GetCompilationReferences();
+        var compilation = CSharpCompilation.Create(
+            "CheckedInput",
+            [syntaxTree],
+            references,
+            new CSharpCompilationOptions(
+                OutputKind.DynamicallyLinkedLibrary,
+                checkOverflow: true));
+
+        var result = CudaTranspiler.Transpile(compilation);
+
+        Assert.False(result.Succeeded);
+        Assert.Empty(result.Source);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA012");
+    }
+
     private static void AppendDeviceCatalog(
         StringBuilder builder,
         string source,
@@ -953,6 +1167,19 @@ public sealed class CudaTranspilerTests
             }
             """;
         return CudaTranspiler.Transpile(source);
+    }
+
+    private static IReadOnlyCollection<MetadataReference> GetCompilationReferences()
+    {
+        var references = new Dictionary<string, MetadataReference>(
+            StringComparer.OrdinalIgnoreCase);
+        var trustedAssemblies = Assert.IsType<string>(
+            AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES"));
+        foreach (var path in trustedAssemblies.Split(Path.PathSeparator))
+            references[path] = MetadataReference.CreateFromFile(path);
+        var assemblyPath = typeof(Cuda).Assembly.Location;
+        references[assemblyPath] = MetadataReference.CreateFromFile(assemblyPath);
+        return references.Values;
     }
 
     private static string FormatDiagnostics(IEnumerable<Diagnostic> diagnostics) =>
