@@ -1,0 +1,719 @@
+using System;
+using CSharp2CUDA;
+
+[CudaTranslationUnit]
+internal static unsafe class VectorModule
+{
+    [CudaExternal]
+    public struct MathBlockSlot
+    {
+        public double scalar_value;
+        public ulong data_pointer;
+        public ulong scratch_pointer;
+        public CudaInt32 boolean_value;
+        public CudaInt32 valid;
+        public int rows;
+        public int columns;
+        public int count;
+        public int capacity;
+    }
+
+    [CudaExternal]
+    private static double mathblocks_exponential(double value) => throw new NotSupportedException();
+
+    [CudaExternal]
+    private static double mathblocks_natural_logarithm(double value) => throw new NotSupportedException();
+
+    [CudaExternal]
+    private static double mathblocks_power(double value, double exponent) => throw new NotSupportedException();
+
+    [CudaExternal]
+    private static double mathblocks_square_root(double value) => throw new NotSupportedException();
+
+    [CudaDevice]
+    private static double mathblocks_minimum(double first, double second)
+    {
+        if (first < second)
+            return first;
+        if (second < first)
+            return second;
+        if (first == 0.0)
+            return Cuda.SignBit(first) ? first : second;
+        return first;
+    }
+
+    [CudaDevice]
+    private static double mathblocks_maximum(double first, double second)
+    {
+        if (first > second)
+            return first;
+        if (second > first)
+            return second;
+        if (first == 0.0)
+            return Cuda.SignBit(first) ? second : first;
+        return first;
+    }
+
+    [CudaDevice]
+    private static bool mathblocks_nonnegative_integer(double value, int* result)
+    {
+        if (value < 0.0 || value > 2147483647.0 || value != Math.Truncate(value))
+            return false;
+        *result = (int)value;
+        return true;
+    }
+
+    [CudaDevice]
+    private static double mathblocks_compensated_sum([CudaReadOnly] double* values, int count)
+    {
+        double sum = 0.0;
+        double correction = 0.0;
+        for (int index = 0; index < count; index++)
+        {
+            double value = values[index];
+            double next = sum + value;
+            correction += Math.Abs(sum) >= Math.Abs(value)
+                ? sum - next + value
+                : value - next + sum;
+            sum = next;
+        }
+        return sum + correction;
+    }
+
+    [CudaDevice]
+    private static double mathblocks_compensated_product_sum(
+        [CudaReadOnly] double* first,
+        [CudaReadOnly] double* second,
+        int count)
+    {
+        double sum = 0.0;
+        double correction = 0.0;
+        for (int index = 0; index < count; index++)
+        {
+            double value = first[index] * second[index];
+            double next = sum + value;
+            correction += Math.Abs(sum) >= Math.Abs(value)
+                ? sum - next + value
+                : value - next + sum;
+            sum = next;
+        }
+        return sum + correction;
+    }
+
+    [CudaDevice]
+    private static double mathblocks_compensated_absolute_sum([CudaReadOnly] double* values, int count)
+    {
+        double sum = 0.0;
+        double correction = 0.0;
+        for (int index = 0; index < count; index++)
+        {
+            double value = Math.Abs(values[index]);
+            double next = sum + value;
+            correction += Math.Abs(sum) >= Math.Abs(value)
+                ? sum - next + value
+                : value - next + sum;
+            sum = next;
+        }
+        return sum + correction;
+    }
+
+    [CudaDevice]
+    private static void mathblocks_set_vector_shape(MathBlockSlot* output, int count)
+    {
+        output->rows = count;
+        output->columns = 0;
+        output->count = count;
+        if (count < 0 || count > output->capacity)
+        {
+            output->valid = 0;
+            return;
+        }
+    }
+
+    [CudaDevice]
+    private static void mathblocks_copy_and_sort(
+        [CudaReadOnly] MathBlockSlot* input,
+        MathBlockSlot* output)
+    {
+        double* scratch = (double*)(output->data_pointer != 0
+            ? output->data_pointer
+            : output->scratch_pointer);
+        double* source = Cuda.ReadOnly((double*)input->data_pointer);
+        for (int index = 0; index < input->count; index++)
+        {
+            double value = source[index];
+            int position = index;
+            while (position > 0 && scratch[position - 1] > value)
+            {
+                scratch[position] = scratch[position - 1];
+                position--;
+            }
+            scratch[position] = value;
+        }
+    }
+
+    [CudaDevice]
+    private static double mathblocks_quantile(
+        [CudaReadOnly] MathBlockSlot* input,
+        MathBlockSlot* output,
+        double probability)
+    {
+        mathblocks_copy_and_sort(input, output);
+        double* scratch = (double*)(output->data_pointer != 0
+            ? output->data_pointer
+            : output->scratch_pointer);
+        if (input->count == 1)
+            return scratch[0];
+        double position = probability * (input->count - 1);
+        int lower = (int)Math.Floor(position);
+        int upper = (int)Math.Ceiling(position);
+        double weight = position - lower;
+        return scratch[lower] * (1.0 - weight) + scratch[upper] * weight;
+    }
+
+    [CudaGlobal]
+    private static void mathblocks_vector(
+        int opcode,
+        [CudaReadOnly] MathBlockSlot** inputs,
+        int input_count,
+        MathBlockSlot* output)
+    {
+        int thread = (int)Cuda.ThreadIdx.X;
+        if (Cuda.BlockIdx.X != 0)
+            return;
+
+        MathBlockSlot* first = Cuda.ReadOnly(input_count > 0 ? inputs[0] : null);
+        MathBlockSlot* second = Cuda.ReadOnly(input_count > 1 ? inputs[1] : null);
+        MathBlockSlot* third = Cuda.ReadOnly(input_count > 2 ? inputs[2] : null);
+
+        if (thread == 0)
+        {
+            output->scalar_value = 0.0;
+            output->boolean_value = 0;
+            output->rows = 0;
+            output->columns = 0;
+            output->count = 0;
+            output->valid = first == null || first->valid;
+            if (second != null)
+                output->valid = output->valid && second->valid;
+            if (third != null)
+                output->valid = output->valid && third->valid;
+        }
+        Cuda.SyncThreads();
+        if (!output->valid)
+            return;
+
+        double* a = Cuda.ReadOnly(first == null ? null : (double*)first->data_pointer);
+        double* b = Cuda.ReadOnly(second == null ? null : (double*)second->data_pointer);
+        double* c = Cuda.ReadOnly(third == null ? null : (double*)third->data_pointer);
+        CudaInt32* boolean_a = Cuda.ReadOnly(first == null ? null : (CudaInt32*)first->data_pointer);
+        CudaInt32* boolean_b = Cuda.ReadOnly(second == null ? null : (CudaInt32*)second->data_pointer);
+        double* result = (double*)(output->data_pointer != 0
+            ? output->data_pointer
+            : output->scratch_pointer);
+        CudaInt32* boolean_result = (CudaInt32*)output->data_pointer;
+
+        switch (opcode)
+        {
+            case 0:
+                if (thread == 0) mathblocks_set_vector_shape(output, first->count);
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                    result[index] = Math.Abs(a[index]);
+                break;
+            case 1:
+                if (thread == 0) mathblocks_set_vector_shape(output, first->count);
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                {
+                    result[index] = a[index] + second->scalar_value;
+                    if (!double.IsFinite(result[index])) Cuda.AtomicExchange(ref output->valid, 0);
+                }
+                break;
+            case 2:
+            case 9:
+            case 26:
+            case 47:
+                if (thread == 0)
+                {
+                    mathblocks_set_vector_shape(output, first->count);
+                    if (first->count != second->count) output->valid = 0;
+                }
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                {
+                    double value = opcode == 2 ? a[index] + b[index]
+                        : opcode == 9 ? a[index] / b[index]
+                        : opcode == 26 ? a[index] * b[index]
+                        : a[index] - b[index];
+                    result[index] = value;
+                    if (!double.IsFinite(value)) Cuda.AtomicExchange(ref output->valid, 0);
+                }
+                break;
+            case 3:
+                if (thread == 0) mathblocks_set_vector_shape(output, first->count + 1);
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                    result[index] = a[index];
+                if (thread == 0 && output->valid) result[first->count] = second->scalar_value;
+                break;
+            case 4:
+            case 5:
+                if (thread == 0)
+                {
+                    if (first->count <= 0)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                    int selected = 0;
+                    for (int index = 1; index < first->count; index++)
+                        if (opcode == 4 ? a[index] > a[selected] : a[index] < a[selected]) selected = index;
+                    output->scalar_value = (double)selected;
+                }
+                break;
+            case 6:
+                if (thread == 0) mathblocks_set_vector_shape(output, first->count + second->count);
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                    result[index] = a[index];
+                for (int index = thread; output->valid && index < second->count; index += Cuda.BlockDim.X)
+                    result[first->count + index] = b[index];
+                break;
+            case 7:
+                if (thread == 0)
+                {
+                    mathblocks_set_vector_shape(output, first->count);
+                    double product = 1.0;
+                    for (int index = 0; output->valid && index < first->count; index++)
+                    {
+                        product *= a[index];
+                        result[index] = product;
+                        if (!double.IsFinite(product)) output->valid = 0;
+                    }
+                }
+                break;
+            case 8:
+                if (thread == 0)
+                {
+                    mathblocks_set_vector_shape(output, first->count);
+                    double sum = 0.0;
+                    for (int index = 0; output->valid && index < first->count; index++)
+                    {
+                        sum += a[index];
+                        result[index] = sum;
+                        if (!double.IsFinite(sum)) output->valid = 0;
+                    }
+                }
+                break;
+            case 10:
+                if (thread == 0)
+                {
+                    if (first->count != second->count) output->valid = 0;
+                    else
+                    {
+                        output->scalar_value = mathblocks_compensated_product_sum(a, b, first->count);
+                        if (!double.IsFinite(output->scalar_value)) output->valid = 0;
+                    }
+                }
+                break;
+            case 11:
+            case 15:
+            case 20:
+                if (thread == 0)
+                {
+                    mathblocks_set_vector_shape(output, first->count);
+                    if (first->count != second->count) output->valid = 0;
+                }
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                    boolean_result[index] = opcode == 11 ? a[index] == b[index]
+                        : opcode == 15 ? a[index] > b[index]
+                        : a[index] < b[index];
+                break;
+            case 12:
+            case 27:
+            case 44:
+                if (thread == 0) mathblocks_set_vector_shape(output, first->count);
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                {
+                    double value = opcode == 12 ? mathblocks_exponential(a[index])
+                        : opcode == 27 ? mathblocks_natural_logarithm(a[index])
+                        : mathblocks_square_root(a[index]);
+                    result[index] = value;
+                    if (!double.IsFinite(value)) Cuda.AtomicExchange(ref output->valid, 0);
+                }
+                break;
+            case 13:
+                if (thread == 0) mathblocks_set_vector_shape(output, second->count);
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < second->count; index += Cuda.BlockDim.X)
+                {
+                    int source_index = 0;
+                    if (!mathblocks_nonnegative_integer(b[index], &source_index) || source_index >= first->count)
+                        Cuda.AtomicExchange(ref output->valid, 0);
+                    else
+                        result[index] = a[source_index];
+                }
+                break;
+            case 14:
+                if (thread == 0)
+                {
+                    if (first->count <= 0 || output->scratch_pointer == 0)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                    for (int index = 0; index < first->count; index++)
+                    {
+                        result[index] = mathblocks_natural_logarithm(a[index]);
+                        if (!double.IsFinite(result[index])) output->valid = 0;
+                    }
+                    if (output->valid)
+                    {
+                        output->scalar_value = mathblocks_exponential(
+                            mathblocks_compensated_sum(result, first->count) / first->count);
+                        if (!double.IsFinite(output->scalar_value)) output->valid = 0;
+                    }
+                }
+                break;
+            case 16:
+                if (thread == 0)
+                {
+                    int index = 0;
+                    if (!mathblocks_nonnegative_integer(second->scalar_value, &index) || index >= first->count)
+                        output->valid = 0;
+                    else
+                        output->scalar_value = a[index];
+                }
+                break;
+            case 17:
+            case 18:
+                if (thread == 0)
+                {
+                    double norm = opcode == 17
+                        ? mathblocks_compensated_absolute_sum(a, first->count)
+                        : mathblocks_square_root(mathblocks_compensated_product_sum(a, a, first->count));
+                    output->scalar_value = norm;
+                    if (!double.IsFinite(norm)) output->valid = 0;
+                }
+                break;
+            case 19:
+                if (thread == 0) output->scalar_value = (double)first->count;
+                break;
+            case 21:
+                if (thread == 0)
+                {
+                    int count = 0;
+                    if (!mathblocks_nonnegative_integer(third->scalar_value, &count) || count <= 0 || count > 1000000)
+                        output->valid = 0;
+                    else
+                        mathblocks_set_vector_shape(output, count);
+                }
+                Cuda.SyncThreads();
+                if (output->valid)
+                {
+                    double start = first->scalar_value;
+                    double end = second->scalar_value;
+                    double step = output->count == 1 ? 0.0 : (end - start) / (output->count - 1);
+                    for (int index = thread; index < output->count; index += Cuda.BlockDim.X)
+                        result[index] = index == output->count - 1 ? end : start + step * index;
+                }
+                break;
+            case 22:
+            case 25:
+                if (thread == 0)
+                {
+                    if (first->count <= 0)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                    double selected = a[0];
+                    for (int index = 1; index < first->count; index++)
+                        selected = opcode == 22
+                            ? mathblocks_maximum(selected, a[index])
+                            : mathblocks_minimum(selected, a[index]);
+                    output->scalar_value = selected;
+                }
+                break;
+            case 23:
+            case 48:
+                if (thread == 0)
+                {
+                    double sum = mathblocks_compensated_sum(a, first->count);
+                    output->scalar_value = opcode == 23 ? sum / first->count : sum;
+                    if (!double.IsFinite(output->scalar_value)) output->valid = 0;
+                }
+                break;
+            case 24:
+            case 35:
+                if (thread == 0)
+                {
+                    double probability = opcode == 24 ? 0.5 : second->scalar_value;
+                    if (first->count <= 0 || output->scratch_pointer == 0 ||
+                        probability < 0.0 || probability > 1.0)
+                        output->valid = 0;
+                    else
+                    {
+                        output->scalar_value = mathblocks_quantile(first, output, probability);
+                        if (!double.IsFinite(output->scalar_value)) output->valid = 0;
+                    }
+                }
+                break;
+            case 28:
+            case 29:
+                if (thread == 0)
+                {
+                    mathblocks_set_vector_shape(output, first->count);
+                    output->scalar_value = opcode == 28
+                        ? mathblocks_compensated_absolute_sum(a, first->count)
+                        : mathblocks_square_root(mathblocks_compensated_product_sum(a, a, first->count));
+                    if (!double.IsFinite(output->scalar_value) || output->scalar_value == 0.0) output->valid = 0;
+                }
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                {
+                    result[index] = a[index] * (1.0 / output->scalar_value);
+                    if (!double.IsFinite(result[index])) Cuda.AtomicExchange(ref output->valid, 0);
+                }
+                break;
+            case 30:
+                if (thread == 0)
+                {
+                    mathblocks_set_vector_shape(output, 2);
+                    if (output->valid)
+                    {
+                        result[0] = first->scalar_value;
+                        result[1] = second->scalar_value;
+                    }
+                }
+                break;
+            case 31:
+            case 41:
+            case 45:
+                if (thread == 0) mathblocks_set_vector_shape(output, first->count);
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                {
+                    double value = opcode == 31 ? mathblocks_maximum(a[index], 0.0)
+                        : opcode == 41 ? (double)(Cuda.Int(a[index] > 0.0) - Cuda.Int(a[index] < 0.0))
+                        : a[index] * a[index];
+                    result[index] = value;
+                    if (!double.IsFinite(value)) Cuda.AtomicExchange(ref output->valid, 0);
+                }
+                break;
+            case 32:
+                if (thread == 0) mathblocks_set_vector_shape(output, first->count);
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                {
+                    result[index] = mathblocks_power(a[index], second->scalar_value);
+                    if (!double.IsFinite(result[index])) Cuda.AtomicExchange(ref output->valid, 0);
+                }
+                break;
+            case 33:
+                if (thread == 0) mathblocks_set_vector_shape(output, first->count + 1);
+                Cuda.SyncThreads();
+                if (thread == 0 && output->valid) result[0] = second->scalar_value;
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                    result[index + 1] = a[index];
+                break;
+            case 34:
+                if (thread == 0)
+                {
+                    double product = 1.0;
+                    for (int index = 0; index < first->count; index++) product *= a[index];
+                    output->scalar_value = product;
+                    if (!double.IsFinite(product)) output->valid = 0;
+                }
+                break;
+            case 36:
+                if (thread == 0) mathblocks_set_vector_shape(output, first->count);
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                {
+                    int less = 0;
+                    int equal = 0;
+                    for (int other = 0; other < first->count; other++)
+                    {
+                        if (a[other] < a[index]) less++;
+                        else if (a[other] == a[index]) equal++;
+                    }
+                    result[index] = less + (equal + 1.0) / 2.0;
+                }
+                break;
+            case 37:
+                if (thread == 0)
+                {
+                    int count = 0;
+                    if (!mathblocks_nonnegative_integer(second->scalar_value, &count) || count > 1000000)
+                        output->valid = 0;
+                    else
+                        mathblocks_set_vector_shape(output, count);
+                }
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < output->count; index += Cuda.BlockDim.X)
+                    result[index] = first->scalar_value;
+                break;
+            case 38:
+                if (thread == 0) mathblocks_set_vector_shape(output, first->count);
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                    result[index] = a[first->count - index - 1];
+                break;
+            case 39:
+                if (thread == 0) mathblocks_set_vector_shape(output, first->count);
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                {
+                    result[index] = a[index] * second->scalar_value;
+                    if (!double.IsFinite(result[index])) Cuda.AtomicExchange(ref output->valid, 0);
+                }
+                break;
+            case 40:
+                if (thread == 0)
+                {
+                    mathblocks_set_vector_shape(output, first->count);
+                    if (first->count != second->count || first->count != third->count) output->valid = 0;
+                }
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                    result[index] = boolean_a[index] ? b[index] : c[index];
+                break;
+            case 42:
+                if (thread == 0)
+                {
+                    int start = 0;
+                    int length = 0;
+                    if (!mathblocks_nonnegative_integer(second->scalar_value, &start) ||
+                        !mathblocks_nonnegative_integer(third->scalar_value, &length) ||
+                        start > first->count || length > first->count - start)
+                        output->valid = 0;
+                    else
+                        mathblocks_set_vector_shape(output, length);
+                }
+                Cuda.SyncThreads();
+                if (output->valid)
+                {
+                    int start = (int)second->scalar_value;
+                    for (int index = thread; index < output->count; index += Cuda.BlockDim.X)
+                        result[index] = a[start + index];
+                }
+                break;
+            case 43:
+                if (thread == 0)
+                {
+                    mathblocks_set_vector_shape(output, first->count);
+                    if (output->valid) mathblocks_copy_and_sort(first, output);
+                }
+                break;
+            case 46:
+                if (thread == 0)
+                {
+                    mathblocks_set_vector_shape(output, first->count);
+                    if (!output->valid || first->count <= 0)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                    double mean = mathblocks_compensated_sum(a, first->count) / first->count;
+                    double variance = 0.0;
+                    for (int index = 0; index < first->count; index++)
+                    {
+                        double difference = a[index] - mean;
+                        variance += difference * difference;
+                    }
+                    variance /= first->count;
+                    double deviation = mathblocks_square_root(variance);
+                    for (int index = 0; index < first->count; index++)
+                    {
+                        result[index] = (a[index] - mean) / deviation;
+                        if (!double.IsFinite(result[index])) output->valid = 0;
+                    }
+                }
+                break;
+            case 49:
+                if (thread == 0)
+                {
+                    int count = 0;
+                    for (int index = 0; index < first->count; index++)
+                    {
+                        bool found = false;
+                        for (int prior = 0; prior < count; prior++)
+                            if (result[prior] == a[index]) { found = true; break; }
+                        if (!found) result[count++] = a[index];
+                    }
+                    mathblocks_set_vector_shape(output, count);
+                }
+                break;
+            case 50:
+            case 52:
+            case 55:
+            {
+                if (thread == 0)
+                {
+                    output->boolean_value = opcode == 50 ? 1 : 0;
+                    output->scalar_value = 0.0;
+                }
+                Cuda.SyncThreads();
+                int local_count = 0;
+                bool local_all = true;
+                bool local_any = false;
+                for (int index = thread; index < first->count; index += Cuda.BlockDim.X)
+                {
+                    bool value = boolean_a[index] != 0;
+                    if (value) local_count++;
+                    local_all = local_all && value;
+                    local_any = local_any || value;
+                }
+                if (opcode == 55 && local_count != 0)
+                    Cuda.AtomicAdd(ref output->boolean_value, local_count);
+                else if (opcode == 50 && !local_all)
+                    Cuda.AtomicExchange(ref output->boolean_value, 0);
+                else if (opcode == 52 && local_any)
+                    Cuda.AtomicExchange(ref output->boolean_value, 1);
+                Cuda.SyncThreads();
+                if (thread == 0 && opcode == 55)
+                {
+                    output->scalar_value = (double)output->boolean_value;
+                    output->boolean_value = 0;
+                }
+                break;
+            }
+            case 51:
+            case 54:
+            case 57:
+                if (thread == 0)
+                {
+                    mathblocks_set_vector_shape(output, first->count);
+                    if (first->count != second->count) output->valid = 0;
+                }
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                    boolean_result[index] = opcode == 51 ? boolean_a[index] && boolean_b[index]
+                        : opcode == 54 ? boolean_a[index] || boolean_b[index]
+                        : boolean_a[index] != boolean_b[index];
+                break;
+            case 53:
+                if (thread == 0) mathblocks_set_vector_shape(output, first->count);
+                Cuda.SyncThreads();
+                for (int index = thread; output->valid && index < first->count; index += Cuda.BlockDim.X)
+                    boolean_result[index] = !boolean_a[index];
+                break;
+            case 56:
+                if (thread == 0)
+                {
+                    int count = 0;
+                    for (int index = 0; index < first->count; index++)
+                        if (boolean_a[index]) result[count++] = (double)index;
+                    mathblocks_set_vector_shape(output, count);
+                }
+                break;
+            default:
+                if (thread == 0) output->valid = 0;
+                break;
+        }
+    }
+}

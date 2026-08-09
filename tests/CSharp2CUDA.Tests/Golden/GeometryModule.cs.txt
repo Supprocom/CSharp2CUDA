@@ -1,0 +1,908 @@
+using System;
+using CSharp2CUDA;
+
+[CudaTranslationUnit]
+internal static unsafe class GeometryModule
+{
+    [CudaExternal]
+    public struct MathBlockSlot
+    {
+        public double scalar_value;
+        public ulong data_pointer;
+        public ulong scratch_pointer;
+        public CudaInt32 boolean_value;
+        public CudaInt32 valid;
+        public int rows;
+        public int columns;
+        public int count;
+        public int capacity;
+    }
+
+    [CudaExternal]
+    private static double mathblocks_arc_cosine(double value) => throw new NotSupportedException();
+
+    [CudaExternal]
+    private static double mathblocks_positive_infinity() => throw new NotSupportedException();
+
+    [CudaExternal]
+    private static void mathblocks_sequence_set_matrix_shape(MathBlockSlot* output, int rows, int columns) => throw new NotSupportedException();
+
+    [CudaExternal]
+    private static void mathblocks_sequence_set_vector_shape(MathBlockSlot* output, int count) => throw new NotSupportedException();
+
+    [CudaExternal]
+    private static double mathblocks_square_root(double value) => throw new NotSupportedException();
+    public struct MathBlockGeometryEdge
+    {
+        public int from;
+        public int to;
+        public double weight;
+    }
+
+    [CudaDevice]
+    private static double mathblocks_geometry_distance_coordinates(
+        double left_x,
+        double left_y,
+        double right_x,
+        double right_y)
+    {
+        double x = left_x - right_x;
+        double y = left_y - right_y;
+        return mathblocks_square_root(x * x + y * y);
+    }
+
+    [CudaDevice]
+    private static double mathblocks_geometry_distance(
+        [CudaReadOnly] double* left,
+        int left_index,
+        [CudaReadOnly] double* right,
+        int right_index)
+    {
+        return mathblocks_geometry_distance_coordinates(
+            left[2 * left_index],
+            left[2 * left_index + 1],
+            right[2 * right_index],
+            right[2 * right_index + 1]);
+    }
+
+    [CudaDevice]
+    private static double mathblocks_geometry_cross(
+        double origin_x,
+        double origin_y,
+        double left_x,
+        double left_y,
+        double right_x,
+        double right_y)
+    {
+        return (left_x - origin_x) * (right_y - origin_y) -
+               (left_y - origin_y) * (right_x - origin_x);
+    }
+
+    [CudaDevice]
+    private static double mathblocks_geometry_point_to_segment(
+        double point_x,
+        double point_y,
+        double start_x,
+        double start_y,
+        double end_x,
+        double end_y)
+    {
+        double x = end_x - start_x;
+        double y = end_y - start_y;
+        double length_square = x * x + y * y;
+        if (length_square == 0.0)
+            return mathblocks_geometry_distance_coordinates(point_x, point_y, start_x, start_y);
+        double projection = ((point_x - start_x) * x + (point_y - start_y) * y) /
+            length_square;
+        projection = projection < 0.0 ? 0.0 : projection > 1.0 ? 1.0 : projection;
+        return mathblocks_geometry_distance_coordinates(
+            point_x,
+            point_y,
+            start_x + projection * x,
+            start_y + projection * y);
+    }
+
+    [CudaDevice]
+    private static void mathblocks_geometry_barycentric(
+        double point_x,
+        double point_y,
+        double first_x,
+        double first_y,
+        double second_x,
+        double second_y,
+        double third_x,
+        double third_y,
+        double* result)
+    {
+        double denominator = (second_y - third_y) * (first_x - third_x) +
+                             (third_x - second_x) * (first_y - third_y);
+        double first_weight = ((second_y - third_y) * (point_x - third_x) +
+                               (third_x - second_x) * (point_y - third_y)) / denominator;
+        double second_weight = ((third_y - first_y) * (point_x - third_x) +
+                                (first_x - third_x) * (point_y - third_y)) / denominator;
+        result[0] = first_weight;
+        result[1] = second_weight;
+        result[2] = 1.0 - first_weight - second_weight;
+    }
+
+    [CudaDevice]
+    private static bool mathblocks_geometry_try_circumcircle(
+        [CudaReadOnly] double* points,
+        int first,
+        int second,
+        int third,
+        double* center_x,
+        double* center_y,
+        double* radius_square)
+    {
+        double first_x = points[2 * first];
+        double first_y = points[2 * first + 1];
+        double second_x = points[2 * second];
+        double second_y = points[2 * second + 1];
+        double third_x = points[2 * third];
+        double third_y = points[2 * third + 1];
+        double denominator = 2.0 * (first_x * (second_y - third_y) +
+                                    second_x * (third_y - first_y) +
+                                    third_x * (first_y - second_y));
+        if (denominator == 0.0)
+        {
+            *center_x = 0.0;
+            *center_y = 0.0;
+            *radius_square = 0.0;
+            return false;
+        }
+        double first_square = first_x * first_x + first_y * first_y;
+        double second_square = second_x * second_x + second_y * second_y;
+        double third_square = third_x * third_x + third_y * third_y;
+        *center_x = (first_square * (second_y - third_y) +
+                     second_square * (third_y - first_y) +
+                     third_square * (first_y - second_y)) / denominator;
+        *center_y = (first_square * (third_x - second_x) +
+                     second_square * (first_x - third_x) +
+                     third_square * (second_x - first_x)) / denominator;
+        double x = first_x - *center_x;
+        double y = first_y - *center_y;
+        *radius_square = x * x + y * y;
+        return true;
+    }
+
+    [CudaDevice]
+    private static bool mathblocks_geometry_point_less(
+        [CudaReadOnly] double* points,
+        int left,
+        int right)
+    {
+        double left_x = points[2 * left];
+        double right_x = points[2 * right];
+        if (left_x < right_x)
+            return true;
+        if (right_x < left_x)
+            return false;
+        double left_y = points[2 * left + 1];
+        double right_y = points[2 * right + 1];
+        if (left_y < right_y)
+            return true;
+        if (right_y < left_y)
+            return false;
+        return left < right;
+    }
+
+    [CudaDevice]
+    private static void mathblocks_geometry_sort_indices(
+        [CudaReadOnly] double* points,
+        int count,
+        int* indices)
+    {
+        for (int index = 0; index < count; index++)
+        {
+            int value = index;
+            int position = index;
+            while (position > 0 && mathblocks_geometry_point_less(points, value, indices[position - 1]))
+            {
+                indices[position] = indices[position - 1];
+                position--;
+            }
+            indices[position] = value;
+        }
+    }
+
+    [CudaDevice]
+    private static int mathblocks_geometry_find(int* parent, int value)
+    {
+        while (parent[value] != value)
+        {
+            parent[value] = parent[parent[value]];
+            value = parent[value];
+        }
+        return value;
+    }
+
+    [CudaDevice]
+    private static bool mathblocks_geometry_edge_less(
+        in MathBlockGeometryEdge left,
+        in MathBlockGeometryEdge right)
+    {
+        if (left.weight < right.weight)
+            return true;
+        if (right.weight < left.weight)
+            return false;
+        if (left.from < right.from)
+            return true;
+        if (right.from < left.from)
+            return false;
+        return left.to < right.to;
+    }
+
+    [CudaGlobal]
+    private static void mathblocks_geometry(
+        int opcode,
+        [CudaReadOnly] MathBlockSlot** inputs,
+        int input_count,
+        MathBlockSlot* output)
+    {
+        int thread = (int)Cuda.ThreadIdx.X;
+        if (Cuda.BlockIdx.X != 0)
+            return;
+
+        MathBlockSlot* first = Cuda.ReadOnly(input_count > 0 ? inputs[0] : null);
+        MathBlockSlot* second = Cuda.ReadOnly(input_count > 1 ? inputs[1] : null);
+        if (thread == 0)
+        {
+            output->scalar_value = 0.0;
+            output->boolean_value = 0;
+            output->rows = 0;
+            output->columns = 0;
+            output->count = 0;
+            output->valid = first == null || first->valid;
+            if (second != null)
+                output->valid = output->valid && second->valid;
+        }
+        Cuda.SyncThreads();
+        if (!output->valid)
+            return;
+
+        double* a = Cuda.ReadOnly(first == null ? null : (double*)first->data_pointer);
+        double* b = Cuda.ReadOnly(second == null ? null : (double*)second->data_pointer);
+        double* result = (double*)output->data_pointer;
+        double* scratch = (double*)output->scratch_pointer;
+
+        if (thread == 0)
+        {
+            switch (opcode)
+            {
+                case 0:
+                    mathblocks_sequence_set_vector_shape(output, 3);
+                    if (first->count != 1 || second->count != 3)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                    mathblocks_geometry_barycentric(
+                        a[0], a[1], b[0], b[1], b[2], b[3], b[4], b[5], result);
+                    for (int index = 0; index < 3; index++)
+                        if (!double.IsFinite(result[index])) output->valid = 0;
+                    break;
+                case 1:
+                    output->rows = 1;
+                    output->count = 1;
+                    if (first->count <= 0 || output->capacity < 1)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                    result[0] = 0.0;
+                    result[1] = 0.0;
+                    for (int index = 0; index < first->count; index++)
+                    {
+                        result[0] += a[2 * index];
+                        result[1] += a[2 * index + 1];
+                    }
+                    result[0] /= first->count;
+                    result[1] /= first->count;
+                    break;
+                case 2:
+                    if (first->count != 3)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                {
+                    double first_length = mathblocks_geometry_distance(a, 1, a, 2);
+                    double second_length = mathblocks_geometry_distance(a, 0, a, 2);
+                    double third_length = mathblocks_geometry_distance(a, 0, a, 1);
+                    double cross = mathblocks_geometry_cross(
+                        a[0], a[1], a[2], a[3], a[4], a[5]);
+                    output->scalar_value = first_length * second_length * third_length /
+                        (2.0 * Math.Abs(cross));
+                    break;
+                }
+                case 3:
+                    if (first->count < 3 || second->count != 1)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                {
+                    bool inside = false;
+                    double point_x = b[0];
+                    double point_y = b[1];
+                    for (int current = 0; current < first->count; current++)
+                    {
+                        int previous = current == 0 ? first->count - 1 : current - 1;
+                        double left_x = a[2 * current];
+                        double left_y = a[2 * current + 1];
+                        double right_x = a[2 * previous];
+                        double right_y = a[2 * previous + 1];
+                        if (mathblocks_geometry_point_to_segment(
+                            point_x, point_y, left_x, left_y, right_x, right_y) == 0.0)
+                        {
+                            inside = true;
+                            break;
+                        }
+                        if ((left_y > point_y) != (right_y > point_y) &&
+                            point_x < (right_x - left_x) * (point_y - left_y) /
+                                      (right_y - left_y) + left_x)
+                        {
+                            inside = !inside;
+                        }
+                    }
+                    output->boolean_value = inside ? 1 : 0;
+                    break;
+                }
+                case 4:
+                    if (first->count <= 0 || scratch == null)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                {
+                    double* sorted = scratch;
+                    double* hull = scratch + first->count * 2;
+                    int unique_count = 0;
+                    for (int index = 0; index < first->count; index++)
+                    {
+                        double x = a[2 * index];
+                        double y = a[2 * index + 1];
+                        int position = unique_count;
+                        while (position > 0 &&
+                               (sorted[2 * (position - 1)] > x ||
+                                (sorted[2 * (position - 1)] == x &&
+                                 sorted[2 * (position - 1) + 1] > y)))
+                            position--;
+                        if (position < unique_count && sorted[2 * position] == x &&
+                            sorted[2 * position + 1] == y)
+                        {
+                            continue;
+                        }
+                        for (int move = unique_count; move > position; move--)
+                        {
+                            sorted[2 * move] = sorted[2 * (move - 1)];
+                            sorted[2 * move + 1] = sorted[2 * (move - 1) + 1];
+                        }
+                        sorted[2 * position] = x;
+                        sorted[2 * position + 1] = y;
+                        unique_count++;
+                    }
+                    int count = 0;
+                    if (unique_count <= 1)
+                    {
+                        count = unique_count;
+                        if (count == 1)
+                        {
+                            hull[0] = sorted[0];
+                            hull[1] = sorted[1];
+                        }
+                    }
+                    else
+                    {
+                        for (int index = 0; index < unique_count; index++)
+                        {
+                            while (count >= 2 && mathblocks_geometry_cross(
+                                hull[2 * (count - 2)], hull[2 * (count - 2) + 1],
+                                hull[2 * (count - 1)], hull[2 * (count - 1) + 1],
+                                sorted[2 * index], sorted[2 * index + 1]) <= 0.0)
+                            {
+                                count--;
+                            }
+                            hull[2 * count] = sorted[2 * index];
+                            hull[2 * count + 1] = sorted[2 * index + 1];
+                            count++;
+                        }
+                        int lower_count = count;
+                        for (int index = unique_count - 2; index >= 0; index--)
+                        {
+                            while (count > lower_count && mathblocks_geometry_cross(
+                                hull[2 * (count - 2)], hull[2 * (count - 2) + 1],
+                                hull[2 * (count - 1)], hull[2 * (count - 1) + 1],
+                                sorted[2 * index], sorted[2 * index + 1]) <= 0.0)
+                            {
+                                count--;
+                            }
+                            hull[2 * count] = sorted[2 * index];
+                            hull[2 * count + 1] = sorted[2 * index + 1];
+                            count++;
+                        }
+                        count--;
+                    }
+                    output->rows = count;
+                    output->count = count;
+                    if (count > output->capacity)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                    for (int index = 0; index < count * 2; index++)
+                        result[index] = hull[index];
+                    break;
+                }
+                case 5:
+                    if (first->count < 2 || scratch == null)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                {
+                    int count = first->count;
+                    int* adjacency = (int*)scratch;
+                    int* ordered = adjacency + count * count;
+                    for (int index = 0; index < count * count; index++)
+                        adjacency[index] = 0;
+                    for (int first_index = 0; first_index < count; first_index++)
+                    {
+                        for (int second_index = first_index + 1; second_index < count; second_index++)
+                        {
+                            for (int third_index = second_index + 1; third_index < count; third_index++)
+                            {
+                                double center_x;
+                                double center_y;
+                                double radius_square;
+                                if (!mathblocks_geometry_try_circumcircle(
+                                    a, first_index, second_index, third_index,
+                                    &center_x, &center_y, &radius_square))
+                                {
+                                    continue;
+                                }
+                                bool empty = true;
+                                for (int index = 0; index < count; index++)
+                                {
+                                    if (index == first_index || index == second_index || index == third_index)
+                                        continue;
+                                    double x = a[2 * index] - center_x;
+                                    double y = a[2 * index + 1] - center_y;
+                                    if (x * x + y * y < radius_square)
+                                    {
+                                        empty = false;
+                                        break;
+                                    }
+                                }
+                                if (!empty)
+                                    continue;
+                                adjacency[first_index * count + second_index] = 1;
+                                adjacency[first_index * count + third_index] = 1;
+                                adjacency[second_index * count + third_index] = 1;
+                            }
+                        }
+                    }
+                    int edge_count = 0;
+                    for (int left = 0; left < count; left++)
+                        for (int right = left + 1; right < count; right++)
+                            edge_count += adjacency[left * count + right];
+                    if (edge_count == 0)
+                    {
+                        mathblocks_geometry_sort_indices(a, count, ordered);
+                        for (int index = 1; index < count; index++)
+                        {
+                            int left = ordered[index - 1] < ordered[index]
+                                ? ordered[index - 1]
+                                : ordered[index];
+                            int right = ordered[index - 1] < ordered[index]
+                                ? ordered[index]
+                                : ordered[index - 1];
+                            adjacency[left * count + right] = 1;
+                        }
+                    }
+                    MathBlockGeometryEdge* edges = (MathBlockGeometryEdge*)output->data_pointer;
+                    edge_count = 0;
+                    for (int left = 0; left < count; left++)
+                    {
+                        for (int right = left + 1; right < count; right++)
+                        {
+                            if (!Cuda.Bool(adjacency[left * count + right]))
+                                continue;
+                            if (edge_count >= output->capacity)
+                            {
+                                output->count = output->capacity == 2147483647
+                                    ? -1
+                                    : output->capacity + 1;
+                                output->valid = 0;
+                                break;
+                            }
+                            edges[edge_count].from = left;
+                            edges[edge_count].to = right;
+                            edges[edge_count].weight = mathblocks_geometry_distance(a, left, a, right);
+                            edge_count++;
+                        }
+                    }
+                    output->rows = count;
+                    if (output->valid)
+                        output->count = edge_count;
+                    break;
+                }
+                case 6:
+                    if (first->count <= 0)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                {
+                    double maximum = 0.0;
+                    for (int left = 0; left < first->count; left++)
+                        for (int right = left + 1; right < first->count; right++)
+                        {
+                            double distance = mathblocks_geometry_distance(a, left, a, right);
+                            maximum = maximum > distance ? maximum : distance;
+                        }
+                    output->scalar_value = maximum;
+                    break;
+                }
+                case 7:
+                    if (first->count <= 0 || second->count <= 0 || scratch == null)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                {
+                    for (int left = 0; left < first->count; left++)
+                    {
+                        for (int right = 0; right < second->count; right++)
+                        {
+                            double distance = mathblocks_geometry_distance(a, left, b, right);
+                            int target = left * second->count + right;
+                            if (left == 0 && right == 0)
+                                scratch[0] = distance;
+                            else if (left == 0)
+                                scratch[right] = scratch[right - 1] > distance
+                                    ? scratch[right - 1]
+                                    : distance;
+                            else if (right == 0)
+                                scratch[left * second->count] = scratch[(left - 1) * second->count] > distance
+                                    ? scratch[(left - 1) * second->count]
+                                    : distance;
+                            else
+                            {
+                                double preceding = scratch[(left - 1) * second->count + right];
+                                double candidate = scratch[(left - 1) * second->count + right - 1];
+                                preceding = preceding < candidate ? preceding : candidate;
+                                candidate = scratch[left * second->count + right - 1];
+                                preceding = preceding < candidate ? preceding : candidate;
+                                scratch[target] = preceding > distance ? preceding : distance;
+                            }
+                        }
+                    }
+                    output->scalar_value = scratch[first->count * second->count - 1];
+                    break;
+                }
+                case 8:
+                    if (first->count <= 0 || second->count <= 0)
+                        output->valid = 0;
+                    else
+                        output->scalar_value = mathblocks_geometry_distance(a, 0, b, 0);
+                    break;
+                case 9:
+                    if (first->count <= 0 || first->count != second->count)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                {
+                    double affinity = 0.0;
+                    for (int index = 0; index < first->count; index++)
+                        affinity += mathblocks_square_root(a[index] * b[index]);
+                    affinity = affinity < -1.0 ? -1.0 : affinity > 1.0 ? 1.0 : affinity;
+                    output->scalar_value = 2.0 * mathblocks_arc_cosine(affinity);
+                    break;
+                }
+                case 10:
+                    if (first->count < 2)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                {
+                    MathBlockGeometryEdge* edges = (MathBlockGeometryEdge*)output->data_pointer;
+                    int edge_count = 0;
+                    for (int left = 0; left < first->count; left++)
+                    {
+                        for (int right = left + 1; right < first->count; right++)
+                        {
+                            double center_x = (a[2 * left] + a[2 * right]) / 2.0;
+                            double center_y = (a[2 * left + 1] + a[2 * right + 1]) / 2.0;
+                            double radius = mathblocks_geometry_distance(a, left, a, right) / 2.0;
+                            bool empty = true;
+                            for (int index = 0; index < first->count; index++)
+                            {
+                                if (index != left && index != right &&
+                                    mathblocks_geometry_distance_coordinates(
+                                        a[2 * index], a[2 * index + 1], center_x, center_y) < radius)
+                                {
+                                    empty = false;
+                                    break;
+                                }
+                            }
+                            if (!empty)
+                                continue;
+                            if (edge_count >= output->capacity)
+                            {
+                                output->count = output->capacity == 2147483647
+                                    ? -1
+                                    : output->capacity + 1;
+                                output->valid = 0;
+                                break;
+                            }
+                            edges[edge_count].from = left;
+                            edges[edge_count].to = right;
+                            edges[edge_count].weight = 2.0 * radius;
+                            edge_count++;
+                        }
+                    }
+                    output->rows = first->count;
+                    if (output->valid)
+                        output->count = edge_count;
+                    break;
+                }
+                case 11:
+                    if (first->count <= 0 || second->count != 1)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                {
+                    double point_x = b[0];
+                    double point_y = b[1];
+                    int coincident = 0;
+                    int vector_count = 0;
+                    for (int index = 0; index < first->count; index++)
+                    {
+                        double x = a[2 * index] - point_x;
+                        double y = a[2 * index + 1] - point_y;
+                        if (x == 0.0 && y == 0.0)
+                            coincident++;
+                        else
+                            vector_count++;
+                    }
+                    if (vector_count == 0)
+                    {
+                        output->scalar_value = 1.0;
+                        break;
+                    }
+                    int maximum = 0;
+                    for (int pivot = 0; pivot < first->count; pivot++)
+                    {
+                        double pivot_x = a[2 * pivot] - point_x;
+                        double pivot_y = a[2 * pivot + 1] - point_y;
+                        if (pivot_x == 0.0 && pivot_y == 0.0)
+                            continue;
+                        int count = 0;
+                        for (int index = 0; index < first->count; index++)
+                        {
+                            double x = a[2 * index] - point_x;
+                            double y = a[2 * index + 1] - point_y;
+                            if (x == 0.0 && y == 0.0)
+                                continue;
+                            double cross = pivot_x * y - pivot_y * x;
+                            double dot = pivot_x * x + pivot_y * y;
+                            if (cross > 0.0 || (cross == 0.0 && dot > 0.0))
+                                count++;
+                        }
+                        maximum = maximum > count ? maximum : count;
+                    }
+                    output->scalar_value = (double)(coincident + vector_count - maximum) /
+                        first->count;
+                    break;
+                }
+                case 12:
+                    if (first->count <= 0 || second->count <= 0)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                {
+                    double directed_left = 0.0;
+                    for (int left = 0; left < first->count; left++)
+                    {
+                        double minimum = mathblocks_positive_infinity();
+                        for (int right = 0; right < second->count; right++)
+                        {
+                            double distance = mathblocks_geometry_distance(a, left, b, right);
+                            minimum = minimum < distance ? minimum : distance;
+                        }
+                        directed_left = directed_left > minimum ? directed_left : minimum;
+                    }
+                    double directed_right = 0.0;
+                    for (int right = 0; right < second->count; right++)
+                    {
+                        double minimum = mathblocks_positive_infinity();
+                        for (int left = 0; left < first->count; left++)
+                        {
+                            double distance = mathblocks_geometry_distance(b, right, a, left);
+                            minimum = minimum < distance ? minimum : distance;
+                        }
+                        directed_right = directed_right > minimum ? directed_right : minimum;
+                    }
+                    output->scalar_value = directed_left > directed_right
+                        ? directed_left
+                        : directed_right;
+                    break;
+                }
+                case 13:
+                case 14:
+                    if (first->count <= 0)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                {
+                    double total = 0.0;
+                    int start = opcode == 13 ? 1 : 0;
+                    for (int index = start; index < first->count; index++)
+                    {
+                        int previous = opcode == 13 ? index - 1 : index;
+                        int next = opcode == 13 ? index : (index + 1) % first->count;
+                        total += mathblocks_geometry_distance(a, previous, a, next);
+                    }
+                    output->scalar_value = total;
+                    break;
+                }
+                case 15:
+                    if (first->count != 1 || second->count != 2)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                    output->scalar_value = mathblocks_geometry_point_to_segment(
+                        a[0], a[1], b[0], b[1], b[2], b[3]);
+                    break;
+                case 16:
+                case 17:
+                    if (first->count <= 0)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                {
+                    double twice_area = 0.0;
+                    for (int index = 0; index < first->count; index++)
+                    {
+                        int next = (index + 1) % first->count;
+                        twice_area += a[2 * index] * a[2 * next + 1] -
+                                      a[2 * next] * a[2 * index + 1];
+                    }
+                    output->scalar_value = opcode == 16 ? Math.Abs(twice_area / 2.0) : twice_area / 2.0;
+                    break;
+                }
+                case 18:
+                    if (first->count < 3 || second->count != 1)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                {
+                    int containing = 0;
+                    int total = 0;
+                    double* coordinates = stackalloc double[3];
+                    for (int one = 0; one < first->count; one++)
+                        for (int two = one + 1; two < first->count; two++)
+                            for (int three = two + 1; three < first->count; three++)
+                            {
+                                total++;
+                                mathblocks_geometry_barycentric(
+                                    b[0], b[1],
+                                    a[2 * one], a[2 * one + 1],
+                                    a[2 * two], a[2 * two + 1],
+                                    a[2 * three], a[2 * three + 1],
+                                    coordinates);
+                                if (coordinates[0] >= 0.0 && coordinates[0] <= 1.0 &&
+                                    coordinates[1] >= 0.0 && coordinates[1] <= 1.0 &&
+                                    coordinates[2] >= 0.0 && coordinates[2] <= 1.0)
+                                {
+                                    containing++;
+                                }
+                            }
+                    output->scalar_value = (double)containing / total;
+                    break;
+                }
+                case 19:
+                    output->rows = first->rows;
+                    output->count = first->rows;
+                    if (first->columns != 2 || first->rows > output->capacity)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                    for (int index = 0; index < first->rows * 2; index++)
+                        result[index] = a[index];
+                    break;
+                case 20:
+                    mathblocks_sequence_set_matrix_shape(output, first->count, 2);
+                    if (first->count <= 0)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                    for (int index = 0; index < first->count * 2; index++)
+                        result[index] = a[index];
+                    break;
+                case 21:
+                    if (first->count <= 0 || scratch == null)
+                    {
+                        output->valid = 0;
+                        break;
+                    }
+                    if (first->count == 1)
+                    {
+                        mathblocks_sequence_set_vector_shape(output, 0);
+                        break;
+                    }
+                {
+                    int vertex_count = first->count;
+                    int edge_capacity = vertex_count * (vertex_count - 1) / 2;
+                    MathBlockGeometryEdge* edges = (MathBlockGeometryEdge*)scratch;
+                    int edge_count = 0;
+                    for (int left = 0; left < vertex_count; left++)
+                        for (int right = left + 1; right < vertex_count; right++)
+                        {
+                            edges[edge_count].from = left;
+                            edges[edge_count].to = right;
+                            edges[edge_count].weight = mathblocks_geometry_distance(a, left, a, right);
+                            edge_count++;
+                        }
+                    for (int index = 1; index < edge_count; index++)
+                    {
+                        MathBlockGeometryEdge value = edges[index];
+                        int position = index;
+                        while (position > 0 && mathblocks_geometry_edge_less(value, edges[position - 1]))
+                        {
+                            edges[position] = edges[position - 1];
+                            position--;
+                        }
+                        edges[position] = value;
+                    }
+                    int* parent = (int*)(edges + edge_capacity);
+                    byte* rank = (byte*)(parent + vertex_count);
+                    for (int index = 0; index < vertex_count; index++)
+                    {
+                        parent[index] = index;
+                        rank[index] = 0;
+                    }
+                    int selected = 0;
+                    for (int index = 0; index < edge_count && selected < vertex_count - 1; index++)
+                    {
+                        int left = mathblocks_geometry_find(parent, edges[index].from);
+                        int right = mathblocks_geometry_find(parent, edges[index].to);
+                        if (left == right)
+                            continue;
+                        if (rank[left] < rank[right])
+                            parent[left] = right;
+                        else if (rank[left] > rank[right])
+                            parent[right] = left;
+                        else
+                        {
+                            parent[right] = left;
+                            rank[left]++;
+                        }
+                        result[selected++] = edges[index].weight;
+                    }
+                    mathblocks_sequence_set_vector_shape(output, selected);
+                    break;
+                }
+            }
+            if (output->valid &&
+                opcode != 0 && opcode != 1 && opcode != 3 && opcode != 4 && opcode != 5 &&
+                opcode != 10 && opcode != 19 && opcode != 20 && opcode != 21 &&
+                !double.IsFinite(output->scalar_value))
+            {
+                output->valid = 0;
+            }
+        }
+    }
+}
