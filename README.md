@@ -1,96 +1,167 @@
 # CSharp2CUDA
 
-CSharp2CUDA translates a restricted set of valid C# source into deterministic CUDA C++
-source. Roslyn supplies syntax analysis, symbol resolution, type information, and source
-diagnostics. CSharp2CUDA supplies strict validation and CUDA emission.
+CSharp2CUDA translates a restricted set of valid C# source into deterministic CUDA C++ source.
+Roslyn provides syntax analysis, symbol resolution, type information, and C# diagnostics.
+CSharp2CUDA adds strict validation and CUDA emission.
 
-The project does not compile CUDA, allocate device memory, transfer data, or launch kernels.
-The calling software owns those operations. Translation stops when the source uses a C#
-feature without an exact CUDA rule.
+[Get started with a first translation](docs/getting-started.md) or read the sections below for the project model and limits.
 
-The compatibility suite uses complete CUDA translation units as golden output. It verifies
-deterministic source text, production-style ordering, and multi-unit composition.
+## What CSharp2CUDA does
 
-The package targets .NET 10 only. A translation unit is a static class with
-`CudaTranslationUnitAttribute`. Nested structs become CUDA structs. Methods with
-`CudaDeviceAttribute` become device functions. Methods with `CudaGlobalAttribute` become
-global functions.
+CSharp2CUDA reads a C# translation unit and emits CUDA C++ source. The translation keeps the source structure, resolves symbols through Roslyn, and applies explicit rules for types, calls, operators, declarations, and CUDA intrinsics.
 
-Every identifier that reaches CUDA must be one ASCII CUDA identifier. The rule covers struct,
-field, function, parameter, and local names. It also covers custom `Name` values.
+The output is deterministic. Struct declarations and function prototypes appear before function definitions. Integer helpers preserve C# wraparound rules, masked shift counts, and guarded integer division.
 
-The transpiler removes valid C# escape markers and rewrites each matching reference. It rejects
-CUDA C++ keywords, CUDA runtime names, generated helper names, and reserved forms.
+The input must compile as C# before translation starts. Any error diagnostic produces an empty CUDA source result. The result also contains all Roslyn and CSharp2CUDA diagnostics.
 
-Before emission, a semantic plan binds each accepted type, identifier, member, call, literal,
-operator, and declaration. Unmapped .NET members, enums, static struct fields, optional
-parameters, and signature collisions cause errors.
+## What CSharp2CUDA does not do
 
-Emission places struct declarations and function prototypes before function definitions.
-Integer operations use generated CUDA helpers for C# wraparound and masked shift counts.
-Guarded integer division calls `__trap` for a C# division failure.
+CSharp2CUDA does not compile CUDA C++ source. It does not allocate device memory, transfer data, launch kernels, or manage a CUDA stream. The calling application owns those operations.
 
-The input must compile as C# before translation starts. Use unsafe pointers for CUDA pointers.
-Use `CudaReadOnlyAttribute` for a deeply read-only pointer parameter. The `Cuda` type supplies
-thread dimensions, barriers, atomics, and explicit C++ conversion markers.
+Translation stops when the source uses a C# feature without an exact CUDA rule. This strict behavior prevents an unsupported construct from producing misleading CUDA output.
 
-Conversion markers emit explicit expressions. `Cuda.Bool` tests for a nonzero value.
-`Cuda.Unsigned` converts its input to `unsigned long long` before an unsigned operation.
+## How translation works
 
-Use a C# `in` parameter for a read-only value reference. The transpiler emits that parameter
-as a CUDA C++ `const T&` parameter.
+`CudaTranspiler.Transpile` accepts a source string or a Roslyn `CSharpCompilation`. The source overload parses C# 14 syntax and creates a release compilation with unsafe code enabled.
 
-Assign `stackalloc T[constant]` to a `T*` or `Span<T>` local for a fixed CUDA local array.
-Use `ReadOnlySpan<T>` to emit a `const` array. Dynamic lengths are rejected.
+The compilation then passes through a semantic plan, a syntax validator, and a CUDA emitter. The plan registers translation units, structs, functions, parameters, locals, identifiers, and expression helper rewrites.
 
-Use `CudaExternalAttribute` for a type or method supplied by an earlier CUDA source unit. The
-declaration remains available to Roslyn, but the transpiler does not emit it again.
+The validator accepts only syntax with an explicit CUDA rule. It also checks C# and C++ evaluation order before it accepts assignments, calls, binary operators, pointer operations, and compound assignments.
 
-External methods have unknown effects by default. Set `CudaExternalAttribute.IsPure` only for
-a method that does not write memory, change external state, throw, or trap.
+The emitter writes the integer semantics helpers, struct declarations, struct definitions, function prototypes, and function definitions. The `CudaTranspilationResult` reports success, diagnostics, and generated source.
 
-Its result must depend only on argument values and reachable read-only memory. Mark each pointer
-parameter with `CudaReadOnlyAttribute`. An incorrect contract can change program behavior.
+## Quick start
 
-C# and CUDA C++ evaluate some expressions in different orders. The semantic plan accepts these
-expressions only when its effect analysis proves an equivalent result.
+Add a reference to the `CSharp2CUDA` project or to the `Supprocom.CSharp2CUDA` package. The project targets .NET 10 and uses C# 14.
 
-Unsafe assignment targets, binary operands, compound assignments, and call arguments cause an
-error. The transpiler does not emit source for these inputs.
-
-The body validator accepts only syntax with an explicit CUDA rule. The `%` operator accepts
-only integral operands. Use `Cuda.FloatingRemainder` for floating-point operands.
-
-`System.Char` does not have a CUDA translation because its width does not match CUDA C++
-`char`. Use `ushort` when the source needs a 16-bit code unit.
-
-Call `CudaTranspiler.Transpile` with C# source or a Roslyn `CSharpCompilation`. The result
-contains the CUDA source and all Roslyn diagnostics. An error always causes an empty CUDA
-source result.
-
-The compilation overload rejects `CSharpCompilationOptions.CheckOverflow` when its value is
-`true`. Generated integer helpers implement unchecked C# arithmetic.
+Create a static unsafe class with `CudaTranslationUnitAttribute`. Mark device methods with `CudaDeviceAttribute` and kernel methods with `CudaGlobalAttribute`.
 
 ```csharp
-var result = CudaTranspiler.Transpile(csharpSource);
-if (!result.Succeeded)
-    throw new InvalidOperationException(string.Join("\n", result.Diagnostics));
+const string source = """
+    using CSharp2CUDA;
 
-string cudaSource = result.Source;
+    [CudaTranslationUnit]
+    internal static unsafe class HelloCuda
+    {
+        [CudaDevice]
+        private static int Add(int left, int right)
+        {
+            return left + right;
+        }
+
+        [CudaGlobal(Name = "hello_kernel")]
+        private static void Kernel(int* output)
+        {
+            output[0] = Add(Cuda.ThreadIdx.X, 1);
+        }
+    }
+    """;
+
+var result = CudaTranspiler.Transpile(source, path: "HelloCuda.cs");
+if (!result.Succeeded)
+{
+    foreach (var diagnostic in result.Diagnostics)
+        Console.Error.WriteLine(diagnostic);
+}
+else
+{
+    File.WriteAllText("HelloCuda.cu", result.Source);
+}
 ```
+
+The generated source contains a `__device__` function for `Add` and an `extern "C" __global__` function named `hello_kernel`. The emitter also adds any integer helper functions required by the source.
+
+## Source model
+
+A translation unit is a static, non-generic class marked with `CudaTranslationUnitAttribute`. The class can contain CUDA structs and static methods. Unsupported members produce diagnostics.
+
+A struct becomes a CUDA `struct`. Its fields must have supported types and must not be static, constant, read-only, volatile, initialized, or decorated with extra attributes.
+
+A method with `CudaDeviceAttribute` becomes a `__device__` function. A method with `CudaGlobalAttribute` becomes a `__global__` function. Both attributes support a custom CUDA `Name`.
+
+Global functions use `extern "C"` by default. Set `ExternC = false` when the generated function must not use C linkage.
+
+All emitted identifiers must start with an ASCII letter and use only ASCII letters, digits, and underscores. C++ keywords, CUDA runtime names, double underscores, and generated `csharp2cuda_` names are reserved.
+
+## CUDA surface
+
+The `Cuda` type supplies source-level bindings for CUDA dimensions, barriers, atomics, and explicit conversion markers. Dimension, barrier, and atomic members throw if managed code executes them. The conversion helpers also provide managed C# behavior for Roslyn binding.
+
+`Cuda.ThreadIdx`, `Cuda.BlockIdx`, `Cuda.BlockDim`, and `Cuda.GridDim` provide the `X`, `Y`, and `Z` dimensions. `Cuda.SyncThreads` emits `__syncthreads`. `Cuda.AtomicAdd` and `Cuda.AtomicExchange` emit CUDA atomic functions.
+
+`Cuda.Bool` converts an integer to a nonzero test. `Cuda.Int` converts a Boolean value to `0` or `1`. `Cuda.Unsigned` converts a signed `long` value to `unsigned long long` before an unsigned operation.
+
+Use `Cuda.FloatingRemainder` for floating-point remainder. Use `Cuda.NearbyInteger` and `Cuda.SignBit` for the supported CUDA math mappings.
+
+Use `Cuda.ReadOnly` for a local pointer value that must be read-only through the expression tree. Use `CudaReadOnlyAttribute` on a pointer parameter when the external contract guarantees deep read-only access.
+
+## Semantics and limits
+
+The transpiler preserves C# integer behavior with generated helpers. This includes unchecked `int` and `long` arithmetic, shift masking, and division checks that call `__trap` for a C# division failure.
+
+The compilation overload rejects `CSharpCompilationOptions.CheckOverflow` when it is enabled. Generated integer helpers implement unchecked C# arithmetic.
+
+C# and CUDA C++ can evaluate expressions in different orders. The validator accepts an expression only when its effect analysis proves an equivalent result. Calls, assignments, pointer expressions, and mutations can therefore produce a diagnostic even when the C# compiler accepts them.
+
+The body validator supports explicit rules for declarations, blocks, `if`, `for`, `while`, `switch`, returns, pointer access, arithmetic, comparisons, logical operators, and selected calls. Managed allocation, dynamic stack allocation, enums, optional parameters, unsupported members, and unsupported .NET types are rejected.
+
+`System.Char` has no CUDA translation because its width does not match CUDA C++ `char`. Use `ushort` when the source requires a 16-bit code unit.
+
+Use a C# `in` parameter for a read-only value reference. The emitter writes it as a CUDA C++ `const T&` parameter. Pointer parameters cannot use `in`.
+
+Assign `stackalloc T[constant]` to a `T*`, `Span<T>`, or `ReadOnlySpan<T>` local for a fixed CUDA local array. The length must be a positive compile-time constant. Dynamic lengths are rejected.
+
+## External declarations
+
+Use `CudaExternalAttribute` for a struct or method supplied by an earlier CUDA source unit. The declaration remains available to Roslyn, but CSharp2CUDA does not emit it again.
+
+External methods have unknown effects by default. Set `CudaExternalAttribute.IsPure` only when the method does not write memory, change external state, throw, or trap. Its result must depend only on argument values and reachable read-only memory.
+
+```csharp
+using System;
+using CSharp2CUDA;
+
+[CudaTranslationUnit]
+internal static unsafe class ExternalModule
+{
+    [CudaExternal(IsPure = true)]
+    private static double ExternalSquareRoot(double value) =>
+        throw new NotSupportedException();
+
+    [CudaDevice]
+    private static double UseExternal(double value)
+    {
+        return ExternalSquareRoot(value);
+    }
+}
+```
+
+Mark every pointer parameter on a pure external method with `CudaReadOnlyAttribute`. An incorrect pure contract can change program behavior.
 
 ## Build and test
 
-Open `CSharp2CUDA.slnx` in Visual Studio 2026. You can also run
-`dotnet test CSharp2CUDA.slnx -c Release` from the repository root.
+Run the test suite from the repository root.
 
-Package creation requires `RepositoryCommit` and `RepositoryBranch` MSBuild properties.
-These properties bind package metadata to the reviewed Git source.
+```text
+dotnet test CSharp2CUDA.slnx -c Release
+```
 
-## License
+The compatibility suite translates complete C# catalog files and compares the output with exact CUDA golden files. Focused tests cover diagnostics, identifier rules, runtime mappings, declaration ordering, integer behavior, CUDA intrinsics, and evaluation order.
 
-CSharp2CUDA is licensed under `AGPL-3.0-only`. See [LICENSE.md](LICENSE.md) for
-the complete license text.
+Create a package after setting the repository provenance properties.
 
-Contributions use the terms in [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md).
-See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for dependency license identities.
+```powershell
+$commit = git rev-parse HEAD
+$branch = git branch --show-current
+dotnet pack CSharp2CUDA/CSharp2CUDA.csproj -c Release `
+    -p:RepositoryCommit=$commit `
+    -p:RepositoryBranch=$branch
+```
+
+The package output goes to `artifacts/packages`. The package ID is `Supprocom.CSharp2CUDA`.
+
+## Project documentation
+
+Read [Getting started](docs/getting-started.md) for a complete first translation. Read [CONTRIBUTING.md](.github/CONTRIBUTING.md) before submitting a contribution.
+
+See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for dependency license identities. See [LICENSE.md](LICENSE.md) for the complete `AGPL-3.0-only` license text.
