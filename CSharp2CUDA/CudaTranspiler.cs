@@ -61,16 +61,24 @@ public static class CudaTranspiler
             return new CudaTranspilationResult(string.Empty, diagnostics.ToImmutable());
         }
 
-        using var output = new StringWriter { NewLine = options.NewLine };
-        for (var index = 0; index < units.Count; index++)
+        var functionNames = new Dictionary<IMethodSymbol, string>(SymbolEqualityComparer.Default);
+        var emitters = new List<(ClassDeclarationSyntax Unit, CudaModuleEmitter Emitter)>();
+        foreach (var unit in units)
         {
-            var unit = units[index];
             var model = compilation.GetSemanticModel(unit.SyntaxTree, ignoreAccessibility: true);
-            var emitter = new CudaModuleEmitter(model, diagnostics, options);
-            var source = emitter.Emit(unit);
+            var emitter = new CudaModuleEmitter(model, diagnostics, options, functionNames);
+            emitter.RegisterFunctionNames(unit);
+            emitters.Add((unit, emitter));
+        }
+
+        using var output = new StringWriter { NewLine = options.NewLine };
+        for (var index = 0; index < emitters.Count; index++)
+        {
+            var (unit, emitter) = emitters[index];
+            var emittedSource = emitter.Emit(unit);
             if (index > 0)
                 output.Write(options.NewLine + options.NewLine);
-            output.Write(source);
+            output.Write(emittedSource);
         }
 
         var completedDiagnostics = diagnostics.ToImmutable();

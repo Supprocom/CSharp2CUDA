@@ -16,6 +16,9 @@ The package targets .NET 10 only. A translation unit is a static class with
 `CudaDeviceAttribute` become device functions. Methods with `CudaGlobalAttribute` become
 global functions.
 
+Each emitted function name must be one ASCII CUDA identifier. This rule applies to C# method
+names and custom `Name` values. The transpiler rejects CUDA C++ keywords and reserved forms.
+
 The input must compile as C# before translation starts. Use unsafe pointers for CUDA pointers.
 Use `CudaReadOnlyAttribute` for a deeply read-only pointer parameter. The `Cuda` type supplies
 thread dimensions, barriers, atomics, and explicit C++ conversion markers.
@@ -28,6 +31,12 @@ Use `ReadOnlySpan<T>` to emit a `const` array. Dynamic lengths are rejected.
 
 Use `CudaExternalAttribute` for a type or method supplied by an earlier CUDA source unit. The
 declaration remains available to Roslyn, but the transpiler does not emit it again.
+
+The body validator accepts only syntax with an explicit CUDA rule. The `%` operator accepts
+only integral operands. Use `Cuda.FloatingRemainder` for floating-point operands.
+
+`System.Char` does not have a CUDA translation because its width does not match CUDA C++
+`char`. Use `ushort` when the source needs a 16-bit code unit.
 
 Call `CudaTranspiler.Transpile` with C# source or a Roslyn `CSharpCompilation`. The result
 contains the CUDA source and all Roslyn diagnostics. An error always causes an empty CUDA

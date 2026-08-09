@@ -8,7 +8,8 @@ namespace CSharp2CUDA;
 
 internal sealed class CudaSyntaxTranslator(
     SemanticModel semanticModel,
-    ImmutableArray<Diagnostic>.Builder diagnostics) : CSharpSyntaxRewriter
+    ImmutableArray<Diagnostic>.Builder diagnostics,
+    IReadOnlyDictionary<IMethodSymbol, string> functionNames) : CSharpSyntaxRewriter
 {
     private static readonly IReadOnlyDictionary<string, string> MethodMappings =
         new Dictionary<string, string>(StringComparer.Ordinal)
@@ -140,6 +141,9 @@ internal sealed class CudaSyntaxTranslator(
             ReportUnsupportedCall(node, node.Expression.ToString());
             return base.VisitInvocationExpression(node);
         }
+
+        if (functionNames.TryGetValue(method, out var emittedName))
+            return ReplaceInvocationName(node, emittedName);
 
         if (method.ContainingType.ToDisplayString() == "CSharp2CUDA.Cuda")
             return TranslateCudaInvocation(node, method);
@@ -393,7 +397,6 @@ internal sealed class CudaSyntaxTranslator(
                 SpecialType.System_UInt64 => "unsigned long long",
                 SpecialType.System_Single => "float",
                 SpecialType.System_Double => "double",
-                SpecialType.System_Char => "char",
                 _ => ReportUnsupportedType(type, location)
             };
         }

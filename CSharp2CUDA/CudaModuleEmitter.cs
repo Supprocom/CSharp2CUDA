@@ -5,19 +5,53 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace CSharp2CUDA;
 
-internal sealed class CudaModuleEmitter(
-    SemanticModel semanticModel,
-    ImmutableArray<Diagnostic>.Builder diagnostics,
-    CudaTranspilationOptions options)
+internal sealed class CudaModuleEmitter
 {
     private const string DeviceAttributeName = "CSharp2CUDA.CudaDeviceAttribute";
     private const string GlobalAttributeName = "CSharp2CUDA.CudaGlobalAttribute";
-    private readonly CudaSyntaxTranslator translator = new(semanticModel, diagnostics);
+    private static readonly HashSet<string> CudaKeywords = new(StringComparer.Ordinal)
+    {
+        "alignas", "alignof", "and", "and_eq", "asm", "atomic_cancel",
+        "atomic_commit", "atomic_noexcept", "auto", "bitand", "bitor", "bool",
+        "break", "case", "catch", "char", "char8_t", "char16_t", "char32_t",
+        "class", "compl", "concept", "const", "consteval", "constexpr", "constinit",
+        "const_cast", "continue", "co_await", "co_return", "co_yield", "decltype",
+        "default", "delete", "do", "double", "dynamic_cast", "else", "enum",
+        "explicit", "export", "extern", "false", "final", "float", "for", "friend",
+        "goto", "if", "import", "inline", "int", "long", "module", "mutable",
+        "namespace", "new", "noexcept", "not", "not_eq", "nullptr", "operator",
+        "or", "or_eq", "override", "private", "protected", "public", "reflexpr",
+        "register", "reinterpret_cast", "requires", "return", "short", "signed",
+        "sizeof", "static", "static_assert", "static_cast", "struct", "switch",
+        "synchronized", "template", "this", "thread_local", "throw", "transaction_safe",
+        "transaction_safe_dynamic", "true", "try", "typedef", "typeid", "typename",
+        "union", "unsigned", "using", "virtual", "void", "volatile", "wchar_t",
+        "while", "xor", "xor_eq"
+    };
+
+    private readonly SemanticModel semanticModel;
+    private readonly ImmutableArray<Diagnostic>.Builder diagnostics;
+    private readonly CudaTranspilationOptions options;
+    private readonly Dictionary<IMethodSymbol, string> functionNames;
+    private readonly CudaSyntaxTranslator translator;
+
+    public CudaModuleEmitter(
+        SemanticModel semanticModel,
+        ImmutableArray<Diagnostic>.Builder diagnostics,
+        CudaTranspilationOptions options,
+        Dictionary<IMethodSymbol, string> functionNames)
+    {
+        this.semanticModel = semanticModel;
+        this.diagnostics = diagnostics;
+        this.options = options;
+        this.functionNames = functionNames;
+        translator = new CudaSyntaxTranslator(semanticModel, diagnostics, functionNames);
+    }
 
     public string Emit(ClassDeclarationSyntax unit)
     {
         ValidateUnit(unit);
-        var validator = new CudaSyntaxValidator(diagnostics);
+        var validator = new CudaSyntaxValidator(semanticModel, diagnostics);
         using var output = new StringWriter { NewLine = options.NewLine };
         var wroteMember = false;
 
@@ -34,7 +68,8 @@ internal sealed class CudaModuleEmitter(
 
             if (translated is null)
                 continue;
-            validator.Visit(member);
+            if (member is MethodDeclarationSyntax methodDeclaration)
+                validator.Visit(methodDeclaration.Body);
             if (wroteMember)
                 output.Write(options.NewLine + options.NewLine);
             output.Write(translated);
@@ -139,7 +174,7 @@ internal sealed class CudaModuleEmitter(
 
         output.Write(translator.TranslateType(method.ReturnType, deepReadOnly: false));
         output.Write(' ');
-        output.Write(GetEmittedName(symbol, device ?? global!));
+        output.Write(functionNames[symbol]);
         EmitParameters(output, method.ParameterList, symbol);
         output.WriteLine();
         output.Write(TranslateBody(method.Body));
@@ -245,16 +280,75 @@ internal sealed class CudaModuleEmitter(
         return defaultValue;
     }
 
-    private static string GetEmittedName(IMethodSymbol method, AttributeData attribute)
+    public void RegisterFunctionNames(ClassDeclarationSyntax unit)
     {
+        foreach (var method in unit.Members.OfType<MethodDeclarationSyntax>())
+        {
+            if (semanticModel.GetDeclaredSymbol(method) is not IMethodSymbol symbol)
+                continue;
+            var attribute = GetAttribute(symbol, DeviceAttributeName) ??
+                GetAttribute(symbol, GlobalAttributeName);
+            if (attribute is not null)
+                functionNames[symbol] = GetEmittedName(symbol, attribute);
+        }
+    }
+
+    private string GetEmittedName(IMethodSymbol method, AttributeData attribute)
+    {
+        var emittedName = method.Name;
         foreach (var argument in attribute.NamedArguments)
         {
-            if (argument.Key == nameof(CudaDeviceAttribute.Name) &&
-                argument.Value.Value is string name && name.Length > 0)
+            if (argument.Key == nameof(CudaDeviceAttribute.Name))
             {
-                return name;
+                emittedName = argument.Value.Value as string ?? string.Empty;
+                break;
             }
         }
-        return method.Name;
+
+        if (IsValidCudaIdentifier(emittedName))
+            return emittedName;
+
+        diagnostics.Add(Diagnostic.Create(
+            CudaDiagnostics.InvalidFunctionName,
+            GetNameLocation(method, attribute),
+            emittedName));
+        return "csharp2cuda_invalid_function";
     }
+
+    private static Location GetNameLocation(IMethodSymbol method, AttributeData attribute)
+    {
+        if (attribute.ApplicationSyntaxReference?.GetSyntax() is AttributeSyntax syntax)
+        {
+            var nameArgument = syntax.ArgumentList?.Arguments.FirstOrDefault(argument =>
+                argument.NameEquals?.Name.Identifier.ValueText ==
+                nameof(CudaDeviceAttribute.Name));
+            if (nameArgument is not null)
+                return nameArgument.Expression.GetLocation();
+        }
+
+        return method.Locations.FirstOrDefault() ?? Location.None;
+    }
+
+    private static bool IsValidCudaIdentifier(string name)
+    {
+        if (name.Length == 0 ||
+            !IsAsciiLetter(name[0]) ||
+            CudaKeywords.Contains(name) ||
+            name.Contains("__", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        for (var index = 1; index < name.Length; index++)
+        {
+            var character = name[index];
+            if (!IsAsciiLetter(character) && !char.IsAsciiDigit(character) && character != '_')
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsAsciiLetter(char character) =>
+        character is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
 }

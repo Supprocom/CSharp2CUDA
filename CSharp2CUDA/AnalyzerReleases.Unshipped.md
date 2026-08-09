@@ -13,3 +13,4 @@ CS2CUDA006 | CSharp2CUDA | Error | Reports a call without a CUDA translation.
 CS2CUDA007 | CSharp2CUDA | Error | Reports a type without a CUDA translation.
 CS2CUDA008 | CSharp2CUDA | Error | Reports conflicting CUDA function kinds.
 CS2CUDA009 | CSharp2CUDA | Error | Reports an invalid read-only parameter.
+CS2CUDA010 | CSharp2CUDA | Error | Reports an invalid CUDA function name.

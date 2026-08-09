@@ -77,4 +77,12 @@ internal static class CudaDiagnostics
         Category,
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InvalidFunctionName = new(
+        "CS2CUDA010",
+        "CUDA function name is invalid",
+        "CUDA function name '{0}' is not a valid identifier",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
 }
