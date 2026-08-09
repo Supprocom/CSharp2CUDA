@@ -296,7 +296,7 @@ internal sealed class CudaSyntaxValidator(
             BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals or
             BinaryOperatorKind.LessThan or BinaryOperatorKind.LessThanOrEqual or
             BinaryOperatorKind.GreaterThan or BinaryOperatorKind.GreaterThanOrEqual =>
-                IsComparable(operation.LeftOperand.Type, operation.RightOperand.Type),
+                PlanComparison(node, operation),
             BinaryOperatorKind.Add => PlanArithmetic(result, "add", ref helper),
             BinaryOperatorKind.Subtract => PlanArithmetic(result, "sub", ref helper),
             BinaryOperatorKind.Multiply => PlanArithmetic(result, "mul", ref helper),
@@ -931,6 +931,30 @@ internal sealed class CudaSyntaxValidator(
         return helper is not null || type is SpecialType.System_UInt32 or
             SpecialType.System_UInt64 or SpecialType.System_Single or
             SpecialType.System_Double;
+    }
+
+    private bool PlanComparison(BinaryExpressionSyntax node, IBinaryOperation operation)
+    {
+        if (!IsComparable(operation.LeftOperand.Type, operation.RightOperand.Type))
+            return false;
+
+        var sourceLeft = semanticModel.GetTypeInfo(node.Left).Type;
+        var sourceRight = semanticModel.GetTypeInfo(node.Right).Type;
+        var leftType = HaveSameEmittedType(sourceLeft, operation.LeftOperand.Type)
+            ? null
+            : plan.FormatType(
+                operation.LeftOperand.Type!,
+                false,
+                node.Left.GetLocation());
+        var rightType = HaveSameEmittedType(sourceRight, operation.RightOperand.Type)
+            ? null
+            : plan.FormatType(
+                operation.RightOperand.Type!,
+                false,
+                node.Right.GetLocation());
+        if (leftType is not null || rightType is not null)
+            plan.PlanBinaryConversions(node, leftType, rightType);
+        return true;
     }
 
     private static bool PlanDivision(

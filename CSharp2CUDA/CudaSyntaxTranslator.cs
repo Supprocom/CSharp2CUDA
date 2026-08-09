@@ -152,9 +152,21 @@ internal sealed class CudaSyntaxTranslator(
 
     public override SyntaxNode? VisitBinaryExpression(BinaryExpressionSyntax node)
     {
-        if (!plan.TryGetBinaryHelper(node, out var helper))
+        var hasHelper = plan.TryGetBinaryHelper(node, out var helper);
+        var hasConversions = plan.TryGetBinaryConversions(node, out var conversions);
+        if (!hasHelper && !hasConversions)
             return base.VisitBinaryExpression(node);
-        return CreateHelperCall(helper, node, node.Left, node.Right);
+
+        var left = (ExpressionSyntax)Visit(node.Left)!;
+        var right = (ExpressionSyntax)Visit(node.Right)!;
+        if (hasConversions)
+        {
+            left = ApplyBinaryConversion(left, conversions.LeftType);
+            right = ApplyBinaryConversion(right, conversions.RightType);
+        }
+        if (hasHelper)
+            return CreateTranslatedHelperCall(helper, node, left, right);
+        return node.WithLeft(left).WithRight(right);
     }
 
     public override SyntaxNode? VisitAssignmentExpression(AssignmentExpressionSyntax node)
@@ -377,6 +389,18 @@ internal sealed class CudaSyntaxTranslator(
 
     private static ParenthesizedExpressionSyntax Parenthesize(ExpressionSyntax expression) =>
         SyntaxFactory.ParenthesizedExpression(expression.WithoutTrivia());
+
+    private static ExpressionSyntax ApplyBinaryConversion(
+        ExpressionSyntax expression,
+        string? targetType)
+    {
+        if (targetType is null)
+            return expression;
+        return SyntaxFactory.CastExpression(
+                SyntaxFactory.ParseTypeName(targetType),
+                Parenthesize(expression))
+            .WithTriviaFrom(expression);
+    }
 
     private static TypeSyntax CreateTypeNode(string text, TypeSyntax original)
     {

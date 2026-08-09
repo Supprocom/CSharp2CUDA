@@ -28,6 +28,28 @@ static __device__ __forceinline__ T* csharp2cuda_pointer_add_reverse(int offset,
     return csharp2cuda_pointer_add(pointer, offset);
 }
 
+static __device__ __forceinline__ double csharp2cuda_f64_maximum(double left, double right)
+{
+    if (left != right)
+    {
+        if (!isnan(left))
+            return right < left ? left : right;
+        return left;
+    }
+    return signbit(right) ? left : right;
+}
+
+static __device__ __forceinline__ double csharp2cuda_f64_minimum(double left, double right)
+{
+    if (left != right)
+    {
+        if (!isnan(left))
+            return left < right ? left : right;
+        return left;
+    }
+    return signbit(left) ? left : right;
+}
+
 static __device__ __forceinline__ int csharp2cuda_i32_add(int left, int right)
 {
     return csharp2cuda_i32_from_bits((unsigned int)left + (unsigned int)right);
@@ -639,7 +661,7 @@ extern "C" __global__ void mathblocks_probability(
             if (!mathblocks_probability_integer(second->scalar_value, &first_count) || first_count <= 0 ||
                 !mathblocks_probability_integer(third->scalar_value, &second_count) || second_count <= 0 ||
                 !mathblocks_probability_integer(fourth->scalar_value, &condition_count) || condition_count <= 0 ||
-                csharp2cuda_i64_mul(csharp2cuda_i64_mul((long long)first_count, second_count), condition_count) != first->count || scratch == nullptr)
+                csharp2cuda_i64_mul(csharp2cuda_i64_mul((long long)first_count, second_count), condition_count) != (long long)(first->count) || scratch == nullptr)
             {
                 output->valid = 0;
                 return;

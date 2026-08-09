@@ -28,6 +28,28 @@ static __device__ __forceinline__ T* csharp2cuda_pointer_add_reverse(int offset,
     return csharp2cuda_pointer_add(pointer, offset);
 }
 
+static __device__ __forceinline__ double csharp2cuda_f64_maximum(double left, double right)
+{
+    if (left != right)
+    {
+        if (!isnan(left))
+            return right < left ? left : right;
+        return left;
+    }
+    return signbit(right) ? left : right;
+}
+
+static __device__ __forceinline__ double csharp2cuda_f64_minimum(double left, double right)
+{
+    if (left != right)
+    {
+        if (!isnan(left))
+            return left < right ? left : right;
+        return left;
+    }
+    return signbit(left) ? left : right;
+}
+
 static __device__ __forceinline__ int csharp2cuda_i32_add(int left, int right)
 {
     return csharp2cuda_i32_from_bits((unsigned int)left + (unsigned int)right);
@@ -351,7 +373,7 @@ __device__ void mathblocks_matrix_shape(MathBlockSlot* output, int rows, int col
     output->rows = rows;
     output->columns = columns;
     output->count = count > 2147483647LL ? -1 : csharp2cuda_i32_from_bits((unsigned int)(count));
-    if (rows <= 0 || columns <= 0 || count > output->capacity)
+    if (rows <= 0 || columns <= 0 || count > (long long)(output->capacity))
         output->valid = 0;
 }
 
@@ -1046,7 +1068,7 @@ extern "C" __global__ void mathblocks_matrix(
         {
             mathblocks_matrix_shape(output, rows, columns);
             if (!valid_rows || !valid_columns || rows <= 0 || columns <= 0 ||
-                csharp2cuda_i64_mul((long long)rows, columns) != first->count)
+                csharp2cuda_i64_mul((long long)rows, columns) != (long long)(first->count))
             {
                 output->valid = 0;
             }

@@ -28,6 +28,28 @@ static __device__ __forceinline__ T* csharp2cuda_pointer_add_reverse(int offset,
     return csharp2cuda_pointer_add(pointer, offset);
 }
 
+static __device__ __forceinline__ double csharp2cuda_f64_maximum(double left, double right)
+{
+    if (left != right)
+    {
+        if (!isnan(left))
+            return right < left ? left : right;
+        return left;
+    }
+    return signbit(right) ? left : right;
+}
+
+static __device__ __forceinline__ double csharp2cuda_f64_minimum(double left, double right)
+{
+    if (left != right)
+    {
+        if (!isnan(left))
+            return left < right ? left : right;
+        return left;
+    }
+    return signbit(left) ? left : right;
+}
+
 static __device__ __forceinline__ int csharp2cuda_i32_add(int left, int right)
 {
     return csharp2cuda_i32_from_bits((unsigned int)left + (unsigned int)right);
@@ -669,9 +691,9 @@ extern "C" __global__ void mathblocks_graph(
                     int right = mathblocks_graph_find(parent, work[index].to);
                     if (left == right)
                         continue;
-                    if (rank[left] < rank[right])
+                    if ((int)(rank[left]) < (int)(rank[right]))
                         parent[left] = right;
-                    else if (rank[left] > rank[right])
+                    else if ((int)(rank[left]) > (int)(rank[right]))
                         parent[right] = left;
                     else
                     {

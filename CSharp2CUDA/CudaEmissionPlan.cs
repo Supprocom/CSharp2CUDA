@@ -23,8 +23,8 @@ internal sealed class CudaEmissionPlan
             ["System.Math.CopySign(double, double)"] = "copysign",
             ["System.Math.Floor(double)"] = "floor",
             ["System.Math.ILogB(double)"] = "ilogb",
-            ["System.Math.Max(double, double)"] = "fmax",
-            ["System.Math.Min(double, double)"] = "fmin",
+            ["System.Math.Max(double, double)"] = "csharp2cuda_f64_maximum",
+            ["System.Math.Min(double, double)"] = "csharp2cuda_f64_minimum",
             ["System.Math.ScaleB(double, int)"] = "ldexp",
             ["System.Math.Truncate(double)"] = "trunc",
             ["double.IsFinite(double)"] = "isfinite",
@@ -81,6 +81,8 @@ internal sealed class CudaEmissionPlan
     private readonly HashSet<IMethodSymbol> pureFunctions =
         new(SymbolEqualityComparer.Default);
     private readonly Dictionary<BinaryExpressionSyntax, string> binaryHelpers = [];
+    private readonly Dictionary<BinaryExpressionSyntax, CudaBinaryConversionPlan>
+        binaryConversions = [];
     private readonly Dictionary<AssignmentExpressionSyntax, string> assignmentHelpers = [];
     private readonly Dictionary<PrefixUnaryExpressionSyntax, string> prefixHelpers = [];
     private readonly Dictionary<PostfixUnaryExpressionSyntax, string> postfixHelpers = [];
@@ -144,6 +146,17 @@ internal sealed class CudaEmissionPlan
 
     public bool TryGetBinaryHelper(BinaryExpressionSyntax expression, out string helper) =>
         binaryHelpers.TryGetValue(expression, out helper!);
+
+    public void PlanBinaryConversions(
+        BinaryExpressionSyntax expression,
+        string? leftType,
+        string? rightType) =>
+        binaryConversions[expression] = new CudaBinaryConversionPlan(leftType, rightType);
+
+    public bool TryGetBinaryConversions(
+        BinaryExpressionSyntax expression,
+        out CudaBinaryConversionPlan conversions) =>
+        binaryConversions.TryGetValue(expression, out conversions!);
 
     public void PlanAssignmentHelper(AssignmentExpressionSyntax expression, string helper) =>
         assignmentHelpers[expression] = helper;
@@ -1001,6 +1014,8 @@ internal enum CudaFunctionKind
 }
 
 internal sealed record CudaCallPlan(CudaCallKind Kind, string Name);
+
+internal sealed record CudaBinaryConversionPlan(string? LeftType, string? RightType);
 
 internal enum CudaCallKind
 {

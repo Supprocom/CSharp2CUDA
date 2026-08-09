@@ -28,6 +28,28 @@ static __device__ __forceinline__ T* csharp2cuda_pointer_add_reverse(int offset,
     return csharp2cuda_pointer_add(pointer, offset);
 }
 
+static __device__ __forceinline__ double csharp2cuda_f64_maximum(double left, double right)
+{
+    if (left != right)
+    {
+        if (!isnan(left))
+            return right < left ? left : right;
+        return left;
+    }
+    return signbit(right) ? left : right;
+}
+
+static __device__ __forceinline__ double csharp2cuda_f64_minimum(double left, double right)
+{
+    if (left != right)
+    {
+        if (!isnan(left))
+            return left < right ? left : right;
+        return left;
+    }
+    return signbit(left) ? left : right;
+}
+
 static __device__ __forceinline__ int csharp2cuda_i32_add(int left, int right)
 {
     return csharp2cuda_i32_from_bits((unsigned int)left + (unsigned int)right);
@@ -437,9 +459,9 @@ __device__ double mathblocks_binary_logarithm(double value)
 
 __device__ double mathblocks_integer_power(double value, long long exponent)
 {
-    if (exponent == 0)
+    if (exponent == (long long)(0))
         return 1.0;
-    bool negative = exponent < 0;
+    bool negative = exponent < (long long)(0);
     unsigned long long remaining = negative
         ? (unsigned long long)(csharp2cuda_i64_neg((csharp2cuda_i64_add(exponent, 1)))) + 1ull
         : (unsigned long long)exponent;
@@ -689,9 +711,9 @@ extern "C" __global__ void mathblocks_scalar(
         case 5: output->scalar_value = fabs(a); break;
         case 6: output->scalar_value = csharp2cuda_i32_sub(((a > 0.0)?1:0), ((a < 0.0)?1:0)); break;
         case 7: output->scalar_value = a > 0.0 ? a : 0.0; break;
-        case 8: output->scalar_value = fmin(a, b); break;
-        case 9: output->scalar_value = fmax(a, b); break;
-        case 10: output->scalar_value = fmin(fmax(a, b), c); break;
+        case 8: output->scalar_value = csharp2cuda_f64_minimum(a, b); break;
+        case 9: output->scalar_value = csharp2cuda_f64_maximum(a, b); break;
+        case 10: output->scalar_value = csharp2cuda_f64_minimum(csharp2cuda_f64_maximum(a, b), c); break;
         case 11: output->scalar_value = 1.0 / a; break;
         case 12: output->scalar_value = a * a; break;
         case 13: output->scalar_value = a * a * a; break;
@@ -752,7 +774,7 @@ extern "C" __global__ void mathblocks_scalar(
             output->scalar_value = mathblocks_natural_logarithm(a / (1.0 - a));
             break;
         case 41:
-            output->scalar_value = fmax(a, 0.0) +
+            output->scalar_value = csharp2cuda_f64_maximum(a, 0.0) +
                 mathblocks_log_one_plus(mathblocks_exponential(-fabs(a)));
             break;
         case 42: output->scalar_value = mathblocks_log_one_plus(a); break;

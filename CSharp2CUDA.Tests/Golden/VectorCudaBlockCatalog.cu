@@ -28,6 +28,28 @@ static __device__ __forceinline__ T* csharp2cuda_pointer_add_reverse(int offset,
     return csharp2cuda_pointer_add(pointer, offset);
 }
 
+static __device__ __forceinline__ double csharp2cuda_f64_maximum(double left, double right)
+{
+    if (left != right)
+    {
+        if (!isnan(left))
+            return right < left ? left : right;
+        return left;
+    }
+    return signbit(right) ? left : right;
+}
+
+static __device__ __forceinline__ double csharp2cuda_f64_minimum(double left, double right)
+{
+    if (left != right)
+    {
+        if (!isnan(left))
+            return left < right ? left : right;
+        return left;
+    }
+    return signbit(left) ? left : right;
+}
+
 static __device__ __forceinline__ int csharp2cuda_i32_add(int left, int right)
 {
     return csharp2cuda_i32_from_bits((unsigned int)left + (unsigned int)right);
@@ -409,7 +431,7 @@ __device__ void mathblocks_copy_and_sort(
     const MathBlockSlot* input,
     MathBlockSlot* output)
 {
-    double* scratch = (double*)(output->data_pointer != 0
+    double* scratch = (double*)(output->data_pointer != (unsigned long long)(0)
         ? output->data_pointer
         : output->scratch_pointer);
     const double* source = (double*)input->data_pointer;
@@ -432,7 +454,7 @@ __device__ double mathblocks_quantile(
     double probability)
 {
     mathblocks_copy_and_sort(input, output);
-    double* scratch = (double*)(output->data_pointer != 0
+    double* scratch = (double*)(output->data_pointer != (unsigned long long)(0)
         ? output->data_pointer
         : output->scratch_pointer);
     if (input->count == 1)
@@ -480,7 +502,7 @@ extern "C" __global__ void mathblocks_vector(
     const double* c = third == nullptr ? nullptr : (double*)third->data_pointer;
     const int* boolean_a = first == nullptr ? nullptr : (int*)first->data_pointer;
     const int* boolean_b = second == nullptr ? nullptr : (int*)second->data_pointer;
-    double* result = (double*)(output->data_pointer != 0
+    double* result = (double*)(output->data_pointer != (unsigned long long)(0)
         ? output->data_pointer
         : output->scratch_pointer);
     int* boolean_result = (int*)output->data_pointer;
@@ -632,7 +654,7 @@ extern "C" __global__ void mathblocks_vector(
         case 14:
             if (thread == 0)
             {
-                if (first->count <= 0 || output->scratch_pointer == 0)
+                if (first->count <= 0 || output->scratch_pointer == (unsigned long long)(0))
                 {
                     output->valid = 0;
                     break;
@@ -724,7 +746,7 @@ extern "C" __global__ void mathblocks_vector(
             if (thread == 0)
             {
                 double probability = opcode == 24 ? 0.5 : second->scalar_value;
-                if (first->count <= 0 || output->scratch_pointer == 0 ||
+                if (first->count <= 0 || output->scratch_pointer == (unsigned long long)(0) ||
                     probability < 0.0 || probability > 1.0)
                     output->valid = 0;
                 else

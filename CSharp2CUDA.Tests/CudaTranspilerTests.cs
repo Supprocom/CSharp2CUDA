@@ -77,10 +77,10 @@ public sealed class CudaTranspilerTests
         var fingerprint = Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(module)));
 
-        Assert.Equal(498016, Encoding.UTF8.GetByteCount(module));
-        Assert.Equal(11653, module.Count(character => character == '\n') + 1);
+        Assert.Equal(504799, Encoding.UTF8.GetByteCount(module));
+        Assert.Equal(11917, module.Count(character => character == '\n') + 1);
         Assert.Equal(
-            "96D64A2AF1E36DD69A49A2A7F26E6939F1EE6D19A997D4D4C5BD5641D8A5349C",
+            "EEFF3D494A9F8499F66164DAEA5BA8BA7C813D2E37A0357987A4BC46A13DA92A",
             fingerprint);
     }
 
@@ -1117,6 +1117,152 @@ public sealed class CudaTranspilerTests
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA012");
     }
 
+    [Fact]
+    public void Transpile_AppliesEveryIntegralComparisonPromotion()
+    {
+        var source = new StringBuilder("""
+            using CSharp2CUDA;
+
+            [CudaTranslationUnit]
+            internal static class ComparisonModule
+            {
+            """);
+        var expectedDefinitions = new List<string>();
+        var methodIndex = 0;
+
+        foreach (var left in IntegralTypes)
+        {
+            foreach (var right in IntegralTypes)
+            {
+                var promoted = GetIntegralPromotion(left, right);
+                if (promoted is null)
+                    continue;
+
+                foreach (var comparison in IntegralComparisons)
+                {
+                    var leftExpression = FormatPromotedOperand(left, promoted, "left");
+                    var rightExpression = FormatPromotedOperand(right, promoted, "right");
+                    var expected = $"{leftExpression} {comparison.Token} {rightExpression}";
+                    var methodName = $"Compare{methodIndex++}";
+                    expectedDefinitions.Add($$"""
+                        __device__ bool {{methodName}}({{left.CudaName}} left, {{right.CudaName}} right)
+                        {
+                            return {{expected}};
+                        }
+                        """);
+                    source.AppendLine($$"""
+
+                            [CudaDevice]
+                            private static bool {{methodName}}({{left.CSharpName}} left, {{right.CSharpName}} right)
+                            {
+                                return left {{comparison.Token}} right;
+                            }
+                        """);
+                }
+            }
+        }
+        source.AppendLine("}");
+
+        var result = CudaTranspiler.Transpile(source.ToString());
+
+        Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
+        Assert.Equal(336, expectedDefinitions.Count);
+        foreach (var expected in expectedDefinitions)
+            Assert.Contains(expected, result.Source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Transpile_PreservesExactMathMinMaxBits()
+    {
+        const string source = """
+            using System;
+            using CSharp2CUDA;
+
+            [CudaTranslationUnit]
+            internal static class FloatingModule
+            {
+                [CudaDevice]
+                private static double Maximum(double left, double right)
+                {
+                    return Math.Max(left, right);
+                }
+
+                [CudaDevice]
+                private static double Minimum(double left, double right)
+                {
+                    return Math.Min(left, right);
+                }
+            }
+            """;
+        const string maximumHelper = """
+            static __device__ __forceinline__ double csharp2cuda_f64_maximum(double left, double right)
+            {
+                if (left != right)
+                {
+                    if (!isnan(left))
+                        return right < left ? left : right;
+                    return left;
+                }
+                return signbit(right) ? left : right;
+            }
+            """;
+        const string minimumHelper = """
+            static __device__ __forceinline__ double csharp2cuda_f64_minimum(double left, double right)
+            {
+                if (left != right)
+                {
+                    if (!isnan(left))
+                        return left < right ? left : right;
+                    return left;
+                }
+                return signbit(left) ? left : right;
+            }
+            """;
+
+        var result = CudaTranspiler.Transpile(source);
+
+        Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
+        Assert.Contains(maximumHelper, result.Source, StringComparison.Ordinal);
+        Assert.Contains(minimumHelper, result.Source, StringComparison.Ordinal);
+        Assert.Contains(
+            "return csharp2cuda_f64_maximum(left, right);",
+            result.Source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "return csharp2cuda_f64_minimum(left, right);",
+            result.Source,
+            StringComparison.Ordinal);
+
+        const ulong positiveZeroBits = 0x0000000000000000UL;
+        const ulong negativeZeroBits = 0x8000000000000000UL;
+        const ulong firstNaNBits = 0x7ff8000000000001UL;
+        const ulong secondNaNBits = 0xfff8000000000002UL;
+        var positiveZero = BitConverter.UInt64BitsToDouble(positiveZeroBits);
+        var negativeZero = BitConverter.UInt64BitsToDouble(negativeZeroBits);
+        var firstNaN = BitConverter.UInt64BitsToDouble(firstNaNBits);
+        var secondNaN = BitConverter.UInt64BitsToDouble(secondNaNBits);
+        (double Left, double Right, ulong Maximum, ulong Minimum)[] cases =
+        [
+            (firstNaN, 1.0, firstNaNBits, firstNaNBits),
+            (1.0, secondNaN, secondNaNBits, secondNaNBits),
+            (firstNaN, secondNaN, firstNaNBits, firstNaNBits),
+            (positiveZero, negativeZero, positiveZeroBits, negativeZeroBits),
+            (negativeZero, positiveZero, positiveZeroBits, negativeZeroBits),
+            (negativeZero, negativeZero, negativeZeroBits, negativeZeroBits),
+            (positiveZero, positiveZero, positiveZeroBits, positiveZeroBits)
+        ];
+
+        foreach (var item in cases)
+        {
+            Assert.Equal(
+                item.Maximum,
+                BitConverter.DoubleToUInt64Bits(Math.Max(item.Left, item.Right)));
+            Assert.Equal(
+                item.Minimum,
+                BitConverter.DoubleToUInt64Bits(Math.Min(item.Left, item.Right)));
+        }
+    }
+
     private static void AppendDeviceCatalog(
         StringBuilder builder,
         string source,
@@ -1185,4 +1331,60 @@ public sealed class CudaTranspilerTests
     private static string FormatDiagnostics(IEnumerable<Diagnostic> diagnostics) =>
         string.Join(Environment.NewLine, diagnostics.Select(static diagnostic =>
             diagnostic.ToString()));
+
+    private static IntegralType? GetIntegralPromotion(IntegralType left, IntegralType right)
+    {
+        if (left.CSharpName == "ulong" || right.CSharpName == "ulong")
+        {
+            var other = left.CSharpName == "ulong" ? right : left;
+            return other.CSharpName is "sbyte" or "short" or "int" or "long"
+                ? null
+                : IntegralTypes.Single(type => type.CSharpName == "ulong");
+        }
+
+        if (left.CSharpName == "long" || right.CSharpName == "long")
+            return IntegralTypes.Single(type => type.CSharpName == "long");
+
+        if (left.CSharpName == "uint" || right.CSharpName == "uint")
+        {
+            var other = left.CSharpName == "uint" ? right : left;
+            var promotedName = other.CSharpName is "sbyte" or "short" or "int"
+                ? "long"
+                : "uint";
+            return IntegralTypes.Single(type => type.CSharpName == promotedName);
+        }
+
+        return IntegralTypes.Single(type => type.CSharpName == "int");
+    }
+
+    private static string FormatPromotedOperand(
+        IntegralType source,
+        IntegralType promoted,
+        string name) => source == promoted ? name : $"({promoted.CudaName})({name})";
+
+    private static readonly IntegralType[] IntegralTypes =
+    [
+        new("sbyte", "signed char"),
+        new("byte", "unsigned char"),
+        new("short", "short"),
+        new("ushort", "unsigned short"),
+        new("int", "int"),
+        new("uint", "unsigned int"),
+        new("long", "long long"),
+        new("ulong", "unsigned long long")
+    ];
+
+    private static readonly IntegralComparison[] IntegralComparisons =
+    [
+        new("=="),
+        new("!="),
+        new("<"),
+        new("<="),
+        new(">"),
+        new(">=")
+    ];
+
+    private sealed record IntegralType(string CSharpName, string CudaName);
+
+    private sealed record IntegralComparison(string Token);
 }
