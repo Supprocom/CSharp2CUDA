@@ -2,7 +2,7 @@
   <PropertyGroup>
     <AssemblyName>CSharp2CUDA</AssemblyName>
     <RootNamespace>CSharp2CUDA</RootNamespace>
-    <PackageId>CSharp2CUDA</PackageId>
+    <PackageId>Supprocom.CSharp2CUDA</PackageId>
     <Description>Strict Roslyn-based C# to CUDA source transpilation.</Description>
     <PackageDescription>Strict Roslyn-based translation from valid C# source to deterministic CUDA C++ source.</PackageDescription>
     <Authors>Supprocom</Authors>
