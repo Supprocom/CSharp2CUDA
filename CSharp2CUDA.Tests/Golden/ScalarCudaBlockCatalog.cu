@@ -1,3 +1,296 @@
+#ifndef CSHARP2CUDA_INTEGER_SEMANTICS_0_1
+#define CSHARP2CUDA_INTEGER_SEMANTICS_0_1
+static_assert(sizeof(int) == 4, "CSharp2CUDA requires a 32-bit CUDA int.");
+static_assert(sizeof(long long) == 8, "CSharp2CUDA requires a 64-bit CUDA long long.");
+
+static __device__ __forceinline__ int csharp2cuda_i32_from_bits(unsigned int bits)
+{
+    return bits <= 0x7fffffffu ? (int)bits : -1 - (int)(~bits);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_from_bits(unsigned long long bits)
+{
+    return bits <= 0x7fffffffffffffffull ? (long long)bits : -1LL - (long long)(~bits);
+}
+
+template <typename T>
+static __device__ __forceinline__ T* csharp2cuda_pointer_add(T* pointer, int offset)
+{
+    unsigned long long address = (unsigned long long)pointer;
+    unsigned long long displacement =
+        (unsigned long long)(long long)offset * (unsigned long long)sizeof(T);
+    return (T*)(address + displacement);
+}
+
+template <typename T>
+static __device__ __forceinline__ T* csharp2cuda_pointer_add_reverse(int offset, T* pointer)
+{
+    return csharp2cuda_pointer_add(pointer, offset);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_add(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left + (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_sub(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left - (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_mul(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left * (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_div(int left, int right)
+{
+    if (right == 0 || (left == (-2147483647 - 1) && right == -1))
+    {
+        __trap();
+        return 0;
+    }
+    return left / right;
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_rem(int left, int right)
+{
+    if (right == 0)
+    {
+        __trap();
+        return 0;
+    }
+    if (left == (-2147483647 - 1) && right == -1)
+        return 0;
+    return left % right;
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_and(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left & (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_or(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left | (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_xor(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left ^ (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_not(int value)
+{
+    return csharp2cuda_i32_from_bits(~(unsigned int)value);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_neg(int value)
+{
+    return csharp2cuda_i32_from_bits(0u - (unsigned int)value);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_shl(int value, int count)
+{
+    unsigned int shift = (unsigned int)count & 31u;
+    return csharp2cuda_i32_from_bits((unsigned int)value << shift);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_shr(int value, int count)
+{
+    unsigned int shift = (unsigned int)count & 31u;
+    if (shift == 0u)
+        return value;
+    unsigned int bits = (unsigned int)value >> shift;
+    if (value < 0)
+        bits |= ~0u << (32u - shift);
+    return csharp2cuda_i32_from_bits(bits);
+}
+
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_div(unsigned int left, unsigned int right)
+{
+    if (right == 0u)
+    {
+        __trap();
+        return 0u;
+    }
+    return left / right;
+}
+
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_rem(unsigned int left, unsigned int right)
+{
+    if (right == 0u)
+    {
+        __trap();
+        return 0u;
+    }
+    return left % right;
+}
+
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_shl(unsigned int value, int count)
+{
+    return value << ((unsigned int)count & 31u);
+}
+
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_shr(unsigned int value, int count)
+{
+    return value >> ((unsigned int)count & 31u);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_add(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left + (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_sub(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left - (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_mul(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left * (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_div(long long left, long long right)
+{
+    if (right == 0LL ||
+        (left == (-9223372036854775807LL - 1LL) && right == -1LL))
+    {
+        __trap();
+        return 0LL;
+    }
+    return left / right;
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_rem(long long left, long long right)
+{
+    if (right == 0LL)
+    {
+        __trap();
+        return 0LL;
+    }
+    if (left == (-9223372036854775807LL - 1LL) && right == -1LL)
+        return 0LL;
+    return left % right;
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_and(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left & (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_or(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left | (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_xor(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left ^ (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_not(long long value)
+{
+    return csharp2cuda_i64_from_bits(~(unsigned long long)value);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_neg(long long value)
+{
+    return csharp2cuda_i64_from_bits(0ull - (unsigned long long)value);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_shl(long long value, int count)
+{
+    unsigned int shift = (unsigned int)count & 63u;
+    return csharp2cuda_i64_from_bits((unsigned long long)value << shift);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_shr(long long value, int count)
+{
+    unsigned int shift = (unsigned int)count & 63u;
+    if (shift == 0u)
+        return value;
+    unsigned long long bits = (unsigned long long)value >> shift;
+    if (value < 0LL)
+        bits |= ~0ull << (64u - shift);
+    return csharp2cuda_i64_from_bits(bits);
+}
+
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_div(unsigned long long left, unsigned long long right)
+{
+    if (right == 0ull)
+    {
+        __trap();
+        return 0ull;
+    }
+    return left / right;
+}
+
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_rem(unsigned long long left, unsigned long long right)
+{
+    if (right == 0ull)
+    {
+        __trap();
+        return 0ull;
+    }
+    return left % right;
+}
+
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_shl(unsigned long long value, int count)
+{
+    return value << ((unsigned int)count & 63u);
+}
+
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_shr(unsigned long long value, int count)
+{
+    return value >> ((unsigned int)count & 63u);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_add_assign(int& target, int value) { return target = csharp2cuda_i32_add(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_sub_assign(int& target, int value) { return target = csharp2cuda_i32_sub(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_mul_assign(int& target, int value) { return target = csharp2cuda_i32_mul(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_div_assign(int& target, int value) { return target = csharp2cuda_i32_div(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_rem_assign(int& target, int value) { return target = csharp2cuda_i32_rem(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_and_assign(int& target, int value) { return target = csharp2cuda_i32_and(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_or_assign(int& target, int value) { return target = csharp2cuda_i32_or(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_xor_assign(int& target, int value) { return target = csharp2cuda_i32_xor(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_shl_assign(int& target, int value) { return target = csharp2cuda_i32_shl(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_shr_assign(int& target, int value) { return target = csharp2cuda_i32_shr(target, value); }
+
+static __device__ __forceinline__ long long csharp2cuda_i64_add_assign(long long& target, long long value) { return target = csharp2cuda_i64_add(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_sub_assign(long long& target, long long value) { return target = csharp2cuda_i64_sub(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_mul_assign(long long& target, long long value) { return target = csharp2cuda_i64_mul(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_div_assign(long long& target, long long value) { return target = csharp2cuda_i64_div(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_rem_assign(long long& target, long long value) { return target = csharp2cuda_i64_rem(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_and_assign(long long& target, long long value) { return target = csharp2cuda_i64_and(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_or_assign(long long& target, long long value) { return target = csharp2cuda_i64_or(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_xor_assign(long long& target, long long value) { return target = csharp2cuda_i64_xor(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_shl_assign(long long& target, int value) { return target = csharp2cuda_i64_shl(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_shr_assign(long long& target, int value) { return target = csharp2cuda_i64_shr(target, value); }
+
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_div_assign(unsigned int& target, unsigned int value) { return target = csharp2cuda_u32_div(target, value); }
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_rem_assign(unsigned int& target, unsigned int value) { return target = csharp2cuda_u32_rem(target, value); }
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_shl_assign(unsigned int& target, int value) { return target = csharp2cuda_u32_shl(target, value); }
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_shr_assign(unsigned int& target, int value) { return target = csharp2cuda_u32_shr(target, value); }
+
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_div_assign(unsigned long long& target, unsigned long long value) { return target = csharp2cuda_u64_div(target, value); }
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_rem_assign(unsigned long long& target, unsigned long long value) { return target = csharp2cuda_u64_rem(target, value); }
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_shl_assign(unsigned long long& target, int value) { return target = csharp2cuda_u64_shl(target, value); }
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_shr_assign(unsigned long long& target, int value) { return target = csharp2cuda_u64_shr(target, value); }
+
+static __device__ __forceinline__ int csharp2cuda_i32_pre_increment(int& target) { return target = csharp2cuda_i32_add(target, 1); }
+static __device__ __forceinline__ int csharp2cuda_i32_post_increment(int& target) { int result = target; target = csharp2cuda_i32_add(target, 1); return result; }
+static __device__ __forceinline__ int csharp2cuda_i32_pre_decrement(int& target) { return target = csharp2cuda_i32_sub(target, 1); }
+static __device__ __forceinline__ int csharp2cuda_i32_post_decrement(int& target) { int result = target; target = csharp2cuda_i32_sub(target, 1); return result; }
+static __device__ __forceinline__ long long csharp2cuda_i64_pre_increment(long long& target) { return target = csharp2cuda_i64_add(target, 1LL); }
+static __device__ __forceinline__ long long csharp2cuda_i64_post_increment(long long& target) { long long result = target; target = csharp2cuda_i64_add(target, 1LL); return result; }
+static __device__ __forceinline__ long long csharp2cuda_i64_pre_decrement(long long& target) { return target = csharp2cuda_i64_sub(target, 1LL); }
+static __device__ __forceinline__ long long csharp2cuda_i64_post_decrement(long long& target) { long long result = target; target = csharp2cuda_i64_sub(target, 1LL); return result; }
+#endif
+
+struct MathBlockSlot;
+
 struct MathBlockSlot
 {
     double scalar_value;
@@ -11,14 +304,37 @@ struct MathBlockSlot
     int capacity;
 };
 
+__device__ double mathblocks_positive_infinity();
+__device__ double mathblocks_quiet_nan();
+__device__ double mathblocks_square_root(double value);
+__device__ double mathblocks_exponential(double value);
+__device__ double mathblocks_natural_logarithm(double value);
+__device__ double mathblocks_log_one_plus(double value);
+__device__ double mathblocks_binary_logarithm(double value);
+__device__ double mathblocks_integer_power(double value, long long exponent);
+__device__ double mathblocks_power(double value, double exponent);
+__device__ double mathblocks_cube_root(double value);
+__device__ double mathblocks_sine(double value);
+__device__ double mathblocks_cosine(double value);
+__device__ double mathblocks_arc_tangent(double value);
+__device__ double mathblocks_arc_tangent_2(double y, double x);
+__device__ double mathblocks_arc_cosine(double value);
+__device__ double mathblocks_inverse_hyperbolic_sine(double value);
+__device__ double mathblocks_error_function(double value);
+extern "C" __global__ void mathblocks_scalar(
+    int opcode,
+    const MathBlockSlot* const* inputs,
+    int input_count,
+    MathBlockSlot* output);
+
 __device__ double mathblocks_positive_infinity()
 {
-    return __longlong_as_double((long long)0x7ff0000000000000ull);
+    return __longlong_as_double(csharp2cuda_i64_from_bits((unsigned long long)(0x7ff0000000000000ull)));
 }
 
 __device__ double mathblocks_quiet_nan()
 {
-    return __longlong_as_double((long long)0x7ff8000000000000ull);
+    return __longlong_as_double(csharp2cuda_i64_from_bits((unsigned long long)(0x7ff8000000000000ull)));
 }
 
 __device__ double mathblocks_square_root(double value)
@@ -33,13 +349,13 @@ __device__ double mathblocks_square_root(double value)
     unsigned long long bits = (unsigned long long)__double_as_longlong(scaled);
     if ((bits & 0x7ff0000000000000ull) == 0ull)
     {
-        scaled *= __longlong_as_double((long long)0x4350000000000000ull);
-        correction = __longlong_as_double((long long)0x3e40000000000000ull);
+        scaled *= __longlong_as_double(csharp2cuda_i64_from_bits((unsigned long long)(0x4350000000000000ull)));
+        correction = __longlong_as_double(csharp2cuda_i64_from_bits((unsigned long long)(0x3e40000000000000ull)));
         bits = (unsigned long long)__double_as_longlong(scaled);
     }
 
-    double estimate = __longlong_as_double((long long)((bits >> 1) + 0x1ff8000000000000ull));
-    for (int iteration = 0; iteration < 7; iteration++)
+    double estimate = __longlong_as_double(csharp2cuda_i64_from_bits((unsigned long long)(((csharp2cuda_u64_shr(bits, 1)) + 0x1ff8000000000000ull))));
+    for (int iteration = 0; iteration < 7; csharp2cuda_i32_post_increment(iteration))
         estimate = 0.5 * (estimate + scaled / estimate);
     return estimate * correction;
 }
@@ -74,11 +390,11 @@ __device__ double mathblocks_natural_logarithm(double value)
     if (isinf(value))
         return mathblocks_positive_infinity();
 
-    int exponent = ilogb(value) + 1;
-    double reduced = ldexp(value, -exponent);
+    int exponent = csharp2cuda_i32_add(ilogb(value), 1);
+    double reduced = ldexp(value, csharp2cuda_i32_neg(exponent));
     if (reduced < 0.70710678118654752440)
     {
-        exponent--;
+        csharp2cuda_i32_post_decrement(exponent);
         reduced = 2.0 * reduced - 1.0;
     }
     else
@@ -111,11 +427,11 @@ __device__ double mathblocks_log_one_plus(double value)
 
 __device__ double mathblocks_binary_logarithm(double value)
 {
-    unsigned long long bits = __double_as_longlong(value);
-    int exponent = (int)((bits >> 52) & 0x7ffull);
+    unsigned long long bits = ((unsigned long long)(__double_as_longlong(value)));
+    int exponent = csharp2cuda_i32_from_bits((unsigned int)(((csharp2cuda_u64_shr(bits, 52)) & 0x7ffull)));
     unsigned long long fraction = bits & 0x000fffffffffffffull;
     if (exponent > 0 && exponent < 0x7ff && fraction == 0ull)
-        return (double)(exponent - 1023);
+        return (double)(csharp2cuda_i32_sub(exponent, 1023));
     return mathblocks_natural_logarithm(value) / 0.69314718055994530942;
 }
 
@@ -125,7 +441,7 @@ __device__ double mathblocks_integer_power(double value, long long exponent)
         return 1.0;
     bool negative = exponent < 0;
     unsigned long long remaining = negative
-        ? (unsigned long long)(-(exponent + 1)) + 1ull
+        ? (unsigned long long)(csharp2cuda_i64_neg((csharp2cuda_i64_add(exponent, 1)))) + 1ull
         : (unsigned long long)exponent;
     double power_base = value;
     double result = 1.0;
@@ -133,7 +449,7 @@ __device__ double mathblocks_integer_power(double value, long long exponent)
     {
         if ((remaining & 1ull) != 0ull)
             result *= power_base;
-        remaining >>= 1;
+        csharp2cuda_u64_shr_assign(remaining, 1);
         if (remaining != 0ull)
             power_base *= power_base;
     }
@@ -157,7 +473,7 @@ __device__ double mathblocks_cube_root(double value)
         return value;
     double magnitude = fabs(value);
     double estimate = mathblocks_exponential(mathblocks_natural_logarithm(magnitude) / 3.0);
-    for (int iteration = 0; iteration < 3; iteration++)
+    for (int iteration = 0; iteration < 3; csharp2cuda_i32_post_increment(iteration))
         estimate = (2.0 * estimate + magnitude / (estimate * estimate)) / 3.0;
     return copysign(estimate, value);
 }
@@ -173,16 +489,16 @@ __device__ double mathblocks_sine(double value)
     }
     double octant_value = floor(x / 0.78539816339744830962);
     int octant = (int)(octant_value - floor(octant_value * 0.125) * 8.0);
-    if ((octant & 1) != 0)
+    if ((csharp2cuda_i32_and(octant, 1)) != 0)
     {
-        octant++;
+        csharp2cuda_i32_post_increment(octant);
         octant_value++;
     }
-    octant &= 7;
+    csharp2cuda_i32_and_assign(octant, 7);
     if (octant > 3)
     {
         sign = -sign;
-        octant -= 4;
+        csharp2cuda_i32_sub_assign(octant, 4);
     }
     double reduced = ((x - octant_value * 0.785398125648498535156) -
                       octant_value * 0.0000000377489470793079817668) -
@@ -215,15 +531,15 @@ __device__ double mathblocks_cosine(double value)
     double sign = 1.0;
     double octant_value = floor(x / 0.78539816339744830962);
     int octant = (int)(octant_value - floor(octant_value * 0.125) * 8.0);
-    if ((octant & 1) != 0)
+    if ((csharp2cuda_i32_and(octant, 1)) != 0)
     {
-        octant++;
+        csharp2cuda_i32_post_increment(octant);
         octant_value++;
     }
-    octant &= 7;
+    csharp2cuda_i32_and_assign(octant, 7);
     if (octant > 3)
     {
-        octant -= 4;
+        csharp2cuda_i32_sub_assign(octant, 4);
         sign = -sign;
     }
     if (octant > 1)
@@ -371,7 +687,7 @@ extern "C" __global__ void mathblocks_scalar(
         case 3: output->scalar_value = a / b; break;
         case 4: output->scalar_value = -a; break;
         case 5: output->scalar_value = fabs(a); break;
-        case 6: output->scalar_value = (a > 0.0) - (a < 0.0); break;
+        case 6: output->scalar_value = csharp2cuda_i32_sub(((a > 0.0)?1:0), ((a < 0.0)?1:0)); break;
         case 7: output->scalar_value = a > 0.0 ? a : 0.0; break;
         case 8: output->scalar_value = fmin(a, b); break;
         case 9: output->scalar_value = fmax(a, b); break;

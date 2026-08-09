@@ -9,9 +9,6 @@ namespace CSharp2CUDA;
 
 public static class CudaTranspiler
 {
-    private const string TranslationUnitAttributeName =
-        "CSharp2CUDA.CudaTranslationUnitAttribute";
-
     private static readonly Lazy<ImmutableArray<MetadataReference>> DefaultReferences =
         new(CreateDefaultReferences, LazyThreadSafetyMode.ExecutionAndPublication);
 
@@ -53,7 +50,8 @@ public static class CudaTranspiler
         if (diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
             return new CudaTranspilationResult(string.Empty, diagnostics.ToImmutable());
 
-        var attribute = compilation.GetTypeByMetadataName(TranslationUnitAttributeName);
+        var attribute = compilation.GetTypeByMetadataName(
+            CudaEmissionPlan.TranslationUnitAttributeName);
         var units = FindTranslationUnits(compilation, attribute);
         if (units.Count == 0)
         {
@@ -61,31 +59,18 @@ public static class CudaTranspiler
             return new CudaTranspilationResult(string.Empty, diagnostics.ToImmutable());
         }
 
-        var functionNames = new Dictionary<IMethodSymbol, string>(SymbolEqualityComparer.Default);
-        var emitters = new List<(ClassDeclarationSyntax Unit, CudaModuleEmitter Emitter)>();
-        foreach (var unit in units)
-        {
-            var model = compilation.GetSemanticModel(unit.SyntaxTree, ignoreAccessibility: true);
-            var emitter = new CudaModuleEmitter(model, diagnostics, options, functionNames);
-            emitter.RegisterFunctionNames(unit);
-            emitters.Add((unit, emitter));
-        }
+        var plan = CudaEmissionPlan.Create(compilation, units, diagnostics);
+        if (diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
+            return new CudaTranspilationResult(string.Empty, diagnostics.ToImmutable());
 
-        using var output = new StringWriter { NewLine = options.NewLine };
-        for (var index = 0; index < emitters.Count; index++)
-        {
-            var (unit, emitter) = emitters[index];
-            var emittedSource = emitter.Emit(unit);
-            if (index > 0)
-                output.Write(options.NewLine + options.NewLine);
-            output.Write(emittedSource);
-        }
+        var emitter = new CudaModuleEmitter(plan, diagnostics, options);
+        var source = emitter.Emit();
 
         var completedDiagnostics = diagnostics.ToImmutable();
         var failed = completedDiagnostics.Any(static diagnostic =>
             diagnostic.Severity == DiagnosticSeverity.Error);
         return new CudaTranspilationResult(
-            failed ? string.Empty : output.ToString(),
+            failed ? string.Empty : source,
             completedDiagnostics);
     }
 

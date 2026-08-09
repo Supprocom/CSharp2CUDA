@@ -16,12 +16,26 @@ The package targets .NET 10 only. A translation unit is a static class with
 `CudaDeviceAttribute` become device functions. Methods with `CudaGlobalAttribute` become
 global functions.
 
-Each emitted function name must be one ASCII CUDA identifier. This rule applies to C# method
-names and custom `Name` values. The transpiler rejects CUDA C++ keywords and reserved forms.
+Every identifier that reaches CUDA must be one ASCII CUDA identifier. The rule covers struct,
+field, function, parameter, and local names. It also covers custom `Name` values.
+
+The transpiler removes valid C# escape markers and rewrites each matching reference. It rejects
+CUDA C++ keywords, CUDA runtime names, generated helper names, and reserved forms.
+
+Before emission, a semantic plan binds each accepted type, identifier, member, call, literal,
+operator, and declaration. Unmapped .NET members, enums, static struct fields, optional
+parameters, and signature collisions cause errors.
+
+Emission places struct declarations and function prototypes before function definitions.
+Integer operations use generated CUDA helpers for C# wraparound and masked shift counts.
+Guarded integer division calls `__trap` for a C# division failure.
 
 The input must compile as C# before translation starts. Use unsafe pointers for CUDA pointers.
 Use `CudaReadOnlyAttribute` for a deeply read-only pointer parameter. The `Cuda` type supplies
 thread dimensions, barriers, atomics, and explicit C++ conversion markers.
+
+Conversion markers emit explicit expressions. `Cuda.Bool` tests for a nonzero value.
+`Cuda.Unsigned` converts its input to `unsigned long long` before an unsigned operation.
 
 Use a C# `in` parameter for a read-only value reference. The transpiler emits that parameter
 as a CUDA C++ `const T&` parameter.

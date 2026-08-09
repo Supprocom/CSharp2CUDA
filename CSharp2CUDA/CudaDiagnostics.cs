@@ -78,10 +78,18 @@ internal static class CudaDiagnostics
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
-    public static readonly DiagnosticDescriptor InvalidFunctionName = new(
+    public static readonly DiagnosticDescriptor InvalidIdentifier = new(
         "CS2CUDA010",
-        "CUDA function name is invalid",
-        "CUDA function name '{0}' is not a valid identifier",
+        "CUDA identifier is invalid",
+        "CUDA identifier '{0}' is not valid",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor DeclarationCollision = new(
+        "CS2CUDA011",
+        "CUDA declaration is not unique",
+        "CUDA declaration '{0}' conflicts with another declaration",
         Category,
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);

@@ -7,30 +7,10 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace CSharp2CUDA;
 
 internal sealed class CudaSyntaxTranslator(
+    CudaEmissionPlan plan,
     SemanticModel semanticModel,
-    ImmutableArray<Diagnostic>.Builder diagnostics,
-    IReadOnlyDictionary<IMethodSymbol, string> functionNames) : CSharpSyntaxRewriter
+    ImmutableArray<Diagnostic>.Builder diagnostics) : CSharpSyntaxRewriter
 {
-    private static readonly IReadOnlyDictionary<string, string> MethodMappings =
-        new Dictionary<string, string>(StringComparer.Ordinal)
-        {
-            ["System.Math.Abs(double)"] = "fabs",
-            ["System.Math.Asin(double)"] = "asin",
-            ["System.Math.Ceiling(double)"] = "ceil",
-            ["System.Math.CopySign(double, double)"] = "copysign",
-            ["System.Math.Floor(double)"] = "floor",
-            ["System.Math.ILogB(double)"] = "ilogb",
-            ["System.Math.Max(double, double)"] = "fmax",
-            ["System.Math.Min(double, double)"] = "fmin",
-            ["System.Math.ScaleB(double, int)"] = "ldexp",
-            ["System.Math.Truncate(double)"] = "trunc",
-            ["double.IsFinite(double)"] = "isfinite",
-            ["double.IsInfinity(double)"] = "isinf",
-            ["double.IsNaN(double)"] = "isnan",
-            ["System.BitConverter.DoubleToInt64Bits(double)"] = "__double_as_longlong",
-            ["System.BitConverter.Int64BitsToDouble(long)"] = "__longlong_as_double"
-        };
-
     private int deepReadOnlyContext;
     private readonly List<KeyValuePair<string, string>> fixedLocalArrays = [];
     private readonly string sourceText = semanticModel.SyntaxTree.GetText().ToString();
@@ -58,9 +38,9 @@ internal sealed class CudaSyntaxTranslator(
                 CudaDiagnostics.UnsupportedType,
                 syntax.GetLocation(),
                 syntax.ToString()));
-            return syntax.ToString();
+            return "csharp2cuda_unsupported_type";
         }
-        return FormatType(type, deepReadOnly, syntax.GetLocation());
+        return plan.FormatType(type, deepReadOnly, syntax.GetLocation());
     }
 
     public override SyntaxNode? VisitPredefinedType(PredefinedTypeSyntax node) =>
@@ -75,9 +55,27 @@ internal sealed class CudaSyntaxTranslator(
         {
             var type = semanticModel.GetTypeInfo(node).Type;
             if (type is not null)
-                return CreateTypeNode(FormatType(type, false, node.GetLocation()), node);
+                return CreateTypeNode(plan.FormatType(type, false, node.GetLocation()), node);
+        }
+
+        var symbol = semanticModel.GetSymbolInfo(node).Symbol;
+        if (plan.TryGetIdentifier(symbol, out var name))
+            return CreateIdentifier(name, node);
+        if (symbol is INamedTypeSymbol namedType &&
+            namedType.ToDisplayString() == "CSharp2CUDA.CudaInt32")
+        {
+            return CreateTypeNode("int", node);
         }
         return base.VisitIdentifierName(node);
+    }
+
+    public override SyntaxNode? VisitVariableDeclarator(VariableDeclaratorSyntax node)
+    {
+        var symbol = semanticModel.GetDeclaredSymbol(node);
+        var visited = (VariableDeclaratorSyntax)base.VisitVariableDeclarator(node)!;
+        if (!plan.TryGetIdentifier(symbol, out var name))
+            return visited;
+        return visited.WithIdentifier(CreateIdentifierToken(node.Identifier, name));
     }
 
     public override SyntaxNode? VisitLiteralExpression(LiteralExpressionSyntax node)
@@ -87,11 +85,10 @@ internal sealed class CudaSyntaxTranslator(
         if (!node.IsKind(SyntaxKind.NumericLiteralExpression))
             return base.VisitLiteralExpression(node);
 
-        var replacement = TranslateNumericLiteral(node.Token.Text);
+        var replacement = TranslateNumericLiteral(node.Token);
         if (replacement == node.Token.Text)
             return base.VisitLiteralExpression(node);
-        var token = CreateNumericLiteralToken(node.Token, replacement);
-        return node.WithToken(token);
+        return node.WithToken(CreateNumericLiteralToken(node.Token, replacement));
     }
 
     public override SyntaxNode? VisitCheckedExpression(CheckedExpressionSyntax node)
@@ -103,9 +100,8 @@ internal sealed class CudaSyntaxTranslator(
 
     public override SyntaxNode? VisitLocalDeclarationStatement(LocalDeclarationStatementSyntax node)
     {
-        var fixedLocalArray = TranslateFixedLocalArray(node);
-        if (fixedLocalArray is not null)
-            return fixedLocalArray;
+        if (plan.IsFixedLocalArray(node))
+            return TranslateFixedLocalArray(node);
 
         var readOnly = node.Declaration.Variables.Count > 0 &&
             node.Declaration.Variables.All(variable => IsCudaMethod(
@@ -119,80 +115,114 @@ internal sealed class CudaSyntaxTranslator(
         return visited;
     }
 
-    public override SyntaxNode? VisitStackAllocArrayCreationExpression(
-        StackAllocArrayCreationExpressionSyntax node)
-    {
-        ReportUnsupportedSyntax(node);
-        return base.VisitStackAllocArrayCreationExpression(node);
-    }
-
-    public override SyntaxNode? VisitImplicitStackAllocArrayCreationExpression(
-        ImplicitStackAllocArrayCreationExpressionSyntax node)
-    {
-        ReportUnsupportedSyntax(node);
-        return base.VisitImplicitStackAllocArrayCreationExpression(node);
-    }
-
     public override SyntaxNode? VisitInvocationExpression(InvocationExpressionSyntax node)
     {
         var method = semanticModel.GetSymbolInfo(node).Symbol as IMethodSymbol;
-        if (method is null)
-        {
-            ReportUnsupportedCall(node, node.Expression.ToString());
+        var call = method is null ? null : plan.GetCallPlan(method);
+        if (call is null)
             return base.VisitInvocationExpression(node);
-        }
 
-        if (functionNames.TryGetValue(method, out var emittedName))
-            return ReplaceInvocationName(node, emittedName);
-
-        if (method.ContainingType.ToDisplayString() == "CSharp2CUDA.Cuda")
-            return TranslateCudaInvocation(node, method);
-
-        var displayName = method.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
-        if (MethodMappings.TryGetValue(displayName, out var mappedName))
-            return ReplaceInvocationName(node, mappedName);
-
-        if (method.ContainingType.GetAttributes().Any(attribute =>
-                attribute.AttributeClass?.ToDisplayString() ==
-                "CSharp2CUDA.CudaTranslationUnitAttribute"))
+        return call.Kind switch
         {
-            return base.VisitInvocationExpression(node);
-        }
-
-        ReportUnsupportedCall(node, displayName);
-        return base.VisitInvocationExpression(node);
+            CudaCallKind.PlannedFunction or CudaCallKind.Direct =>
+                ReplaceInvocationName(node, call.Name),
+            CudaCallKind.Atomic => TranslateAtomic(node, call.Name),
+            CudaCallKind.BooleanToInteger => TranslateBooleanToInteger(node),
+            CudaCallKind.IntegerToBoolean => TranslateIntegerToBoolean(node),
+            CudaCallKind.SignedToUnsigned => TranslateSignedToUnsigned(node),
+            CudaCallKind.Unwrap => UnwrapSingleArgument(node),
+            _ => base.VisitInvocationExpression(node)
+        };
     }
 
     public override SyntaxNode? VisitMemberAccessExpression(MemberAccessExpressionSyntax node)
     {
-        if (TryTranslateDimension(node, out var translated))
-            return translated.WithTriviaFrom(node);
+        if (plan.TryGetDimensionReplacement(node, out var replacement))
+            return SyntaxFactory.ParseExpression(replacement).WithTriviaFrom(node);
+
+        if (semanticModel.GetSymbolInfo(node).Symbol is IFieldSymbol field &&
+            plan.TryGetIdentifier(field, out var fieldName))
+        {
+            var target = (ExpressionSyntax)Visit(node.Expression)!;
+            var name = SyntaxFactory.IdentifierName(fieldName).WithTriviaFrom(node.Name);
+            return node.WithExpression(target).WithName(name);
+        }
         return base.VisitMemberAccessExpression(node);
     }
 
-    private SyntaxNode TranslateCudaInvocation(InvocationExpressionSyntax node, IMethodSymbol method)
+    public override SyntaxNode? VisitBinaryExpression(BinaryExpressionSyntax node)
     {
-        return method.Name switch
+        if (!plan.TryGetBinaryHelper(node, out var helper))
+            return base.VisitBinaryExpression(node);
+        return CreateHelperCall(helper, node, node.Left, node.Right);
+    }
+
+    public override SyntaxNode? VisitAssignmentExpression(AssignmentExpressionSyntax node)
+    {
+        if (!plan.TryGetAssignmentHelper(node, out var helper))
+            return base.VisitAssignmentExpression(node);
+        return CreateHelperCall(helper, node, node.Left, node.Right);
+    }
+
+    public override SyntaxNode? VisitPrefixUnaryExpression(PrefixUnaryExpressionSyntax node)
+    {
+        var constant = semanticModel.GetConstantValue(node);
+        if (node.IsKind(SyntaxKind.UnaryMinusExpression) &&
+            constant is { HasValue: true, Value: not null } &&
+            constant.Value is sbyte or short or int or long)
         {
-            nameof(Cuda.SyncThreads) => ReplaceInvocationName(node, "__syncthreads"),
-            nameof(Cuda.AtomicAdd) => TranslateAtomic(node, "atomicAdd"),
-            nameof(Cuda.AtomicExchange) => TranslateAtomic(node, "atomicExch"),
-            nameof(Cuda.Int) => UnwrapSingleArgument(node, parenthesize: true),
-            nameof(Cuda.Bool) or nameof(Cuda.Unsigned) or nameof(Cuda.ReadOnly) =>
-                UnwrapSingleArgument(node, parenthesize: false),
-            nameof(Cuda.FloatingRemainder) => ReplaceInvocationName(node, "fmod"),
-            nameof(Cuda.NearbyInteger) => ReplaceInvocationName(node, "nearbyint"),
-            nameof(Cuda.SignBit) => ReplaceInvocationName(node, "signbit"),
-            _ => ReportAndReturn(node, method.ToDisplayString())
-        };
+            return SyntaxFactory.ParseExpression(FormatIntegralConstant(constant.Value))
+                .WithTriviaFrom(node);
+        }
+        if (!plan.TryGetPrefixHelper(node, out var helper))
+            return base.VisitPrefixUnaryExpression(node);
+        return CreateHelperCall(helper, node, node.Operand);
+    }
+
+    public override SyntaxNode? VisitPostfixUnaryExpression(PostfixUnaryExpressionSyntax node)
+    {
+        if (!plan.TryGetPostfixHelper(node, out var helper))
+            return base.VisitPostfixUnaryExpression(node);
+        return CreateHelperCall(helper, node, node.Operand);
+    }
+
+    public override SyntaxNode? VisitCastExpression(CastExpressionSyntax node)
+    {
+        if (plan.TryGetCastHelper(node, out var helper))
+        {
+            var convertedExpression = (ExpressionSyntax)Visit(node.Expression)!;
+            var unsignedType = helper == "csharp2cuda_i32_from_bits"
+                ? "unsigned int"
+                : "unsigned long long";
+            var cast = SyntaxFactory.CastExpression(
+                SyntaxFactory.ParseTypeName(unsignedType),
+                Parenthesize(convertedExpression));
+            return CreateTranslatedHelperCall(helper, node, cast);
+        }
+
+        var type = semanticModel.GetTypeInfo(node.Type).Type;
+        if (type is null)
+            return base.VisitCastExpression(node);
+        var translatedType = CreateTypeNode(
+            plan.FormatType(type, false, node.Type.GetLocation()),
+            node.Type);
+        var expression = (ExpressionSyntax)Visit(node.Expression)!;
+        return node.WithType(translatedType).WithExpression(expression);
+    }
+
+    public override SyntaxNode? VisitCaseSwitchLabel(CaseSwitchLabelSyntax node)
+    {
+        var constant = semanticModel.GetConstantValue(node.Value);
+        if (!constant.HasValue || constant.Value is null)
+            return base.VisitCaseSwitchLabel(node);
+        var value = SyntaxFactory.ParseExpression(FormatIntegralConstant(constant.Value))
+            .WithTriviaFrom(node.Value);
+        return node.WithValue(value);
     }
 
     private SyntaxNode TranslateAtomic(InvocationExpressionSyntax node, string name)
     {
         var arguments = node.ArgumentList.Arguments;
-        if (arguments.Count != 2 || !arguments[0].RefKindKeyword.IsKind(SyntaxKind.RefKeyword))
-            return ReportAndReturn(node, node.Expression.ToString());
-
         var location = (ExpressionSyntax)Visit(arguments[0].Expression)!;
         var address = SyntaxFactory.PrefixUnaryExpression(
             SyntaxKind.AddressOfExpression,
@@ -210,49 +240,76 @@ internal sealed class CudaSyntaxTranslator(
             .WithArgumentList(node.ArgumentList.WithArguments(rewrittenArguments));
     }
 
-    private SyntaxNode UnwrapSingleArgument(
-        InvocationExpressionSyntax node,
-        bool parenthesize)
+    private SyntaxNode TranslateBooleanToInteger(InvocationExpressionSyntax node)
     {
-        if (node.ArgumentList.Arguments.Count != 1)
-            return ReportAndReturn(node, node.Expression.ToString());
-        var expression = (ExpressionSyntax)Visit(node.ArgumentList.Arguments[0].Expression)!;
-        if (!parenthesize)
-            return expression.WithTriviaFrom(node);
-        return SyntaxFactory.ParenthesizedExpression(expression.WithoutTrivia())
-            .WithTriviaFrom(node);
+        var expression = VisitSingleArgument(node);
+        var translated = SyntaxFactory.ConditionalExpression(
+            Parenthesize(expression),
+            SyntaxFactory.LiteralExpression(
+                SyntaxKind.NumericLiteralExpression,
+                SyntaxFactory.Literal(1)),
+            SyntaxFactory.LiteralExpression(
+                SyntaxKind.NumericLiteralExpression,
+                SyntaxFactory.Literal(0)));
+        return Parenthesize(translated).WithTriviaFrom(node);
     }
+
+    private SyntaxNode TranslateIntegerToBoolean(InvocationExpressionSyntax node)
+    {
+        var expression = VisitSingleArgument(node);
+        var translated = SyntaxFactory.BinaryExpression(
+            SyntaxKind.NotEqualsExpression,
+            Parenthesize(expression),
+            SyntaxFactory.LiteralExpression(
+                SyntaxKind.NumericLiteralExpression,
+                SyntaxFactory.Literal(0)));
+        return Parenthesize(translated).WithTriviaFrom(node);
+    }
+
+    private SyntaxNode TranslateSignedToUnsigned(InvocationExpressionSyntax node)
+    {
+        var expression = VisitSingleArgument(node);
+        var cast = SyntaxFactory.CastExpression(
+            SyntaxFactory.ParseTypeName("unsigned long long"),
+            Parenthesize(expression));
+        return Parenthesize(cast).WithTriviaFrom(node);
+    }
+
+    private SyntaxNode UnwrapSingleArgument(InvocationExpressionSyntax node) =>
+        VisitSingleArgument(node).WithTriviaFrom(node);
+
+    private ExpressionSyntax VisitSingleArgument(InvocationExpressionSyntax node) =>
+        (ExpressionSyntax)Visit(node.ArgumentList.Arguments[0].Expression)!;
 
     private SyntaxNode ReplaceInvocationName(InvocationExpressionSyntax node, string name) =>
         node.WithExpression(SyntaxFactory.IdentifierName(name).WithTriviaFrom(node.Expression))
             .WithArgumentList((ArgumentListSyntax)Visit(node.ArgumentList)!);
 
-    private bool TryTranslateDimension(
-        MemberAccessExpressionSyntax node,
-        out ExpressionSyntax translated)
+    private ExpressionSyntax CreateHelperCall(
+        string helper,
+        ExpressionSyntax original,
+        params ExpressionSyntax[] operands)
     {
-        translated = null!;
-        if (node.Expression is not MemberAccessExpressionSyntax dimension ||
-            dimension.Expression is not IdentifierNameSyntax cuda ||
-            cuda.Identifier.ValueText != nameof(Cuda))
-        {
-            return false;
-        }
+        var translated = operands.Select(operand => (ExpressionSyntax)Visit(operand)!).ToArray();
+        return CreateTranslatedHelperCall(helper, original, translated);
+    }
 
-        var target = dimension.Name.Identifier.ValueText switch
-        {
-            nameof(Cuda.ThreadIdx) => "threadIdx",
-            nameof(Cuda.BlockIdx) => "blockIdx",
-            nameof(Cuda.BlockDim) => "blockDim",
-            nameof(Cuda.GridDim) => "gridDim",
-            _ => null
-        };
-        var component = node.Name.Identifier.ValueText.ToLowerInvariant();
-        if (target is null || component is not "x" and not "y" and not "z")
-            return false;
+    private static ExpressionSyntax CreateTranslatedHelperCall(
+        string helper,
+        ExpressionSyntax original,
+        params ExpressionSyntax[] operands)
+    {
+        var arguments = operands.Select(operand =>
+            SyntaxFactory.Argument(operand.WithoutTrivia())).ToArray();
 
-        translated = SyntaxFactory.ParseExpression($"{target}.{component}");
-        return true;
+        var separators = Enumerable.Range(0, Math.Max(0, arguments.Length - 1))
+            .Select(static _ => SyntaxFactory.Token(SyntaxKind.CommaToken)
+                .WithTrailingTrivia(SyntaxFactory.Space));
+        var list = SyntaxFactory.SeparatedList(arguments, separators);
+        return SyntaxFactory.InvocationExpression(
+                SyntaxFactory.IdentifierName(helper),
+                SyntaxFactory.ArgumentList(list))
+            .WithTriviaFrom(original);
     }
 
     private bool IsCudaMethod(ExpressionSyntax? expression, string name)
@@ -264,52 +321,24 @@ internal sealed class CudaSyntaxTranslator(
             method.ContainingType.ToDisplayString() == "CSharp2CUDA.Cuda";
     }
 
-    private StatementSyntax? TranslateFixedLocalArray(LocalDeclarationStatementSyntax node)
+    private StatementSyntax TranslateFixedLocalArray(LocalDeclarationStatementSyntax node)
     {
-        if (node.Declaration.Variables.Count != 1 ||
-            node.Declaration.Type is IdentifierNameSyntax { Identifier.ValueText: "var" })
-        {
-            return null;
-        }
-
         var variable = node.Declaration.Variables[0];
-        var value = variable.Initializer?.Value;
-        if (value is not StackAllocArrayCreationExpressionSyntax stackAllocation ||
-            stackAllocation.Type is not ArrayTypeSyntax arrayType ||
-            arrayType.RankSpecifiers is not [var rank] ||
-            rank.Sizes is not [var size] ||
-            size is OmittedArraySizeExpressionSyntax)
-        {
-            return null;
-        }
-
-        var local = semanticModel.GetDeclaredSymbol(variable) as ILocalSymbol;
-        var elementType = semanticModel.GetTypeInfo(arrayType.ElementType).Type;
-        var constant = semanticModel.GetConstantValue(size);
-        if (local is null ||
-            !TryGetFixedArrayElementType(local.Type, out var localElementType, out var readOnly) ||
-            elementType is null ||
-            !SymbolEqualityComparer.Default.Equals(localElementType, elementType) ||
-            !constant.HasValue ||
-            constant.Value is not int length ||
-            length <= 0 ||
-            (readOnly && stackAllocation.Initializer is null) ||
-            (stackAllocation.Initializer is not null &&
-                stackAllocation.Initializer.Expressions.Count != length))
-        {
-            return null;
-        }
-
-        var translatedSize = ((ExpressionSyntax)Visit(size)!)
-            .WithoutTrivia()
-            .ToFullString();
+        var stack = (StackAllocArrayCreationExpressionSyntax)variable.Initializer!.Value;
+        var arrayType = (ArrayTypeSyntax)stack.Type;
+        var size = arrayType.RankSpecifiers[0].Sizes[0];
+        var local = (ILocalSymbol)semanticModel.GetDeclaredSymbol(variable)!;
+        TryGetFixedArrayElementType(local.Type, out var elementType, out var readOnly);
+        var translatedSize = ((int)semanticModel.GetConstantValue(size).Value!)
+            .ToString(CultureInfo.InvariantCulture);
+        var localName = plan.GetIdentifier(local);
         var replacement = $"{(readOnly ? "const " : string.Empty)}" +
-            $"{FormatType(elementType, false, arrayType.ElementType.GetLocation())} " +
-            $"{variable.Identifier.ValueText}[{translatedSize}]";
-        if (stackAllocation.Initializer is not null)
+            $"{plan.FormatType(elementType, false, arrayType.ElementType.GetLocation())} " +
+            $"{localName}[{translatedSize}]";
+        if (stack.Initializer is not null)
         {
-            var initializer = (InitializerExpressionSyntax)Visit(stackAllocation.Initializer)!;
-            var lineBreak = stackAllocation.Type.GetTrailingTrivia()
+            var initializer = (InitializerExpressionSyntax)Visit(stack.Initializer)!;
+            var lineBreak = stack.Type.GetTrailingTrivia()
                 .Any(trivia => trivia.IsKind(SyntaxKind.EndOfLineTrivia))
                 ? "\n"
                 : string.Empty;
@@ -320,7 +349,7 @@ internal sealed class CudaSyntaxTranslator(
         string marker;
         do
         {
-            marker = $"__csharp2cuda_fixed_local_array_{fixedLocalArrayMarker++}";
+            marker = $"csharp2cuda_generated_fixed_array_{fixedLocalArrayMarker++}";
         }
         while (sourceText.Contains(marker, StringComparison.Ordinal));
         fixedLocalArrays.Add(new(marker, replacement));
@@ -333,109 +362,21 @@ internal sealed class CudaSyntaxTranslator(
         out ITypeSymbol elementType,
         out bool readOnly)
     {
-        if (localType is IPointerTypeSymbol pointerType)
+        if (localType is IPointerTypeSymbol pointer)
         {
-            elementType = pointerType.PointedAtType;
+            elementType = pointer.PointedAtType;
             readOnly = false;
             return true;
         }
 
-        if (localType is INamedTypeSymbol namedType && namedType.TypeArguments is [var argument])
-        {
-            var definition = namedType.OriginalDefinition.ToDisplayString();
-            if (definition is "System.Span<T>" or "System.ReadOnlySpan<T>")
-            {
-                elementType = argument;
-                readOnly = definition == "System.ReadOnlySpan<T>";
-                return true;
-            }
-        }
-
-        elementType = null!;
-        readOnly = false;
-        return false;
+        var named = (INamedTypeSymbol)localType;
+        elementType = named.TypeArguments[0];
+        readOnly = named.OriginalDefinition.ToDisplayString() == "System.ReadOnlySpan<T>";
+        return true;
     }
 
-    private string FormatType(ITypeSymbol type, bool deepReadOnly, Location location)
-    {
-        if (type.ToDisplayString() == "CSharp2CUDA.CudaInt32")
-            return "int";
-        if (type is IPointerTypeSymbol pointer)
-        {
-            var depth = 0;
-            ITypeSymbol current = pointer;
-            while (current is IPointerTypeSymbol currentPointer)
-            {
-                depth++;
-                current = currentPointer.PointedAtType;
-            }
-
-            var baseType = FormatType(current, false, location);
-            if (!deepReadOnly)
-                return baseType + new string('*', depth);
-            var result = "const " + baseType + "*";
-            for (var index = 1; index < depth; index++)
-                result += " const*";
-            return result;
-        }
-
-        if (type.TypeKind == TypeKind.Enum)
-            return type.Name;
-        if (type.SpecialType != SpecialType.None)
-        {
-            return type.SpecialType switch
-            {
-                SpecialType.System_Void => "void",
-                SpecialType.System_Boolean => "bool",
-                SpecialType.System_SByte => "signed char",
-                SpecialType.System_Byte => "unsigned char",
-                SpecialType.System_Int16 => "short",
-                SpecialType.System_UInt16 => "unsigned short",
-                SpecialType.System_Int32 => "int",
-                SpecialType.System_UInt32 => "unsigned int",
-                SpecialType.System_Int64 => "long long",
-                SpecialType.System_UInt64 => "unsigned long long",
-                SpecialType.System_Single => "float",
-                SpecialType.System_Double => "double",
-                _ => ReportUnsupportedType(type, location)
-            };
-        }
-        if (type is INamedTypeSymbol named &&
-            named.ContainingType?.GetAttributes().Any(attribute =>
-                attribute.AttributeClass?.ToDisplayString() ==
-                "CSharp2CUDA.CudaTranslationUnitAttribute") == true)
-        {
-            return named.Name;
-        }
-        return ReportUnsupportedType(type, location);
-    }
-
-    private string ReportUnsupportedType(ITypeSymbol type, Location location)
-    {
-        diagnostics.Add(Diagnostic.Create(
-            CudaDiagnostics.UnsupportedType,
-            location,
-            type.ToDisplayString()));
-        return type.Name;
-    }
-
-    private SyntaxNode ReportAndReturn(InvocationExpressionSyntax node, string name)
-    {
-        ReportUnsupportedCall(node, name);
-        return base.VisitInvocationExpression(node)!;
-    }
-
-    private void ReportUnsupportedCall(InvocationExpressionSyntax node, string name) =>
-        diagnostics.Add(Diagnostic.Create(
-            CudaDiagnostics.UnsupportedCall,
-            node.GetLocation(),
-            name));
-
-    private void ReportUnsupportedSyntax(SyntaxNode node) =>
-        diagnostics.Add(Diagnostic.Create(
-            CudaDiagnostics.UnsupportedSyntax,
-            node.GetLocation(),
-            node.Kind().ToString()));
+    private static ParenthesizedExpressionSyntax Parenthesize(ExpressionSyntax expression) =>
+        SyntaxFactory.ParenthesizedExpression(expression.WithoutTrivia());
 
     private static TypeSyntax CreateTypeNode(string text, TypeSyntax original)
     {
@@ -448,20 +389,61 @@ internal sealed class CudaSyntaxTranslator(
         return SyntaxFactory.IdentifierName(identifier);
     }
 
-    private static string TranslateNumericLiteral(string text)
+    private static IdentifierNameSyntax CreateIdentifier(
+        string text,
+        IdentifierNameSyntax original) =>
+        SyntaxFactory.IdentifierName(CreateIdentifierToken(original.Identifier, text));
+
+    private static SyntaxToken CreateIdentifierToken(SyntaxToken original, string text) =>
+        SyntaxFactory.Identifier(
+            original.LeadingTrivia,
+            SyntaxKind.IdentifierToken,
+            text,
+            text,
+            original.TrailingTrivia);
+
+    private static string TranslateNumericLiteral(SyntaxToken token)
     {
-        if (text.EndsWith("UL", StringComparison.OrdinalIgnoreCase))
-            return text[..^2] + "ull";
-        if (text.EndsWith('L'))
-            return text[..^1] + "LL";
-        if (text.EndsWith('l'))
-            return text[..^1] + "ll";
-        if (text.EndsWith('U') || text.EndsWith('u'))
-            return text[..^1] + "u";
-        if (text.EndsWith('F') || text.EndsWith('f'))
-            return text[..^1] + "f";
+        var text = token.Text.Replace("_", string.Empty, StringComparison.Ordinal);
+        return token.Value switch
+        {
+            int => StripIntegralSuffix(text),
+            uint => StripIntegralSuffix(text) + "u",
+            long => StripIntegralSuffix(text) + "LL",
+            ulong => StripIntegralSuffix(text) + "ull",
+            float => StripFloatingSuffix(text) + "f",
+            double => StripFloatingSuffix(text),
+            _ => text
+        };
+    }
+
+    private static string StripIntegralSuffix(string text)
+    {
+        while (text.Length > 0 && text[^1] is 'u' or 'U' or 'l' or 'L')
+            text = text[..^1];
         return text;
     }
+
+    private static string StripFloatingSuffix(string text) =>
+        text.Length > 0 && text[^1] is 'f' or 'F' or 'd' or 'D'
+            ? text[..^1]
+            : text;
+
+    private static string FormatIntegralConstant(object value) => value switch
+    {
+        sbyte number => number.ToString(CultureInfo.InvariantCulture),
+        byte number => number.ToString(CultureInfo.InvariantCulture),
+        short number => number.ToString(CultureInfo.InvariantCulture),
+        ushort number => number.ToString(CultureInfo.InvariantCulture),
+        int.MinValue => "(-2147483647 - 1)",
+        int number => number.ToString(CultureInfo.InvariantCulture),
+        uint number => number.ToString(CultureInfo.InvariantCulture) + "u",
+        long.MinValue => "(-9223372036854775807LL - 1LL)",
+        long number => number.ToString(CultureInfo.InvariantCulture) + "LL",
+        ulong number => number.ToString(CultureInfo.InvariantCulture) + "ull",
+        _ => throw new InvalidOperationException(
+            $"Switch constant '{value}' does not have an integral CUDA translation.")
+    };
 
     private static SyntaxToken CreateNumericLiteralToken(SyntaxToken original, string text) =>
         original.Value switch
@@ -478,9 +460,6 @@ internal sealed class CudaSyntaxTranslator(
                 original.LeadingTrivia, text, value, original.TrailingTrivia),
             double value => SyntaxFactory.Literal(
                 original.LeadingTrivia, text, value, original.TrailingTrivia),
-            decimal value => SyntaxFactory.Literal(
-                original.LeadingTrivia, text, value, original.TrailingTrivia),
-            _ => throw new InvalidOperationException(
-                $"Numeric literal '{original.Text}' has an unsupported value type.")
+            _ => original
         };
 }

@@ -1,3 +1,317 @@
+#ifndef CSHARP2CUDA_INTEGER_SEMANTICS_0_1
+#define CSHARP2CUDA_INTEGER_SEMANTICS_0_1
+static_assert(sizeof(int) == 4, "CSharp2CUDA requires a 32-bit CUDA int.");
+static_assert(sizeof(long long) == 8, "CSharp2CUDA requires a 64-bit CUDA long long.");
+
+static __device__ __forceinline__ int csharp2cuda_i32_from_bits(unsigned int bits)
+{
+    return bits <= 0x7fffffffu ? (int)bits : -1 - (int)(~bits);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_from_bits(unsigned long long bits)
+{
+    return bits <= 0x7fffffffffffffffull ? (long long)bits : -1LL - (long long)(~bits);
+}
+
+template <typename T>
+static __device__ __forceinline__ T* csharp2cuda_pointer_add(T* pointer, int offset)
+{
+    unsigned long long address = (unsigned long long)pointer;
+    unsigned long long displacement =
+        (unsigned long long)(long long)offset * (unsigned long long)sizeof(T);
+    return (T*)(address + displacement);
+}
+
+template <typename T>
+static __device__ __forceinline__ T* csharp2cuda_pointer_add_reverse(int offset, T* pointer)
+{
+    return csharp2cuda_pointer_add(pointer, offset);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_add(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left + (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_sub(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left - (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_mul(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left * (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_div(int left, int right)
+{
+    if (right == 0 || (left == (-2147483647 - 1) && right == -1))
+    {
+        __trap();
+        return 0;
+    }
+    return left / right;
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_rem(int left, int right)
+{
+    if (right == 0)
+    {
+        __trap();
+        return 0;
+    }
+    if (left == (-2147483647 - 1) && right == -1)
+        return 0;
+    return left % right;
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_and(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left & (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_or(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left | (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_xor(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left ^ (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_not(int value)
+{
+    return csharp2cuda_i32_from_bits(~(unsigned int)value);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_neg(int value)
+{
+    return csharp2cuda_i32_from_bits(0u - (unsigned int)value);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_shl(int value, int count)
+{
+    unsigned int shift = (unsigned int)count & 31u;
+    return csharp2cuda_i32_from_bits((unsigned int)value << shift);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_shr(int value, int count)
+{
+    unsigned int shift = (unsigned int)count & 31u;
+    if (shift == 0u)
+        return value;
+    unsigned int bits = (unsigned int)value >> shift;
+    if (value < 0)
+        bits |= ~0u << (32u - shift);
+    return csharp2cuda_i32_from_bits(bits);
+}
+
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_div(unsigned int left, unsigned int right)
+{
+    if (right == 0u)
+    {
+        __trap();
+        return 0u;
+    }
+    return left / right;
+}
+
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_rem(unsigned int left, unsigned int right)
+{
+    if (right == 0u)
+    {
+        __trap();
+        return 0u;
+    }
+    return left % right;
+}
+
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_shl(unsigned int value, int count)
+{
+    return value << ((unsigned int)count & 31u);
+}
+
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_shr(unsigned int value, int count)
+{
+    return value >> ((unsigned int)count & 31u);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_add(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left + (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_sub(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left - (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_mul(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left * (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_div(long long left, long long right)
+{
+    if (right == 0LL ||
+        (left == (-9223372036854775807LL - 1LL) && right == -1LL))
+    {
+        __trap();
+        return 0LL;
+    }
+    return left / right;
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_rem(long long left, long long right)
+{
+    if (right == 0LL)
+    {
+        __trap();
+        return 0LL;
+    }
+    if (left == (-9223372036854775807LL - 1LL) && right == -1LL)
+        return 0LL;
+    return left % right;
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_and(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left & (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_or(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left | (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_xor(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left ^ (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_not(long long value)
+{
+    return csharp2cuda_i64_from_bits(~(unsigned long long)value);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_neg(long long value)
+{
+    return csharp2cuda_i64_from_bits(0ull - (unsigned long long)value);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_shl(long long value, int count)
+{
+    unsigned int shift = (unsigned int)count & 63u;
+    return csharp2cuda_i64_from_bits((unsigned long long)value << shift);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_shr(long long value, int count)
+{
+    unsigned int shift = (unsigned int)count & 63u;
+    if (shift == 0u)
+        return value;
+    unsigned long long bits = (unsigned long long)value >> shift;
+    if (value < 0LL)
+        bits |= ~0ull << (64u - shift);
+    return csharp2cuda_i64_from_bits(bits);
+}
+
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_div(unsigned long long left, unsigned long long right)
+{
+    if (right == 0ull)
+    {
+        __trap();
+        return 0ull;
+    }
+    return left / right;
+}
+
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_rem(unsigned long long left, unsigned long long right)
+{
+    if (right == 0ull)
+    {
+        __trap();
+        return 0ull;
+    }
+    return left % right;
+}
+
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_shl(unsigned long long value, int count)
+{
+    return value << ((unsigned int)count & 63u);
+}
+
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_shr(unsigned long long value, int count)
+{
+    return value >> ((unsigned int)count & 63u);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_add_assign(int& target, int value) { return target = csharp2cuda_i32_add(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_sub_assign(int& target, int value) { return target = csharp2cuda_i32_sub(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_mul_assign(int& target, int value) { return target = csharp2cuda_i32_mul(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_div_assign(int& target, int value) { return target = csharp2cuda_i32_div(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_rem_assign(int& target, int value) { return target = csharp2cuda_i32_rem(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_and_assign(int& target, int value) { return target = csharp2cuda_i32_and(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_or_assign(int& target, int value) { return target = csharp2cuda_i32_or(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_xor_assign(int& target, int value) { return target = csharp2cuda_i32_xor(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_shl_assign(int& target, int value) { return target = csharp2cuda_i32_shl(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_shr_assign(int& target, int value) { return target = csharp2cuda_i32_shr(target, value); }
+
+static __device__ __forceinline__ long long csharp2cuda_i64_add_assign(long long& target, long long value) { return target = csharp2cuda_i64_add(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_sub_assign(long long& target, long long value) { return target = csharp2cuda_i64_sub(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_mul_assign(long long& target, long long value) { return target = csharp2cuda_i64_mul(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_div_assign(long long& target, long long value) { return target = csharp2cuda_i64_div(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_rem_assign(long long& target, long long value) { return target = csharp2cuda_i64_rem(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_and_assign(long long& target, long long value) { return target = csharp2cuda_i64_and(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_or_assign(long long& target, long long value) { return target = csharp2cuda_i64_or(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_xor_assign(long long& target, long long value) { return target = csharp2cuda_i64_xor(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_shl_assign(long long& target, int value) { return target = csharp2cuda_i64_shl(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_shr_assign(long long& target, int value) { return target = csharp2cuda_i64_shr(target, value); }
+
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_div_assign(unsigned int& target, unsigned int value) { return target = csharp2cuda_u32_div(target, value); }
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_rem_assign(unsigned int& target, unsigned int value) { return target = csharp2cuda_u32_rem(target, value); }
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_shl_assign(unsigned int& target, int value) { return target = csharp2cuda_u32_shl(target, value); }
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_shr_assign(unsigned int& target, int value) { return target = csharp2cuda_u32_shr(target, value); }
+
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_div_assign(unsigned long long& target, unsigned long long value) { return target = csharp2cuda_u64_div(target, value); }
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_rem_assign(unsigned long long& target, unsigned long long value) { return target = csharp2cuda_u64_rem(target, value); }
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_shl_assign(unsigned long long& target, int value) { return target = csharp2cuda_u64_shl(target, value); }
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_shr_assign(unsigned long long& target, int value) { return target = csharp2cuda_u64_shr(target, value); }
+
+static __device__ __forceinline__ int csharp2cuda_i32_pre_increment(int& target) { return target = csharp2cuda_i32_add(target, 1); }
+static __device__ __forceinline__ int csharp2cuda_i32_post_increment(int& target) { int result = target; target = csharp2cuda_i32_add(target, 1); return result; }
+static __device__ __forceinline__ int csharp2cuda_i32_pre_decrement(int& target) { return target = csharp2cuda_i32_sub(target, 1); }
+static __device__ __forceinline__ int csharp2cuda_i32_post_decrement(int& target) { int result = target; target = csharp2cuda_i32_sub(target, 1); return result; }
+static __device__ __forceinline__ long long csharp2cuda_i64_pre_increment(long long& target) { return target = csharp2cuda_i64_add(target, 1LL); }
+static __device__ __forceinline__ long long csharp2cuda_i64_post_increment(long long& target) { long long result = target; target = csharp2cuda_i64_add(target, 1LL); return result; }
+static __device__ __forceinline__ long long csharp2cuda_i64_pre_decrement(long long& target) { return target = csharp2cuda_i64_sub(target, 1LL); }
+static __device__ __forceinline__ long long csharp2cuda_i64_post_decrement(long long& target) { long long result = target; target = csharp2cuda_i64_sub(target, 1LL); return result; }
+#endif
+
+__device__ bool mathblocks_probability_integer(double value, int* result);
+__device__ double mathblocks_probability_binomial(int n, int k);
+__device__ bool mathblocks_probability_distribution(const double* values, int count);
+__device__ double mathblocks_probability_entropy(const double* values, int count);
+__device__ double mathblocks_probability_kl(
+    const double* probabilities,
+    const double* reference,
+    int count);
+__device__ double mathblocks_probability_log_gamma_core(double value);
+__device__ double mathblocks_probability_log_gamma(double value);
+__device__ double mathblocks_probability_beta_fraction(double x, double left, double right);
+__device__ double mathblocks_probability_incomplete_beta(
+    double x,
+    double left,
+    double right);
+__device__ MathBlockComplexValue mathblocks_probability_complex_cube_root(
+    MathBlockComplexValue value);
+extern "C" __global__ void mathblocks_probability(
+    int opcode,
+    const MathBlockSlot* const* inputs,
+    int input_count,
+    MathBlockSlot* output);
+
 __device__ bool mathblocks_probability_integer(double value, int* result)
 {
     if (value < -2147483648.0 || value > 2147483647.0 || value != trunc(value))
@@ -10,11 +324,11 @@ __device__ double mathblocks_probability_binomial(int n, int k)
 {
     if (k < 0 || k > n)
         return 0.0;
-    if (k > n - k)
-        k = n - k;
+    if (k > csharp2cuda_i32_sub(n, k))
+        k = csharp2cuda_i32_sub(n, k);
     double result = 1.0;
-    for (int index = 1; index <= k; index++)
-        result = result * (n - k + index) / index;
+    for (int index = 1; index <= k; csharp2cuda_i32_post_increment(index))
+        result = result * (csharp2cuda_i32_add(csharp2cuda_i32_sub(n, k), index)) / index;
     return result;
 }
 
@@ -22,7 +336,7 @@ __device__ bool mathblocks_probability_distribution(const double* values, int co
 {
     if (count <= 0)
         return false;
-    for (int index = 0; index < count; index++)
+    for (int index = 0; index < count; csharp2cuda_i32_post_increment(index))
         if (values[index] < 0.0) return false;
     return fabs(mathblocks_compensated_sum(values, count) - 1.0) <= 1e-10;
 }
@@ -30,7 +344,7 @@ __device__ bool mathblocks_probability_distribution(const double* values, int co
 __device__ double mathblocks_probability_entropy(const double* values, int count)
 {
     double entropy = 0.0;
-    for (int index = 0; index < count; index++)
+    for (int index = 0; index < count; csharp2cuda_i32_post_increment(index))
         if (values[index] > 0.0)
             entropy -= values[index] * mathblocks_natural_logarithm(values[index]);
     return entropy;
@@ -42,7 +356,7 @@ __device__ double mathblocks_probability_kl(
     int count)
 {
     double result = 0.0;
-    for (int index = 0; index < count; index++)
+    for (int index = 0; index < count; csharp2cuda_i32_post_increment(index))
         if (probabilities[index] > 0.0)
             result += probabilities[index] *
                 mathblocks_natural_logarithm(probabilities[index] / reference[index]);
@@ -64,7 +378,7 @@ __device__ double mathblocks_probability_log_gamma_core(double value)
     };
     value -= 1.0;
     double sum = 0.99999999999980993;
-    for (int index = 0; index < 8; index++)
+    for (int index = 0; index < 8; csharp2cuda_i32_post_increment(index))
         sum += coefficients[index] / (value + index + 1.0);
     double t = value + 7.5;
     return 0.5 * mathblocks_natural_logarithm(
@@ -98,7 +412,7 @@ __device__ double mathblocks_probability_beta_fraction(double x, double left, do
     if (fabs(d) < minimum) d = minimum;
     d = 1.0 / d;
     double result = d;
-    for (int iteration = 1; iteration <= maximum_iterations; iteration++)
+    for (int iteration = 1; iteration <= maximum_iterations; csharp2cuda_i32_post_increment(iteration))
     {
         double doubled = 2.0 * iteration;
         double coefficient = iteration * (right - iteration) * x /
@@ -171,15 +485,15 @@ extern "C" __global__ void mathblocks_probability(
         output->columns = 0;
         output->count = 0;
         output->valid = 1;
-        for (int index = 0; index < input_count; index++)
+        for (int index = 0; index < input_count; csharp2cuda_i32_post_increment(index))
             if (inputs[index] == nullptr || !inputs[index]->valid) output->valid = 0;
     }
     __syncthreads();
     if (!output->valid)
         return;
 
-    const double* a = first == nullptr ? nullptr : (const double*)first->data_pointer;
-    const double* b = second == nullptr ? nullptr : (const double*)second->data_pointer;
+    const double* a = first == nullptr ? nullptr : (double*)first->data_pointer;
+    const double* b = second == nullptr ? nullptr : (double*)second->data_pointer;
     double* result = (double*)output->data_pointer;
     double* scratch = (double*)output->scratch_pointer;
 
@@ -192,22 +506,22 @@ extern "C" __global__ void mathblocks_probability(
                 output->valid = 0;
                 return;
             }
-            mathblocks_set_vector_shape(output, (1 << first->count) - 1);
+            mathblocks_set_vector_shape(output, csharp2cuda_i32_sub((csharp2cuda_i32_shl(1, first->count)), 1));
         }
         __syncthreads();
-        for (int mask = thread + 1; output->valid && mask <= output->count; mask += blockDim.x)
+        for (int mask = csharp2cuda_i32_add(thread, 1); output->valid && mask <= output->count; csharp2cuda_i32_add_assign(mask, blockDim.x))
         {
             double sum = 0.0;
-            for (int index = 0; index < first->count; index++)
-                if ((mask & (1 << index)) != 0) sum += a[index];
-            result[mask - 1] = sum;
+            for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
+                if ((csharp2cuda_i32_and(mask, (csharp2cuda_i32_shl(1, index)))) != 0) sum += a[index];
+            result[csharp2cuda_i32_sub(mask, 1)] = sum;
         }
         return;
     }
 
     if (opcode == 19)
     {
-        int count = first->count <= 1 ? 1 : first->count - 1;
+        int count = first->count <= 1 ? 1 : csharp2cuda_i32_sub(first->count, 1);
         if (thread == 0) mathblocks_set_vector_shape(output, count);
         __syncthreads();
         if (first->count <= 1)
@@ -216,8 +530,8 @@ extern "C" __global__ void mathblocks_probability(
         }
         else
         {
-            for (int index = thread + 1; index < first->count; index += blockDim.x)
-                result[index - 1] = index * a[index];
+            for (int index = csharp2cuda_i32_add(thread, 1); index < first->count; csharp2cuda_i32_add_assign(index, blockDim.x))
+                result[csharp2cuda_i32_sub(index, 1)] = index * a[index];
         }
         return;
     }
@@ -231,28 +545,28 @@ extern "C" __global__ void mathblocks_probability(
                 output->valid = 0;
                 return;
             }
-            for (int index = 0; index < first->count; index++)
+            for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
                 if (a[index] < 0.0) output->valid = 0;
             mathblocks_set_vector_shape(output, first->count);
             if (opcode == 24)
             {
                 double total = mathblocks_compensated_sum(a, first->count);
-                for (int index = 0; output->valid && index < first->count; index++)
+                for (int index = 0; output->valid && index < first->count; csharp2cuda_i32_post_increment(index))
                     result[index] = a[index] * (1.0 / total);
             }
             else
             {
                 double maximum = a[0];
-                for (int index = 1; index < first->count; index++)
+                for (int index = 1; index < first->count; csharp2cuda_i32_post_increment(index))
                     maximum = mathblocks_maximum(maximum, a[index]);
-                for (int index = 0; index < first->count; index++)
+                for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
                     result[index] = mathblocks_exponential(a[index] - maximum);
                 double total = mathblocks_compensated_sum(result, first->count);
                 double scale = 1.0 / total;
-                for (int index = 0; index < first->count; index++)
+                for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
                     result[index] *= scale;
             }
-            for (int index = 0; index < first->count; index++)
+            for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
                 if (!isfinite(result[index])) output->valid = 0;
         }
         return;
@@ -275,9 +589,9 @@ extern "C" __global__ void mathblocks_probability(
         }
         if (opcode == 0)
         {
-            output->scalar_value = (double)(first_integer - second_integer) /
-                (first_integer + second_integer) *
-                mathblocks_probability_binomial(first_integer + second_integer, second_integer);
+            output->scalar_value = (double)(csharp2cuda_i32_sub(first_integer, second_integer)) /
+                (csharp2cuda_i32_add(first_integer, second_integer)) *
+                mathblocks_probability_binomial(csharp2cuda_i32_add(first_integer, second_integer), second_integer);
         }
         else if (opcode == 1)
         {
@@ -286,7 +600,7 @@ extern "C" __global__ void mathblocks_probability(
         else
         {
             double factorial = 1.0;
-            for (int index = 2; index <= first_integer; index++) factorial *= index;
+            for (int index = 2; index <= first_integer; csharp2cuda_i32_post_increment(index)) factorial *= index;
             output->scalar_value = factorial;
         }
         if (!isfinite(output->scalar_value)) output->valid = 0;
@@ -309,7 +623,7 @@ extern "C" __global__ void mathblocks_probability(
         double value = 0.0;
         if (opcode == 4)
         {
-            for (int index = 0; index < first->count; index++)
+            for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
                 value += mathblocks_square_root(a[index] * b[index]);
         }
         else if (opcode == 5)
@@ -325,44 +639,42 @@ extern "C" __global__ void mathblocks_probability(
             if (!mathblocks_probability_integer(second->scalar_value, &first_count) || first_count <= 0 ||
                 !mathblocks_probability_integer(third->scalar_value, &second_count) || second_count <= 0 ||
                 !mathblocks_probability_integer(fourth->scalar_value, &condition_count) || condition_count <= 0 ||
-                (long long)first_count * second_count * condition_count != first->count || scratch == nullptr)
+                csharp2cuda_i64_mul(csharp2cuda_i64_mul((long long)first_count, second_count), condition_count) != first->count || scratch == nullptr)
             {
                 output->valid = 0;
                 return;
             }
-            int first_condition_count = first_count * condition_count;
-            int second_condition_count = second_count * condition_count;
+            int first_condition_count = csharp2cuda_i32_mul(first_count, condition_count);
+            int second_condition_count = csharp2cuda_i32_mul(second_count, condition_count);
             double* first_condition = scratch;
-            double* second_condition = first_condition + first_condition_count;
-            double* condition = second_condition + second_condition_count;
-            for (int index = 0; index < first_condition_count + second_condition_count + condition_count; index++)
+            double* second_condition = csharp2cuda_pointer_add(first_condition, first_condition_count);
+            double* condition = csharp2cuda_pointer_add(second_condition, second_condition_count);
+            for (int index = 0; index < csharp2cuda_i32_add(csharp2cuda_i32_add(first_condition_count, second_condition_count), condition_count); csharp2cuda_i32_post_increment(index))
                 scratch[index] = 0.0;
-            for (int first_index = 0; first_index < first_count; first_index++)
-                for (int second_index = 0; second_index < second_count; second_index++)
-                    for (int state = 0; state < condition_count; state++)
+            for (int first_index = 0; first_index < first_count; csharp2cuda_i32_post_increment(first_index))
+                for (int second_index = 0; second_index < second_count; csharp2cuda_i32_post_increment(second_index))
+                    for (int state = 0; state < condition_count; csharp2cuda_i32_post_increment(state))
                     {
-                        double probability = a[(first_index * second_count + second_index) *
-                            condition_count + state];
-                        first_condition[first_index * condition_count + state] += probability;
-                        second_condition[second_index * condition_count + state] += probability;
+                        double probability = a[csharp2cuda_i32_add(csharp2cuda_i32_mul((csharp2cuda_i32_add(csharp2cuda_i32_mul(first_index, second_count), second_index)), condition_count), state)];
+                        first_condition[csharp2cuda_i32_add(csharp2cuda_i32_mul(first_index, condition_count), state)] += probability;
+                        second_condition[csharp2cuda_i32_add(csharp2cuda_i32_mul(second_index, condition_count), state)] += probability;
                         condition[state] += probability;
                     }
-            for (int first_index = 0; first_index < first_count; first_index++)
-                for (int second_index = 0; second_index < second_count; second_index++)
-                    for (int state = 0; state < condition_count; state++)
+            for (int first_index = 0; first_index < first_count; csharp2cuda_i32_post_increment(first_index))
+                for (int second_index = 0; second_index < second_count; csharp2cuda_i32_post_increment(second_index))
+                    for (int state = 0; state < condition_count; csharp2cuda_i32_post_increment(state))
                     {
-                        double probability = a[(first_index * second_count + second_index) *
-                            condition_count + state];
+                        double probability = a[csharp2cuda_i32_add(csharp2cuda_i32_mul((csharp2cuda_i32_add(csharp2cuda_i32_mul(first_index, second_count), second_index)), condition_count), state)];
                         if (probability == 0.0) continue;
                         value += probability * mathblocks_natural_logarithm(
                             probability * condition[state] /
-                            (first_condition[first_index * condition_count + state] *
-                             second_condition[second_index * condition_count + state]));
+                            (first_condition[csharp2cuda_i32_add(csharp2cuda_i32_mul(first_index, condition_count), state)] *
+                             second_condition[csharp2cuda_i32_add(csharp2cuda_i32_mul(second_index, condition_count), state)]));
                     }
         }
         else if (opcode == 7)
         {
-            for (int index = 0; index < first->count; index++)
+            for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
             {
                 if (a[index] > 0.0 && b[index] == 0.0)
                 {
@@ -379,7 +691,7 @@ extern "C" __global__ void mathblocks_probability(
         }
         else if (opcode == 9)
         {
-            for (int index = 0; index < first->count; index++)
+            for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
             {
                 double difference = mathblocks_square_root(a[index]) - mathblocks_square_root(b[index]);
                 value += difference * difference;
@@ -393,14 +705,14 @@ extern "C" __global__ void mathblocks_probability(
                 output->valid = 0;
                 return;
             }
-            for (int index = 0; index < first->count; index++)
+            for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
                 scratch[index] = (a[index] + b[index]) / 2.0;
             value = 0.5 * (mathblocks_probability_kl(a, scratch, first->count) +
                            mathblocks_probability_kl(b, scratch, first->count));
         }
         else if (opcode == 11)
         {
-            for (int index = 0; index < first->count; index++)
+            for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
                 if (a[index] > 0.0 && b[index] == 0.0)
                 {
                     output->valid = 0;
@@ -418,19 +730,19 @@ extern "C" __global__ void mathblocks_probability(
                 return;
             }
             double* row_totals = scratch;
-            double* column_totals = scratch + rows;
-            for (int index = 0; index < rows + columns; index++) scratch[index] = 0.0;
-            for (int row = 0; row < rows; row++)
-                for (int column = 0; column < columns; column++)
+            double* column_totals = csharp2cuda_pointer_add(scratch, rows);
+            for (int index = 0; index < csharp2cuda_i32_add(rows, columns); csharp2cuda_i32_post_increment(index)) scratch[index] = 0.0;
+            for (int row = 0; row < rows; csharp2cuda_i32_post_increment(row))
+                for (int column = 0; column < columns; csharp2cuda_i32_post_increment(column))
                 {
-                    double probability = a[row * columns + column];
+                    double probability = a[csharp2cuda_i32_add(csharp2cuda_i32_mul(row, columns), column)];
                     row_totals[row] += probability;
                     column_totals[column] += probability;
                 }
-            for (int row = 0; row < rows; row++)
-                for (int column = 0; column < columns; column++)
+            for (int row = 0; row < rows; csharp2cuda_i32_post_increment(row))
+                for (int column = 0; column < columns; csharp2cuda_i32_post_increment(column))
                 {
-                    double probability = a[row * columns + column];
+                    double probability = a[csharp2cuda_i32_add(csharp2cuda_i32_mul(row, columns), column)];
                     if (probability > 0.0)
                         value += probability * mathblocks_natural_logarithm(
                             probability / (row_totals[row] * column_totals[column]));
@@ -451,7 +763,7 @@ extern "C" __global__ void mathblocks_probability(
             else
             {
                 double sum = 0.0;
-                for (int index = 0; index < first->count; index++)
+                for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
                     sum += mathblocks_power(a[index], order);
                 value = opcode == 13
                     ? mathblocks_natural_logarithm(sum) / (1.0 - order)
@@ -464,7 +776,7 @@ extern "C" __global__ void mathblocks_probability(
         }
         else if (opcode == 15)
         {
-            for (int index = 0; index < first->count; index++)
+            for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
                 value += fabs(a[index] - b[index]);
             value /= 2.0;
         }
@@ -481,12 +793,12 @@ extern "C" __global__ void mathblocks_probability(
             output->valid = 0;
             return;
         }
-        int degree = first->count - 1;
+        int degree = csharp2cuda_i32_sub(first->count, 1);
         double value = 0.0;
-        for (int index = 0; index <= degree; index++)
+        for (int index = 0; index <= degree; csharp2cuda_i32_post_increment(index))
             value += a[index] * mathblocks_probability_binomial(degree, index) *
                 mathblocks_power(parameter, (double)index) *
-                mathblocks_power(1.0 - parameter, (double)(degree - index));
+                mathblocks_power(1.0 - parameter, (double)(csharp2cuda_i32_sub(degree, index)));
         output->scalar_value = value;
         if (!isfinite(value)) output->valid = 0;
         return;
@@ -542,7 +854,7 @@ extern "C" __global__ void mathblocks_probability(
                 mathblocks_complex_multiply(mathblocks_complex_conjugate(omega), u),
                 mathblocks_complex_multiply(omega, v)),
             mathblocks_complex_make(normalized_a / 3.0, 0.0));
-        for (int index = 0; index < 3; index++)
+        for (int index = 0; index < 3; csharp2cuda_i32_post_increment(index))
             if (!mathblocks_complex_finite(roots[index])) output->valid = 0;
         return;
     }
@@ -556,13 +868,13 @@ extern "C" __global__ void mathblocks_probability(
             output->valid = 0;
             return;
         }
-        for (int index = 0; index <= order; index++) scratch[index] = 0.0;
+        for (int index = 0; index <= order; csharp2cuda_i32_post_increment(index)) scratch[index] = 0.0;
         scratch[0] = 1.0;
-        for (int value_index = 0; value_index < first->count; value_index++)
+        for (int value_index = 0; value_index < first->count; csharp2cuda_i32_post_increment(value_index))
         {
-            int maximum = order < value_index + 1 ? order : value_index + 1;
-            for (int degree = maximum; degree >= 1; degree--)
-                scratch[degree] += a[value_index] * scratch[degree - 1];
+            int maximum = order < csharp2cuda_i32_add(value_index, 1) ? order : csharp2cuda_i32_add(value_index, 1);
+            for (int degree = maximum; degree >= 1; csharp2cuda_i32_post_decrement(degree))
+                scratch[degree] += a[value_index] * scratch[csharp2cuda_i32_sub(degree, 1)];
         }
         output->scalar_value = scratch[order];
         return;
@@ -571,7 +883,7 @@ extern "C" __global__ void mathblocks_probability(
     if (opcode == 21)
     {
         double value = 0.0;
-        for (int index = first->count - 1; index >= 0; index--)
+        for (int index = csharp2cuda_i32_sub(first->count, 1); index >= 0; csharp2cuda_i32_post_decrement(index))
             value = value * second->scalar_value + a[index];
         output->scalar_value = value;
         if (!isfinite(value)) output->valid = 0;
@@ -586,10 +898,10 @@ extern "C" __global__ void mathblocks_probability(
             return;
         }
         double maximum = a[0];
-        for (int index = 1; index < first->count; index++)
+        for (int index = 1; index < first->count; csharp2cuda_i32_post_increment(index))
             maximum = mathblocks_maximum(maximum, a[index]);
         double sum = 0.0;
-        for (int index = 0; index < first->count; index++)
+        for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
             sum += mathblocks_exponential(a[index] - maximum);
         output->scalar_value = maximum + mathblocks_natural_logarithm(sum);
         if (!isfinite(output->scalar_value)) output->valid = 0;
@@ -616,7 +928,7 @@ extern "C" __global__ void mathblocks_probability(
         double value = 0.0;
         int start = opcode == 25 ? 0 : count;
         int end = count;
-        for (int index = start; index <= end; index++)
+        for (int index = start; index <= end; csharp2cuda_i32_post_increment(index))
         {
             double probability = rate == 0.0
                 ? (index == 0 ? 1.0 : 0.0)

@@ -2,10 +2,12 @@ using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace CSharp2CUDA;
 
 internal sealed class CudaSyntaxValidator(
+    CudaEmissionPlan plan,
     SemanticModel semanticModel,
     ImmutableArray<Diagnostic>.Builder diagnostics) : CSharpSyntaxWalker
 {
@@ -96,57 +98,688 @@ internal sealed class CudaSyntaxValidator(
 
     public override void DefaultVisit(SyntaxNode node)
     {
-        if (!SupportedKinds.Contains(node.Kind()) || HasUnsupportedOperator(node))
+        if (!SupportedKinds.Contains(node.Kind()))
+        {
+            ReportUnsupportedSyntax(node);
+            return;
+        }
+        base.DefaultVisit(node);
+    }
+
+    public override void VisitInvocationExpression(InvocationExpressionSyntax node)
+    {
+        var method = semanticModel.GetSymbolInfo(node).Symbol as IMethodSymbol;
+        var operation = semanticModel.GetOperation(node) as IInvocationOperation;
+        if (method is null || plan.GetCallPlan(method) is null ||
+            operation is null ||
+            operation.Arguments.Any(argument => argument.ArgumentKind == ArgumentKind.DefaultValue) ||
+            node.ArgumentList.Arguments.Any(argument => argument.NameColon is not null))
+        {
+            ReportUnsupportedCall(node, method?.ToDisplayString(
+                SymbolDisplayFormat.CSharpErrorMessageFormat) ?? node.Expression.ToString());
+        }
+        else
+        {
+            var call = plan.GetCallPlan(method)!;
+            var arguments = node.ArgumentList.Arguments;
+            if (call.Kind == CudaCallKind.Atomic)
+            {
+                if (arguments.Count != 2 ||
+                    !arguments[0].RefKindKeyword.IsKind(SyntaxKind.RefKeyword) ||
+                    arguments[1].RefKindKeyword != default)
+                {
+                    ReportUnsupportedCall(node, method.ToDisplayString());
+                }
+            }
+            else if (arguments.Any(argument => argument.RefKindKeyword != default))
+            {
+                ReportUnsupportedCall(node, method.ToDisplayString());
+            }
+
+            if (arguments.Count > 1 &&
+                arguments.Any(argument => !IsOrderIndependent(argument.Expression)))
+            {
+                ReportUnsupportedCall(node, method.ToDisplayString());
+            }
+        }
+        base.VisitInvocationExpression(node);
+    }
+
+    public override void VisitMemberAccessExpression(MemberAccessExpressionSyntax node)
+    {
+        if (!IsAuthorizedMember(node))
+            ReportUnsupportedSyntax(node);
+        base.VisitMemberAccessExpression(node);
+    }
+
+    public override void VisitElementAccessExpression(ElementAccessExpressionSyntax node)
+    {
+        var expressionType = semanticModel.GetTypeInfo(node.Expression).Type;
+        if (expressionType is not IPointerTypeSymbol && !IsFixedLocalArrayReference(node.Expression))
+            ReportUnsupportedSyntax(node);
+        base.VisitElementAccessExpression(node);
+    }
+
+    public override void VisitStackAllocArrayCreationExpression(
+        StackAllocArrayCreationExpressionSyntax node)
+    {
+        var declaration = node.Ancestors().OfType<LocalDeclarationStatementSyntax>().FirstOrDefault();
+        if (declaration is null || !plan.IsFixedLocalArray(declaration))
+            ReportUnsupportedSyntax(node);
+        base.VisitStackAllocArrayCreationExpression(node);
+    }
+
+    public override void VisitLiteralExpression(LiteralExpressionSyntax node)
+    {
+        if (node.IsKind(SyntaxKind.NumericLiteralExpression) && node.Token.Value is decimal)
+            ReportUnsupportedSyntax(node);
+        base.VisitLiteralExpression(node);
+    }
+
+    public override void VisitIdentifierName(IdentifierNameSyntax node)
+    {
+        if (node.Identifier.ValueText != "var" && !IsAuthorizedIdentifier(node))
+            ReportUnsupportedSyntax(node);
+        base.VisitIdentifierName(node);
+    }
+
+    public override void VisitBinaryExpression(BinaryExpressionSyntax node)
+    {
+        ValidateBinary(node);
+        base.VisitBinaryExpression(node);
+    }
+
+    public override void VisitAssignmentExpression(AssignmentExpressionSyntax node)
+    {
+        ValidateAssignment(node);
+        base.VisitAssignmentExpression(node);
+    }
+
+    public override void VisitPrefixUnaryExpression(PrefixUnaryExpressionSyntax node)
+    {
+        ValidatePrefix(node);
+        base.VisitPrefixUnaryExpression(node);
+    }
+
+    public override void VisitPostfixUnaryExpression(PostfixUnaryExpressionSyntax node)
+    {
+        ValidatePostfix(node);
+        base.VisitPostfixUnaryExpression(node);
+    }
+
+    public override void VisitCastExpression(CastExpressionSyntax node)
+    {
+        ValidateCast(node);
+        base.VisitCastExpression(node);
+    }
+
+    public override void VisitConditionalExpression(ConditionalExpressionSyntax node)
+    {
+        if (semanticModel.GetOperation(node) is not IConditionalOperation operation ||
+            EffectiveType(operation.Condition.Type) != SpecialType.System_Boolean ||
+            !HaveCompatibleConditionalTypes(
+                semanticModel.GetTypeInfo(node.WhenTrue).Type,
+                semanticModel.GetTypeInfo(node.WhenFalse).Type))
+        {
+            ReportUnsupportedSyntax(node);
+        }
+        base.VisitConditionalExpression(node);
+    }
+
+    private void ValidateBinary(BinaryExpressionSyntax node)
+    {
+        if (semanticModel.GetOperation(node) is not IBinaryOperation operation)
         {
             ReportUnsupportedSyntax(node);
             return;
         }
 
-        base.DefaultVisit(node);
+        if (operation.OperatorMethod is { } operatorMethod)
+        {
+            if (operatorMethod.ContainingType.ToDisplayString() != "CSharp2CUDA.CudaInt32" ||
+                operation.OperatorKind is not BinaryOperatorKind.Equals and
+                    not BinaryOperatorKind.NotEquals)
+            {
+                ReportUnsupportedSyntax(node);
+            }
+            return;
+        }
+
+        var result = EffectiveType(operation.Type);
+        var left = EffectiveType(operation.LeftOperand.Type);
+        var right = EffectiveType(operation.RightOperand.Type);
+        var hasPointer = operation.LeftOperand.Type is IPointerTypeSymbol ||
+            operation.RightOperand.Type is IPointerTypeSymbol;
+        if (hasPointer)
+        {
+            string? pointerHelper = null;
+            var supportedPointerOperation = operation.OperatorKind switch
+            {
+                BinaryOperatorKind.Add =>
+                    operation.Type is IPointerTypeSymbol &&
+                    (operation.LeftOperand.Type is IPointerTypeSymbol &&
+                        right == SpecialType.System_Int32 ||
+                     operation.RightOperand.Type is IPointerTypeSymbol &&
+                        left == SpecialType.System_Int32),
+                BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals =>
+                    operation.LeftOperand.Type is IPointerTypeSymbol or null &&
+                    operation.RightOperand.Type is IPointerTypeSymbol or null,
+                _ => false
+            };
+            if (!supportedPointerOperation)
+            {
+                ReportUnsupportedSyntax(node);
+                return;
+            }
+            if (operation.OperatorKind == BinaryOperatorKind.Add)
+            {
+                pointerHelper = operation.LeftOperand.Type is IPointerTypeSymbol
+                    ? "csharp2cuda_pointer_add"
+                    : "csharp2cuda_pointer_add_reverse";
+                if (!IsOrderIndependent(node.Left) || !IsOrderIndependent(node.Right))
+                {
+                    ReportUnsupportedSyntax(node);
+                    return;
+                }
+                plan.PlanBinaryHelper(node, pointerHelper);
+            }
+            return;
+        }
+
+        string? helper = null;
+        var supported = operation.OperatorKind switch
+        {
+            BinaryOperatorKind.ConditionalAnd or BinaryOperatorKind.ConditionalOr =>
+                result == SpecialType.System_Boolean &&
+                left == SpecialType.System_Boolean &&
+                right == SpecialType.System_Boolean,
+            BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals or
+            BinaryOperatorKind.LessThan or BinaryOperatorKind.LessThanOrEqual or
+            BinaryOperatorKind.GreaterThan or BinaryOperatorKind.GreaterThanOrEqual =>
+                IsComparable(operation.LeftOperand.Type, operation.RightOperand.Type),
+            BinaryOperatorKind.Add => PlanArithmetic(result, "add", ref helper),
+            BinaryOperatorKind.Subtract => PlanArithmetic(result, "sub", ref helper),
+            BinaryOperatorKind.Multiply => PlanArithmetic(result, "mul", ref helper),
+            BinaryOperatorKind.Divide => PlanDivision(result, "div", ref helper),
+            BinaryOperatorKind.Remainder => PlanDivision(result, "rem", ref helper),
+            BinaryOperatorKind.And => PlanBitwise(result, "and", ref helper),
+            BinaryOperatorKind.Or => PlanBitwise(result, "or", ref helper),
+            BinaryOperatorKind.ExclusiveOr => PlanBitwise(result, "xor", ref helper),
+            BinaryOperatorKind.LeftShift => PlanShift(result, "shl", ref helper),
+            BinaryOperatorKind.RightShift => PlanShift(result, "shr", ref helper),
+            _ => false
+        };
+
+        if (!supported)
+        {
+            ReportUnsupportedSyntax(node);
+            return;
+        }
+
+        if (helper is not null)
+        {
+            if (!IsOrderIndependent(node.Left) || !IsOrderIndependent(node.Right))
+            {
+                ReportUnsupportedSyntax(node);
+                return;
+            }
+            plan.PlanBinaryHelper(node, helper);
+        }
     }
 
-    private bool HasUnsupportedOperator(SyntaxNode node)
+    private void ValidateAssignment(AssignmentExpressionSyntax node)
     {
-        if (node is BinaryExpressionSyntax or AssignmentExpressionSyntax or
-            PrefixUnaryExpressionSyntax or PostfixUnaryExpressionSyntax)
+        if (node.IsKind(SyntaxKind.SimpleAssignmentExpression))
+            return;
+        if (semanticModel.GetOperation(node) is not ICompoundAssignmentOperation operation ||
+            operation.OperatorMethod is not null)
         {
-            if (semanticModel.GetSymbolInfo(node).Symbol is IMethodSymbol
-                {
-                    MethodKind: MethodKind.UserDefinedOperator
-                } method && !IsSupportedCudaOperator(method))
+            ReportUnsupportedSyntax(node);
+            return;
+        }
+
+        var type = EffectiveType(operation.Target.Type);
+        string? helper = null;
+        var supported = operation.OperatorKind switch
+        {
+            BinaryOperatorKind.Add => PlanCompound(type, "add", ref helper),
+            BinaryOperatorKind.Subtract => PlanCompound(type, "sub", ref helper),
+            BinaryOperatorKind.Multiply => PlanCompound(type, "mul", ref helper),
+            BinaryOperatorKind.Divide => PlanCompoundDivision(type, "div", ref helper),
+            BinaryOperatorKind.Remainder => PlanCompoundDivision(type, "rem", ref helper),
+            BinaryOperatorKind.And => PlanCompoundBitwise(type, "and", ref helper),
+            BinaryOperatorKind.Or => PlanCompoundBitwise(type, "or", ref helper),
+            BinaryOperatorKind.ExclusiveOr => PlanCompoundBitwise(type, "xor", ref helper),
+            BinaryOperatorKind.LeftShift => PlanCompoundShift(type, "shl", ref helper),
+            BinaryOperatorKind.RightShift => PlanCompoundShift(type, "shr", ref helper),
+            _ => false
+        };
+
+        if (!supported || helper is not null && !IsOrderIndependent(node.Right))
+        {
+            ReportUnsupportedSyntax(node);
+            return;
+        }
+        if (helper is not null)
+            plan.PlanAssignmentHelper(node, helper);
+    }
+
+    private void ValidatePrefix(PrefixUnaryExpressionSyntax node)
+    {
+        if (semanticModel.GetOperation(node) is IIncrementOrDecrementOperation increment)
+        {
+            ValidateIncrement(node, increment, prefix: true);
+            return;
+        }
+
+        if (semanticModel.GetOperation(node) is not IUnaryOperation operation)
+            return;
+        var type = EffectiveType(operation.Type);
+        string? helper = null;
+        var supported = operation.OperatorKind switch
+        {
+            UnaryOperatorKind.Minus => PlanUnary(type, "neg", ref helper),
+            UnaryOperatorKind.Plus => IsArithmetic(type),
+            UnaryOperatorKind.Not => type == SpecialType.System_Boolean,
+            UnaryOperatorKind.BitwiseNegation => PlanBitwise(type, "not", ref helper),
+            _ => false
+        };
+        if (!supported)
+        {
+            ReportUnsupportedSyntax(node);
+            return;
+        }
+        if (helper is not null)
+            plan.PlanPrefixHelper(node, helper);
+    }
+
+    private void ValidatePostfix(PostfixUnaryExpressionSyntax node)
+    {
+        if (semanticModel.GetOperation(node) is not IIncrementOrDecrementOperation increment)
+        {
+            ReportUnsupportedSyntax(node);
+            return;
+        }
+        ValidateIncrement(node, increment, prefix: false);
+    }
+
+    private void ValidateIncrement(
+        ExpressionSyntax node,
+        IIncrementOrDecrementOperation operation,
+        bool prefix)
+    {
+        var type = EffectiveType(operation.Target.Type);
+        var operationName = operation.Kind == OperationKind.Increment ? "increment" : "decrement";
+        var helper = type switch
+        {
+            SpecialType.System_Int32 => $"csharp2cuda_i32_{(prefix ? "pre" : "post")}_{operationName}",
+            SpecialType.System_Int64 => $"csharp2cuda_i64_{(prefix ? "pre" : "post")}_{operationName}",
+            _ => null
+        };
+        var native = type is SpecialType.System_Byte or SpecialType.System_UInt16 or
+            SpecialType.System_UInt32 or SpecialType.System_UInt64 or
+            SpecialType.System_Single or SpecialType.System_Double;
+        if (helper is null && !native)
+        {
+            ReportUnsupportedSyntax(node);
+            return;
+        }
+
+        if (helper is not null && node is PrefixUnaryExpressionSyntax prefixNode)
+            plan.PlanPrefixHelper(prefixNode, helper);
+        else if (helper is not null && node is PostfixUnaryExpressionSyntax postfixNode)
+            plan.PlanPostfixHelper(postfixNode, helper);
+    }
+
+    private void ValidateCast(CastExpressionSyntax node)
+    {
+        var operation = semanticModel.GetOperation(node) as IConversionOperation;
+        var source = operation?.Operand.Type ?? semanticModel.GetTypeInfo(node.Expression).Type;
+        var target = operation?.Type ?? semanticModel.GetTypeInfo(node.Type).Type;
+        if (source is null || target is null)
+        {
+            ReportUnsupportedSyntax(node);
+            return;
+        }
+
+        plan.FormatType(target, false, node.Type.GetLocation());
+        var sourceType = EffectiveType(source);
+        var targetType = EffectiveType(target);
+        var supported = IsArithmetic(sourceType) && IsArithmetic(targetType) ||
+            source is IPointerTypeSymbol && target is IPointerTypeSymbol ||
+            source is IPointerTypeSymbol &&
+                targetType is SpecialType.System_Int64 or SpecialType.System_UInt64 ||
+            target is IPointerTypeSymbol &&
+                sourceType is SpecialType.System_Int64 or SpecialType.System_UInt64;
+        if (!supported || targetType is SpecialType.System_SByte or SpecialType.System_Int16 &&
+            sourceType != targetType)
+        {
+            ReportUnsupportedSyntax(node);
+            return;
+        }
+
+        if (targetType == SpecialType.System_Int32 &&
+            sourceType is SpecialType.System_UInt32 or SpecialType.System_Int64 or
+                SpecialType.System_UInt64)
+        {
+            plan.PlanCastHelper(node, "csharp2cuda_i32_from_bits");
+        }
+        else if (targetType == SpecialType.System_Int64 &&
+            sourceType == SpecialType.System_UInt64)
+        {
+            plan.PlanCastHelper(node, "csharp2cuda_i64_from_bits");
+        }
+    }
+
+    private bool IsAuthorizedMember(MemberAccessExpressionSyntax node)
+    {
+        if (plan.TryGetDimensionReplacement(node, out _))
+            return true;
+        var symbol = semanticModel.GetSymbolInfo(node).Symbol;
+        if (symbol is IFieldSymbol field)
+        {
+            return !field.IsStatic &&
+                field.ContainingType is { } containingType &&
+                plan.TryGetStruct(containingType, out _) &&
+                plan.TryGetIdentifier(field, out _);
+        }
+        if (symbol is IPropertySymbol property)
+            return plan.IsDimensionProperty(property);
+        if (symbol is IMethodSymbol method)
+            return plan.GetCallPlan(method) is not null;
+        if (symbol is INamespaceSymbol or INamedTypeSymbol)
+        {
+            var invocation = node.AncestorsAndSelf().OfType<InvocationExpressionSyntax>()
+                .FirstOrDefault();
+            return invocation is not null &&
+                semanticModel.GetSymbolInfo(invocation).Symbol is IMethodSymbol target &&
+                plan.GetCallPlan(target) is not null;
+        }
+        return false;
+    }
+
+    private bool IsAuthorizedIdentifier(IdentifierNameSyntax node)
+    {
+        var symbol = semanticModel.GetSymbolInfo(node).Symbol;
+        if (symbol is ILocalSymbol or IParameterSymbol)
+            return plan.TryGetIdentifier(symbol, out _);
+        if (symbol is IFieldSymbol field)
+        {
+            return !field.IsStatic &&
+                field.ContainingType is { } containingType &&
+                plan.TryGetStruct(containingType, out _) &&
+                plan.TryGetIdentifier(field, out _);
+        }
+        if (symbol is IMethodSymbol method)
+            return plan.GetCallPlan(method) is not null;
+        if (symbol is IPropertySymbol property)
+            return plan.IsDimensionProperty(property);
+        if (symbol is INamedTypeSymbol type)
+        {
+            if (type.ToDisplayString() == "CSharp2CUDA.CudaInt32" ||
+                plan.TryGetStruct(type, out _))
             {
                 return true;
             }
+            return IsAuthorizedQualifier(node);
         }
-
-        return node switch
-        {
-            BinaryExpressionSyntax binary when binary.IsKind(SyntaxKind.ModuloExpression) =>
-                !IsIntegral(binary.Left) || !IsIntegral(binary.Right),
-            AssignmentExpressionSyntax assignment when
-                assignment.IsKind(SyntaxKind.ModuloAssignmentExpression) =>
-                !IsIntegral(assignment.Left) || !IsIntegral(assignment.Right),
-            _ => false
-        };
+        if (symbol is INamespaceSymbol)
+            return IsAuthorizedQualifier(node);
+        return false;
     }
 
-    private static bool IsSupportedCudaOperator(IMethodSymbol method) =>
-        method.ContainingType.ToDisplayString() == "CSharp2CUDA.CudaInt32" &&
-        method.Name is "op_Equality" or "op_Inequality";
-
-    private bool IsIntegral(ExpressionSyntax expression)
+    private bool IsAuthorizedQualifier(IdentifierNameSyntax node)
     {
-        var type = semanticModel.GetTypeInfo(expression).Type;
-        return type?.SpecialType is
-            SpecialType.System_SByte or
-            SpecialType.System_Byte or
-            SpecialType.System_Int16 or
-            SpecialType.System_UInt16 or
-            SpecialType.System_Int32 or
-            SpecialType.System_UInt32 or
-            SpecialType.System_Int64 or
+        var member = node.AncestorsAndSelf().OfType<MemberAccessExpressionSyntax>()
+            .LastOrDefault();
+        if (member is not null && IsAuthorizedMember(member))
+            return true;
+        var invocation = node.AncestorsAndSelf().OfType<InvocationExpressionSyntax>()
+            .FirstOrDefault();
+        return invocation is not null &&
+            semanticModel.GetSymbolInfo(invocation).Symbol is IMethodSymbol method &&
+            plan.GetCallPlan(method) is not null;
+    }
+
+    private bool IsFixedLocalArrayReference(ExpressionSyntax expression)
+    {
+        if (semanticModel.GetSymbolInfo(expression).Symbol is not ILocalSymbol local ||
+            local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is not
+                VariableDeclaratorSyntax variable ||
+            variable.Parent?.Parent is not LocalDeclarationStatementSyntax declaration)
+        {
+            return false;
+        }
+        return plan.IsFixedLocalArray(declaration);
+    }
+
+    private bool IsOrderIndependent(ExpressionSyntax expression)
+    {
+        foreach (var node in expression.DescendantNodesAndSelf())
+        {
+            if (node is AssignmentExpressionSyntax or PrefixUnaryExpressionSyntax
+                {
+                    RawKind: (int)SyntaxKind.PreIncrementExpression or
+                        (int)SyntaxKind.PreDecrementExpression
+                } or PostfixUnaryExpressionSyntax)
+            {
+                return false;
+            }
+            if (node is InvocationExpressionSyntax invocation)
+            {
+                var method = semanticModel.GetSymbolInfo(invocation).Symbol as IMethodSymbol;
+                if (method is null || !plan.IsPureCall(method))
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool PlanArithmetic(
+        SpecialType type,
+        string operation,
+        ref string? helper)
+    {
+        helper = type switch
+        {
+            SpecialType.System_Int32 => $"csharp2cuda_i32_{operation}",
+            SpecialType.System_Int64 => $"csharp2cuda_i64_{operation}",
+            _ => null
+        };
+        return helper is not null || type is SpecialType.System_UInt32 or
+            SpecialType.System_UInt64 or SpecialType.System_Single or
+            SpecialType.System_Double;
+    }
+
+    private static bool PlanDivision(
+        SpecialType type,
+        string operation,
+        ref string? helper)
+    {
+        helper = type switch
+        {
+            SpecialType.System_Int32 => $"csharp2cuda_i32_{operation}",
+            SpecialType.System_UInt32 => $"csharp2cuda_u32_{operation}",
+            SpecialType.System_Int64 => $"csharp2cuda_i64_{operation}",
+            SpecialType.System_UInt64 => $"csharp2cuda_u64_{operation}",
+            _ => null
+        };
+        return helper is not null ||
+            operation == "div" && type is SpecialType.System_Single or SpecialType.System_Double;
+    }
+
+    private static bool PlanBitwise(
+        SpecialType type,
+        string operation,
+        ref string? helper)
+    {
+        helper = type switch
+        {
+            SpecialType.System_Int32 => $"csharp2cuda_i32_{operation}",
+            SpecialType.System_Int64 => $"csharp2cuda_i64_{operation}",
+            _ => null
+        };
+        return helper is not null ||
+            type is SpecialType.System_UInt32 or SpecialType.System_UInt64;
+    }
+
+    private static bool PlanShift(
+        SpecialType type,
+        string operation,
+        ref string? helper)
+    {
+        helper = type switch
+        {
+            SpecialType.System_Int32 => $"csharp2cuda_i32_{operation}",
+            SpecialType.System_UInt32 => $"csharp2cuda_u32_{operation}",
+            SpecialType.System_Int64 => $"csharp2cuda_i64_{operation}",
+            SpecialType.System_UInt64 => $"csharp2cuda_u64_{operation}",
+            _ => null
+        };
+        return helper is not null;
+    }
+
+    private static bool PlanCompound(
+        SpecialType type,
+        string operation,
+        ref string? helper)
+    {
+        helper = type switch
+        {
+            SpecialType.System_Int32 => $"csharp2cuda_i32_{operation}_assign",
+            SpecialType.System_Int64 => $"csharp2cuda_i64_{operation}_assign",
+            _ => null
+        };
+        return helper is not null || type is SpecialType.System_UInt32 or
+            SpecialType.System_UInt64 or SpecialType.System_Single or
+            SpecialType.System_Double;
+    }
+
+    private static bool PlanCompoundDivision(
+        SpecialType type,
+        string operation,
+        ref string? helper)
+    {
+        helper = type switch
+        {
+            SpecialType.System_Int32 => $"csharp2cuda_i32_{operation}_assign",
+            SpecialType.System_UInt32 => $"csharp2cuda_u32_{operation}_assign",
+            SpecialType.System_Int64 => $"csharp2cuda_i64_{operation}_assign",
+            SpecialType.System_UInt64 => $"csharp2cuda_u64_{operation}_assign",
+            _ => null
+        };
+        return helper is not null ||
+            operation == "div" && type is SpecialType.System_Single or SpecialType.System_Double;
+    }
+
+    private static bool PlanCompoundBitwise(
+        SpecialType type,
+        string operation,
+        ref string? helper)
+    {
+        helper = type switch
+        {
+            SpecialType.System_Int32 => $"csharp2cuda_i32_{operation}_assign",
+            SpecialType.System_Int64 => $"csharp2cuda_i64_{operation}_assign",
+            _ => null
+        };
+        return helper is not null ||
+            type is SpecialType.System_UInt32 or SpecialType.System_UInt64;
+    }
+
+    private static bool PlanCompoundShift(
+        SpecialType type,
+        string operation,
+        ref string? helper)
+    {
+        helper = type switch
+        {
+            SpecialType.System_Int32 => $"csharp2cuda_i32_{operation}_assign",
+            SpecialType.System_UInt32 => $"csharp2cuda_u32_{operation}_assign",
+            SpecialType.System_Int64 => $"csharp2cuda_i64_{operation}_assign",
+            SpecialType.System_UInt64 => $"csharp2cuda_u64_{operation}_assign",
+            _ => null
+        };
+        return helper is not null;
+    }
+
+    private static bool PlanUnary(
+        SpecialType type,
+        string operation,
+        ref string? helper)
+    {
+        helper = type switch
+        {
+            SpecialType.System_Int32 => $"csharp2cuda_i32_{operation}",
+            SpecialType.System_Int64 => $"csharp2cuda_i64_{operation}",
+            _ => null
+        };
+        return helper is not null || type is SpecialType.System_Single or
+            SpecialType.System_Double or SpecialType.System_UInt32 or
             SpecialType.System_UInt64;
     }
+
+    private static bool IsComparable(ITypeSymbol? left, ITypeSymbol? right)
+    {
+        var leftType = EffectiveType(left);
+        var rightType = EffectiveType(right);
+        return leftType == rightType &&
+            (IsArithmetic(leftType) || leftType == SpecialType.System_Boolean);
+    }
+
+    private bool HaveSameEmittedType(ITypeSymbol? left, ITypeSymbol? right)
+    {
+        if (left is null || right is null)
+            return left is null && right is null;
+        if (SymbolEqualityComparer.Default.Equals(left, right))
+            return true;
+        if (EffectiveType(left) is { } leftType && leftType != SpecialType.None &&
+            EffectiveType(right) == leftType)
+        {
+            return true;
+        }
+        if (left is IPointerTypeSymbol leftPointer && right is IPointerTypeSymbol rightPointer)
+        {
+            return SymbolEqualityComparer.Default.Equals(
+                leftPointer.PointedAtType,
+                rightPointer.PointedAtType);
+        }
+        return false;
+    }
+
+    private bool HaveCompatibleConditionalTypes(ITypeSymbol? left, ITypeSymbol? right)
+    {
+        if (left is null && right is IPointerTypeSymbol ||
+            right is null && left is IPointerTypeSymbol)
+        {
+            return true;
+        }
+        return HaveSameEmittedType(left, right);
+    }
+
+    private static bool IsArithmetic(SpecialType type) =>
+        type is SpecialType.System_SByte or SpecialType.System_Byte or
+            SpecialType.System_Int16 or SpecialType.System_UInt16 or
+            SpecialType.System_Int32 or SpecialType.System_UInt32 or
+            SpecialType.System_Int64 or SpecialType.System_UInt64 or
+            SpecialType.System_Single or SpecialType.System_Double;
+
+    private static bool IsIntegral(SpecialType type) =>
+        type is SpecialType.System_SByte or SpecialType.System_Byte or
+            SpecialType.System_Int16 or SpecialType.System_UInt16 or
+            SpecialType.System_Int32 or SpecialType.System_UInt32 or
+            SpecialType.System_Int64 or SpecialType.System_UInt64;
+
+    private static SpecialType EffectiveType(ITypeSymbol? type) =>
+        type?.ToDisplayString() == "CSharp2CUDA.CudaInt32"
+            ? SpecialType.System_Int32
+            : type?.SpecialType ?? SpecialType.None;
+
+    private void ReportUnsupportedCall(InvocationExpressionSyntax node, string name) =>
+        diagnostics.Add(Diagnostic.Create(
+            CudaDiagnostics.UnsupportedCall,
+            node.GetLocation(),
+            name));
 
     private void ReportUnsupportedSyntax(SyntaxNode node) =>
         diagnostics.Add(Diagnostic.Create(

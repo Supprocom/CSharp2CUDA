@@ -1,228 +1,134 @@
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace CSharp2CUDA;
 
-internal sealed class CudaModuleEmitter
+internal sealed class CudaModuleEmitter(
+    CudaEmissionPlan plan,
+    ImmutableArray<Diagnostic>.Builder diagnostics,
+    CudaTranspilationOptions options)
 {
-    private const string DeviceAttributeName = "CSharp2CUDA.CudaDeviceAttribute";
-    private const string GlobalAttributeName = "CSharp2CUDA.CudaGlobalAttribute";
-    private static readonly HashSet<string> CudaKeywords = new(StringComparer.Ordinal)
+    public string Emit()
     {
-        "alignas", "alignof", "and", "and_eq", "asm", "atomic_cancel",
-        "atomic_commit", "atomic_noexcept", "auto", "bitand", "bitor", "bool",
-        "break", "case", "catch", "char", "char8_t", "char16_t", "char32_t",
-        "class", "compl", "concept", "const", "consteval", "constexpr", "constinit",
-        "const_cast", "continue", "co_await", "co_return", "co_yield", "decltype",
-        "default", "delete", "do", "double", "dynamic_cast", "else", "enum",
-        "explicit", "export", "extern", "false", "final", "float", "for", "friend",
-        "goto", "if", "import", "inline", "int", "long", "module", "mutable",
-        "namespace", "new", "noexcept", "not", "not_eq", "nullptr", "operator",
-        "or", "or_eq", "override", "private", "protected", "public", "reflexpr",
-        "register", "reinterpret_cast", "requires", "return", "short", "signed",
-        "sizeof", "static", "static_assert", "static_cast", "struct", "switch",
-        "synchronized", "template", "this", "thread_local", "throw", "transaction_safe",
-        "transaction_safe_dynamic", "true", "try", "typedef", "typeid", "typename",
-        "union", "unsigned", "using", "virtual", "void", "volatile", "wchar_t",
-        "while", "xor", "xor_eq"
-    };
+        var sections = new List<string>();
+        var structures = plan.Structs.Where(static structure => !structure.IsExternal).ToArray();
+        var functions = plan.Functions.Where(static function => !function.IsExternal).ToArray();
 
-    private readonly SemanticModel semanticModel;
-    private readonly ImmutableArray<Diagnostic>.Builder diagnostics;
-    private readonly CudaTranspilationOptions options;
-    private readonly Dictionary<IMethodSymbol, string> functionNames;
-    private readonly CudaSyntaxTranslator translator;
+        if (functions.Length > 0)
+            sections.Add(NormalizeNewLines(IntegerSemantics));
+        if (structures.Length > 0)
+            sections.Add(EmitStructForwardDeclarations(structures));
+        foreach (var structure in structures)
+            sections.Add(EmitStruct(structure));
+        if (functions.Length > 0)
+            sections.Add(EmitFunctionPrototypes(functions));
+        foreach (var function in functions)
+            sections.Add(EmitFunction(function));
 
-    public CudaModuleEmitter(
-        SemanticModel semanticModel,
-        ImmutableArray<Diagnostic>.Builder diagnostics,
-        CudaTranspilationOptions options,
-        Dictionary<IMethodSymbol, string> functionNames)
-    {
-        this.semanticModel = semanticModel;
-        this.diagnostics = diagnostics;
-        this.options = options;
-        this.functionNames = functionNames;
-        translator = new CudaSyntaxTranslator(semanticModel, diagnostics, functionNames);
+        return string.Join(options.NewLine + options.NewLine, sections);
     }
 
-    public string Emit(ClassDeclarationSyntax unit)
+    private string EmitStructForwardDeclarations(IEnumerable<CudaStructPlan> structures)
     {
-        ValidateUnit(unit);
-        var validator = new CudaSyntaxValidator(semanticModel, diagnostics);
-        using var output = new StringWriter { NewLine = options.NewLine };
-        var wroteMember = false;
-
-        foreach (var member in unit.Members)
+        using var output = CreateWriter();
+        var first = true;
+        foreach (var structure in structures)
         {
-            if (IsExternal(member))
-                continue;
-            string? translated = member switch
-            {
-                StructDeclarationSyntax structure => EmitStruct(structure),
-                MethodDeclarationSyntax method => EmitMethod(method),
-                _ => ReportUnsupportedMember(member)
-            };
-
-            if (translated is null)
-                continue;
-            if (member is MethodDeclarationSyntax methodDeclaration)
-                validator.Visit(methodDeclaration.Body);
-            if (wroteMember)
-                output.Write(options.NewLine + options.NewLine);
-            output.Write(translated);
-            wroteMember = true;
+            if (!first)
+                output.WriteLine();
+            output.Write("struct ");
+            output.Write(structure.EmittedName);
+            output.Write(';');
+            first = false;
         }
-
         return output.ToString();
     }
 
-    private void ValidateUnit(ClassDeclarationSyntax unit)
+    private string EmitStruct(CudaStructPlan structure)
     {
-        var isStatic = unit.Modifiers.Any(SyntaxKind.StaticKeyword);
-        if (!isStatic || unit.TypeParameterList is not null || unit.BaseList is not null)
-        {
-            diagnostics.Add(Diagnostic.Create(
-                CudaDiagnostics.InvalidTranslationUnit,
-                unit.Identifier.GetLocation(),
-                unit.Identifier.ValueText));
-        }
-    }
-
-    private string EmitStruct(StructDeclarationSyntax structure)
-    {
-        using var output = new StringWriter { NewLine = options.NewLine };
+        using var output = CreateWriter();
         output.Write("struct ");
-        output.Write(structure.Identifier.ValueText);
+        output.Write(structure.EmittedName);
         output.WriteLine();
         output.WriteLine("{");
-        foreach (var member in structure.Members)
+        foreach (var field in structure.Fields)
         {
-            if (member is not FieldDeclarationSyntax field ||
-                field.Declaration.Variables.Count != 1)
-            {
-                ReportUnsupportedMember(member);
-                continue;
-            }
-
-            var type = translator.TranslateType(field.Declaration.Type, deepReadOnly: false);
-            var variable = field.Declaration.Variables[0];
             output.Write("    ");
-            output.Write(type);
+            output.Write(plan.FormatType(
+                field.Symbol.Type,
+                false,
+                field.Declaration.Declaration.Type.GetLocation()));
             output.Write(' ');
-            output.Write(variable.Identifier.ValueText);
-            if (variable.Initializer is not null)
-            {
-                diagnostics.Add(Diagnostic.Create(
-                    CudaDiagnostics.UnsupportedSyntax,
-                    variable.Initializer.GetLocation(),
-                    variable.Initializer.Kind().ToString()));
-            }
+            output.Write(plan.GetIdentifier(field.Symbol));
             output.WriteLine(";");
         }
         output.Write("};");
         return output.ToString();
     }
 
-    private string? EmitMethod(MethodDeclarationSyntax method)
+    private string EmitFunctionPrototypes(IEnumerable<CudaFunctionPlan> functions)
     {
-        if (semanticModel.GetDeclaredSymbol(method) is not IMethodSymbol symbol)
-            return null;
+        using var output = CreateWriter();
+        var first = true;
+        foreach (var function in functions)
+        {
+            if (!first)
+                output.WriteLine();
+            EmitFunctionHeader(output, function);
+            output.Write(';');
+            first = false;
+        }
+        return output.ToString();
+    }
 
-        var device = GetAttribute(symbol, DeviceAttributeName);
-        var global = GetAttribute(symbol, GlobalAttributeName);
-        if (device is not null && global is not null)
-        {
-            diagnostics.Add(Diagnostic.Create(
-                CudaDiagnostics.ConflictingFunctionKinds,
-                method.Identifier.GetLocation(),
-                symbol.Name));
-            return null;
-        }
-        if (device is null && global is null)
-        {
-            diagnostics.Add(Diagnostic.Create(
-                CudaDiagnostics.MissingFunctionKind,
-                method.Identifier.GetLocation(),
-                symbol.Name));
-            return null;
-        }
-        if (method.Body is null || method.ExpressionBody is not null ||
-            method.TypeParameterList is not null)
-        {
-            diagnostics.Add(Diagnostic.Create(
-                CudaDiagnostics.UnsupportedSyntax,
-                method.GetLocation(),
-                method.Kind().ToString()));
-            return null;
-        }
+    private string EmitFunction(CudaFunctionPlan function)
+    {
+        using var output = CreateWriter();
+        EmitFunctionHeader(output, function);
+        output.WriteLine();
+        output.Write(TranslateBody(function));
+        return output.ToString();
+    }
 
-        using var output = new StringWriter { NewLine = options.NewLine };
-        if (device is not null)
+    private void EmitFunctionHeader(TextWriter output, CudaFunctionPlan function)
+    {
+        if (function.Kind == CudaFunctionKind.Device)
         {
             output.Write("__device__ ");
         }
         else
         {
-            var externC = GetNamedBoolean(global!, nameof(CudaGlobalAttribute.ExternC), true);
-            if (externC)
+            if (function.ExternC)
                 output.Write("extern \"C\" ");
             output.Write("__global__ ");
         }
 
-        output.Write(translator.TranslateType(method.ReturnType, deepReadOnly: false));
+        output.Write(plan.FormatType(
+            function.Symbol.ReturnType,
+            false,
+            function.Syntax.ReturnType.GetLocation()));
         output.Write(' ');
-        output.Write(functionNames[symbol]);
-        EmitParameters(output, method.ParameterList, symbol);
-        output.WriteLine();
-        output.Write(TranslateBody(method.Body));
-        return output.ToString();
+        output.Write(function.EmittedName);
+        EmitParameters(output, function);
     }
 
-    private void EmitParameters(
-        TextWriter output,
-        ParameterListSyntax parameters,
-        IMethodSymbol method)
+    private void EmitParameters(TextWriter output, CudaFunctionPlan function)
     {
+        var parameters = function.Syntax.ParameterList;
         var parameterText = parameters.SyntaxTree.GetText().ToString(parameters.Span);
         var multiline = parameterText.Contains('\n') || parameterText.Contains('\r');
         output.Write('(');
         for (var index = 0; index < parameters.Parameters.Count; index++)
         {
-            var parameter = parameters.Parameters[index];
-            var symbol = method.Parameters[index];
-            var readOnly = GetAttribute(symbol, "CSharp2CUDA.CudaReadOnlyAttribute") is not null;
-            var readOnlyReference = symbol.RefKind == RefKind.In;
-            if (readOnly && symbol.Type is not IPointerTypeSymbol)
-            {
-                diagnostics.Add(Diagnostic.Create(
-                    CudaDiagnostics.InvalidReadOnlyParameter,
-                    parameter.GetLocation(),
-                    parameter.Identifier.ValueText));
-            }
-            if ((readOnlyReference && symbol.Type is IPointerTypeSymbol) ||
-                symbol.RefKind is not RefKind.None and not RefKind.In)
-            {
-                diagnostics.Add(Diagnostic.Create(
-                    CudaDiagnostics.UnsupportedSyntax,
-                    parameter.GetLocation(),
-                    parameter.Modifiers.ToString()));
-            }
-
             if (multiline)
             {
                 output.WriteLine();
                 output.Write("    ");
             }
-            if (readOnlyReference)
-                output.Write("const ");
-            output.Write(translator.TranslateType(parameter.Type!, readOnly));
-            if (readOnlyReference)
-                output.Write('&');
+            output.Write(plan.FormatParameterType(function, index));
             output.Write(' ');
-            output.Write(parameter.Identifier.ValueText);
+            output.Write(plan.GetIdentifier(function.Symbol.Parameters[index]));
             if (index + 1 < parameters.Parameters.Count)
             {
                 output.Write(',');
@@ -233,13 +139,13 @@ internal sealed class CudaModuleEmitter
         output.Write(')');
     }
 
-    private string TranslateBody(BlockSyntax body)
+    private string TranslateBody(CudaFunctionPlan function)
     {
-        var rewritten = (BlockSyntax)translator.Visit(body)!;
+        var translator = new CudaSyntaxTranslator(plan, function.Model, diagnostics);
+        var rewritten = (BlockSyntax)translator.Visit(function.Syntax.Body)!;
         var text = rewritten.WithoutLeadingTrivia().WithoutTrailingTrivia().ToFullString();
         text = translator.ExpandFixedLocalArrays(text);
-        text = text.Replace("\r\n", "\n", StringComparison.Ordinal)
-            .Replace('\r', '\n');
+        text = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
         var lines = text.Split('\n');
         for (var index = 0; index < lines.Length; index++)
         {
@@ -249,106 +155,303 @@ internal sealed class CudaModuleEmitter
         return string.Join(options.NewLine, lines);
     }
 
-    private string? ReportUnsupportedMember(MemberDeclarationSyntax member)
-    {
-        diagnostics.Add(Diagnostic.Create(
-            CudaDiagnostics.UnsupportedMember,
-            member.GetLocation(),
-            member.Kind().ToString()));
-        return null;
-    }
+    private StringWriter CreateWriter() => new() { NewLine = options.NewLine };
 
-    private bool IsExternal(MemberDeclarationSyntax member)
-    {
-        var symbol = semanticModel.GetDeclaredSymbol(member);
-        return symbol?.GetAttributes().Any(attribute =>
-            attribute.AttributeClass?.ToDisplayString() ==
-            "CSharp2CUDA.CudaExternalAttribute") == true;
-    }
+    private string NormalizeNewLines(string text) =>
+        text.Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Replace("\n", options.NewLine, StringComparison.Ordinal);
 
-    private static AttributeData? GetAttribute(ISymbol symbol, string metadataName) =>
-        symbol.GetAttributes().FirstOrDefault(attribute =>
-            attribute.AttributeClass?.ToDisplayString() == metadataName);
+    private const string IntegerSemantics = """
+        #ifndef CSHARP2CUDA_INTEGER_SEMANTICS_0_1
+        #define CSHARP2CUDA_INTEGER_SEMANTICS_0_1
+        static_assert(sizeof(int) == 4, "CSharp2CUDA requires a 32-bit CUDA int.");
+        static_assert(sizeof(long long) == 8, "CSharp2CUDA requires a 64-bit CUDA long long.");
 
-    private static bool GetNamedBoolean(AttributeData attribute, string name, bool defaultValue)
-    {
-        foreach (var argument in attribute.NamedArguments)
+        static __device__ __forceinline__ int csharp2cuda_i32_from_bits(unsigned int bits)
         {
-            if (argument.Key == name && argument.Value.Value is bool value)
-                return value;
+            return bits <= 0x7fffffffu ? (int)bits : -1 - (int)(~bits);
         }
-        return defaultValue;
-    }
 
-    public void RegisterFunctionNames(ClassDeclarationSyntax unit)
-    {
-        foreach (var method in unit.Members.OfType<MethodDeclarationSyntax>())
+        static __device__ __forceinline__ long long csharp2cuda_i64_from_bits(unsigned long long bits)
         {
-            if (semanticModel.GetDeclaredSymbol(method) is not IMethodSymbol symbol)
-                continue;
-            var attribute = GetAttribute(symbol, DeviceAttributeName) ??
-                GetAttribute(symbol, GlobalAttributeName);
-            if (attribute is not null)
-                functionNames[symbol] = GetEmittedName(symbol, attribute);
+            return bits <= 0x7fffffffffffffffull ? (long long)bits : -1LL - (long long)(~bits);
         }
-    }
 
-    private string GetEmittedName(IMethodSymbol method, AttributeData attribute)
-    {
-        var emittedName = method.Name;
-        foreach (var argument in attribute.NamedArguments)
+        template <typename T>
+        static __device__ __forceinline__ T* csharp2cuda_pointer_add(T* pointer, int offset)
         {
-            if (argument.Key == nameof(CudaDeviceAttribute.Name))
+            unsigned long long address = (unsigned long long)pointer;
+            unsigned long long displacement =
+                (unsigned long long)(long long)offset * (unsigned long long)sizeof(T);
+            return (T*)(address + displacement);
+        }
+
+        template <typename T>
+        static __device__ __forceinline__ T* csharp2cuda_pointer_add_reverse(int offset, T* pointer)
+        {
+            return csharp2cuda_pointer_add(pointer, offset);
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_i32_add(int left, int right)
+        {
+            return csharp2cuda_i32_from_bits((unsigned int)left + (unsigned int)right);
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_i32_sub(int left, int right)
+        {
+            return csharp2cuda_i32_from_bits((unsigned int)left - (unsigned int)right);
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_i32_mul(int left, int right)
+        {
+            return csharp2cuda_i32_from_bits((unsigned int)left * (unsigned int)right);
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_i32_div(int left, int right)
+        {
+            if (right == 0 || (left == (-2147483647 - 1) && right == -1))
             {
-                emittedName = argument.Value.Value as string ?? string.Empty;
-                break;
+                __trap();
+                return 0;
             }
+            return left / right;
         }
 
-        if (IsValidCudaIdentifier(emittedName))
-            return emittedName;
-
-        diagnostics.Add(Diagnostic.Create(
-            CudaDiagnostics.InvalidFunctionName,
-            GetNameLocation(method, attribute),
-            emittedName));
-        return "csharp2cuda_invalid_function";
-    }
-
-    private static Location GetNameLocation(IMethodSymbol method, AttributeData attribute)
-    {
-        if (attribute.ApplicationSyntaxReference?.GetSyntax() is AttributeSyntax syntax)
+        static __device__ __forceinline__ int csharp2cuda_i32_rem(int left, int right)
         {
-            var nameArgument = syntax.ArgumentList?.Arguments.FirstOrDefault(argument =>
-                argument.NameEquals?.Name.Identifier.ValueText ==
-                nameof(CudaDeviceAttribute.Name));
-            if (nameArgument is not null)
-                return nameArgument.Expression.GetLocation();
+            if (right == 0)
+            {
+                __trap();
+                return 0;
+            }
+            if (left == (-2147483647 - 1) && right == -1)
+                return 0;
+            return left % right;
         }
 
-        return method.Locations.FirstOrDefault() ?? Location.None;
-    }
-
-    private static bool IsValidCudaIdentifier(string name)
-    {
-        if (name.Length == 0 ||
-            !IsAsciiLetter(name[0]) ||
-            CudaKeywords.Contains(name) ||
-            name.Contains("__", StringComparison.Ordinal))
+        static __device__ __forceinline__ int csharp2cuda_i32_and(int left, int right)
         {
-            return false;
+            return csharp2cuda_i32_from_bits((unsigned int)left & (unsigned int)right);
         }
 
-        for (var index = 1; index < name.Length; index++)
+        static __device__ __forceinline__ int csharp2cuda_i32_or(int left, int right)
         {
-            var character = name[index];
-            if (!IsAsciiLetter(character) && !char.IsAsciiDigit(character) && character != '_')
-                return false;
+            return csharp2cuda_i32_from_bits((unsigned int)left | (unsigned int)right);
         }
 
-        return true;
-    }
+        static __device__ __forceinline__ int csharp2cuda_i32_xor(int left, int right)
+        {
+            return csharp2cuda_i32_from_bits((unsigned int)left ^ (unsigned int)right);
+        }
 
-    private static bool IsAsciiLetter(char character) =>
-        character is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
+        static __device__ __forceinline__ int csharp2cuda_i32_not(int value)
+        {
+            return csharp2cuda_i32_from_bits(~(unsigned int)value);
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_i32_neg(int value)
+        {
+            return csharp2cuda_i32_from_bits(0u - (unsigned int)value);
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_i32_shl(int value, int count)
+        {
+            unsigned int shift = (unsigned int)count & 31u;
+            return csharp2cuda_i32_from_bits((unsigned int)value << shift);
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_i32_shr(int value, int count)
+        {
+            unsigned int shift = (unsigned int)count & 31u;
+            if (shift == 0u)
+                return value;
+            unsigned int bits = (unsigned int)value >> shift;
+            if (value < 0)
+                bits |= ~0u << (32u - shift);
+            return csharp2cuda_i32_from_bits(bits);
+        }
+
+        static __device__ __forceinline__ unsigned int csharp2cuda_u32_div(unsigned int left, unsigned int right)
+        {
+            if (right == 0u)
+            {
+                __trap();
+                return 0u;
+            }
+            return left / right;
+        }
+
+        static __device__ __forceinline__ unsigned int csharp2cuda_u32_rem(unsigned int left, unsigned int right)
+        {
+            if (right == 0u)
+            {
+                __trap();
+                return 0u;
+            }
+            return left % right;
+        }
+
+        static __device__ __forceinline__ unsigned int csharp2cuda_u32_shl(unsigned int value, int count)
+        {
+            return value << ((unsigned int)count & 31u);
+        }
+
+        static __device__ __forceinline__ unsigned int csharp2cuda_u32_shr(unsigned int value, int count)
+        {
+            return value >> ((unsigned int)count & 31u);
+        }
+
+        static __device__ __forceinline__ long long csharp2cuda_i64_add(long long left, long long right)
+        {
+            return csharp2cuda_i64_from_bits((unsigned long long)left + (unsigned long long)right);
+        }
+
+        static __device__ __forceinline__ long long csharp2cuda_i64_sub(long long left, long long right)
+        {
+            return csharp2cuda_i64_from_bits((unsigned long long)left - (unsigned long long)right);
+        }
+
+        static __device__ __forceinline__ long long csharp2cuda_i64_mul(long long left, long long right)
+        {
+            return csharp2cuda_i64_from_bits((unsigned long long)left * (unsigned long long)right);
+        }
+
+        static __device__ __forceinline__ long long csharp2cuda_i64_div(long long left, long long right)
+        {
+            if (right == 0LL ||
+                (left == (-9223372036854775807LL - 1LL) && right == -1LL))
+            {
+                __trap();
+                return 0LL;
+            }
+            return left / right;
+        }
+
+        static __device__ __forceinline__ long long csharp2cuda_i64_rem(long long left, long long right)
+        {
+            if (right == 0LL)
+            {
+                __trap();
+                return 0LL;
+            }
+            if (left == (-9223372036854775807LL - 1LL) && right == -1LL)
+                return 0LL;
+            return left % right;
+        }
+
+        static __device__ __forceinline__ long long csharp2cuda_i64_and(long long left, long long right)
+        {
+            return csharp2cuda_i64_from_bits((unsigned long long)left & (unsigned long long)right);
+        }
+
+        static __device__ __forceinline__ long long csharp2cuda_i64_or(long long left, long long right)
+        {
+            return csharp2cuda_i64_from_bits((unsigned long long)left | (unsigned long long)right);
+        }
+
+        static __device__ __forceinline__ long long csharp2cuda_i64_xor(long long left, long long right)
+        {
+            return csharp2cuda_i64_from_bits((unsigned long long)left ^ (unsigned long long)right);
+        }
+
+        static __device__ __forceinline__ long long csharp2cuda_i64_not(long long value)
+        {
+            return csharp2cuda_i64_from_bits(~(unsigned long long)value);
+        }
+
+        static __device__ __forceinline__ long long csharp2cuda_i64_neg(long long value)
+        {
+            return csharp2cuda_i64_from_bits(0ull - (unsigned long long)value);
+        }
+
+        static __device__ __forceinline__ long long csharp2cuda_i64_shl(long long value, int count)
+        {
+            unsigned int shift = (unsigned int)count & 63u;
+            return csharp2cuda_i64_from_bits((unsigned long long)value << shift);
+        }
+
+        static __device__ __forceinline__ long long csharp2cuda_i64_shr(long long value, int count)
+        {
+            unsigned int shift = (unsigned int)count & 63u;
+            if (shift == 0u)
+                return value;
+            unsigned long long bits = (unsigned long long)value >> shift;
+            if (value < 0LL)
+                bits |= ~0ull << (64u - shift);
+            return csharp2cuda_i64_from_bits(bits);
+        }
+
+        static __device__ __forceinline__ unsigned long long csharp2cuda_u64_div(unsigned long long left, unsigned long long right)
+        {
+            if (right == 0ull)
+            {
+                __trap();
+                return 0ull;
+            }
+            return left / right;
+        }
+
+        static __device__ __forceinline__ unsigned long long csharp2cuda_u64_rem(unsigned long long left, unsigned long long right)
+        {
+            if (right == 0ull)
+            {
+                __trap();
+                return 0ull;
+            }
+            return left % right;
+        }
+
+        static __device__ __forceinline__ unsigned long long csharp2cuda_u64_shl(unsigned long long value, int count)
+        {
+            return value << ((unsigned int)count & 63u);
+        }
+
+        static __device__ __forceinline__ unsigned long long csharp2cuda_u64_shr(unsigned long long value, int count)
+        {
+            return value >> ((unsigned int)count & 63u);
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_i32_add_assign(int& target, int value) { return target = csharp2cuda_i32_add(target, value); }
+        static __device__ __forceinline__ int csharp2cuda_i32_sub_assign(int& target, int value) { return target = csharp2cuda_i32_sub(target, value); }
+        static __device__ __forceinline__ int csharp2cuda_i32_mul_assign(int& target, int value) { return target = csharp2cuda_i32_mul(target, value); }
+        static __device__ __forceinline__ int csharp2cuda_i32_div_assign(int& target, int value) { return target = csharp2cuda_i32_div(target, value); }
+        static __device__ __forceinline__ int csharp2cuda_i32_rem_assign(int& target, int value) { return target = csharp2cuda_i32_rem(target, value); }
+        static __device__ __forceinline__ int csharp2cuda_i32_and_assign(int& target, int value) { return target = csharp2cuda_i32_and(target, value); }
+        static __device__ __forceinline__ int csharp2cuda_i32_or_assign(int& target, int value) { return target = csharp2cuda_i32_or(target, value); }
+        static __device__ __forceinline__ int csharp2cuda_i32_xor_assign(int& target, int value) { return target = csharp2cuda_i32_xor(target, value); }
+        static __device__ __forceinline__ int csharp2cuda_i32_shl_assign(int& target, int value) { return target = csharp2cuda_i32_shl(target, value); }
+        static __device__ __forceinline__ int csharp2cuda_i32_shr_assign(int& target, int value) { return target = csharp2cuda_i32_shr(target, value); }
+
+        static __device__ __forceinline__ long long csharp2cuda_i64_add_assign(long long& target, long long value) { return target = csharp2cuda_i64_add(target, value); }
+        static __device__ __forceinline__ long long csharp2cuda_i64_sub_assign(long long& target, long long value) { return target = csharp2cuda_i64_sub(target, value); }
+        static __device__ __forceinline__ long long csharp2cuda_i64_mul_assign(long long& target, long long value) { return target = csharp2cuda_i64_mul(target, value); }
+        static __device__ __forceinline__ long long csharp2cuda_i64_div_assign(long long& target, long long value) { return target = csharp2cuda_i64_div(target, value); }
+        static __device__ __forceinline__ long long csharp2cuda_i64_rem_assign(long long& target, long long value) { return target = csharp2cuda_i64_rem(target, value); }
+        static __device__ __forceinline__ long long csharp2cuda_i64_and_assign(long long& target, long long value) { return target = csharp2cuda_i64_and(target, value); }
+        static __device__ __forceinline__ long long csharp2cuda_i64_or_assign(long long& target, long long value) { return target = csharp2cuda_i64_or(target, value); }
+        static __device__ __forceinline__ long long csharp2cuda_i64_xor_assign(long long& target, long long value) { return target = csharp2cuda_i64_xor(target, value); }
+        static __device__ __forceinline__ long long csharp2cuda_i64_shl_assign(long long& target, int value) { return target = csharp2cuda_i64_shl(target, value); }
+        static __device__ __forceinline__ long long csharp2cuda_i64_shr_assign(long long& target, int value) { return target = csharp2cuda_i64_shr(target, value); }
+
+        static __device__ __forceinline__ unsigned int csharp2cuda_u32_div_assign(unsigned int& target, unsigned int value) { return target = csharp2cuda_u32_div(target, value); }
+        static __device__ __forceinline__ unsigned int csharp2cuda_u32_rem_assign(unsigned int& target, unsigned int value) { return target = csharp2cuda_u32_rem(target, value); }
+        static __device__ __forceinline__ unsigned int csharp2cuda_u32_shl_assign(unsigned int& target, int value) { return target = csharp2cuda_u32_shl(target, value); }
+        static __device__ __forceinline__ unsigned int csharp2cuda_u32_shr_assign(unsigned int& target, int value) { return target = csharp2cuda_u32_shr(target, value); }
+
+        static __device__ __forceinline__ unsigned long long csharp2cuda_u64_div_assign(unsigned long long& target, unsigned long long value) { return target = csharp2cuda_u64_div(target, value); }
+        static __device__ __forceinline__ unsigned long long csharp2cuda_u64_rem_assign(unsigned long long& target, unsigned long long value) { return target = csharp2cuda_u64_rem(target, value); }
+        static __device__ __forceinline__ unsigned long long csharp2cuda_u64_shl_assign(unsigned long long& target, int value) { return target = csharp2cuda_u64_shl(target, value); }
+        static __device__ __forceinline__ unsigned long long csharp2cuda_u64_shr_assign(unsigned long long& target, int value) { return target = csharp2cuda_u64_shr(target, value); }
+
+        static __device__ __forceinline__ int csharp2cuda_i32_pre_increment(int& target) { return target = csharp2cuda_i32_add(target, 1); }
+        static __device__ __forceinline__ int csharp2cuda_i32_post_increment(int& target) { int result = target; target = csharp2cuda_i32_add(target, 1); return result; }
+        static __device__ __forceinline__ int csharp2cuda_i32_pre_decrement(int& target) { return target = csharp2cuda_i32_sub(target, 1); }
+        static __device__ __forceinline__ int csharp2cuda_i32_post_decrement(int& target) { int result = target; target = csharp2cuda_i32_sub(target, 1); return result; }
+        static __device__ __forceinline__ long long csharp2cuda_i64_pre_increment(long long& target) { return target = csharp2cuda_i64_add(target, 1LL); }
+        static __device__ __forceinline__ long long csharp2cuda_i64_post_increment(long long& target) { long long result = target; target = csharp2cuda_i64_add(target, 1LL); return result; }
+        static __device__ __forceinline__ long long csharp2cuda_i64_pre_decrement(long long& target) { return target = csharp2cuda_i64_sub(target, 1LL); }
+        static __device__ __forceinline__ long long csharp2cuda_i64_post_decrement(long long& target) { long long result = target; target = csharp2cuda_i64_sub(target, 1LL); return result; }
+        #endif
+        """;
 }

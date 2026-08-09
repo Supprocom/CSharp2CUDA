@@ -1,9 +1,362 @@
+#ifndef CSHARP2CUDA_INTEGER_SEMANTICS_0_1
+#define CSHARP2CUDA_INTEGER_SEMANTICS_0_1
+static_assert(sizeof(int) == 4, "CSharp2CUDA requires a 32-bit CUDA int.");
+static_assert(sizeof(long long) == 8, "CSharp2CUDA requires a 64-bit CUDA long long.");
+
+static __device__ __forceinline__ int csharp2cuda_i32_from_bits(unsigned int bits)
+{
+    return bits <= 0x7fffffffu ? (int)bits : -1 - (int)(~bits);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_from_bits(unsigned long long bits)
+{
+    return bits <= 0x7fffffffffffffffull ? (long long)bits : -1LL - (long long)(~bits);
+}
+
+template <typename T>
+static __device__ __forceinline__ T* csharp2cuda_pointer_add(T* pointer, int offset)
+{
+    unsigned long long address = (unsigned long long)pointer;
+    unsigned long long displacement =
+        (unsigned long long)(long long)offset * (unsigned long long)sizeof(T);
+    return (T*)(address + displacement);
+}
+
+template <typename T>
+static __device__ __forceinline__ T* csharp2cuda_pointer_add_reverse(int offset, T* pointer)
+{
+    return csharp2cuda_pointer_add(pointer, offset);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_add(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left + (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_sub(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left - (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_mul(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left * (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_div(int left, int right)
+{
+    if (right == 0 || (left == (-2147483647 - 1) && right == -1))
+    {
+        __trap();
+        return 0;
+    }
+    return left / right;
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_rem(int left, int right)
+{
+    if (right == 0)
+    {
+        __trap();
+        return 0;
+    }
+    if (left == (-2147483647 - 1) && right == -1)
+        return 0;
+    return left % right;
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_and(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left & (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_or(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left | (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_xor(int left, int right)
+{
+    return csharp2cuda_i32_from_bits((unsigned int)left ^ (unsigned int)right);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_not(int value)
+{
+    return csharp2cuda_i32_from_bits(~(unsigned int)value);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_neg(int value)
+{
+    return csharp2cuda_i32_from_bits(0u - (unsigned int)value);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_shl(int value, int count)
+{
+    unsigned int shift = (unsigned int)count & 31u;
+    return csharp2cuda_i32_from_bits((unsigned int)value << shift);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_shr(int value, int count)
+{
+    unsigned int shift = (unsigned int)count & 31u;
+    if (shift == 0u)
+        return value;
+    unsigned int bits = (unsigned int)value >> shift;
+    if (value < 0)
+        bits |= ~0u << (32u - shift);
+    return csharp2cuda_i32_from_bits(bits);
+}
+
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_div(unsigned int left, unsigned int right)
+{
+    if (right == 0u)
+    {
+        __trap();
+        return 0u;
+    }
+    return left / right;
+}
+
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_rem(unsigned int left, unsigned int right)
+{
+    if (right == 0u)
+    {
+        __trap();
+        return 0u;
+    }
+    return left % right;
+}
+
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_shl(unsigned int value, int count)
+{
+    return value << ((unsigned int)count & 31u);
+}
+
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_shr(unsigned int value, int count)
+{
+    return value >> ((unsigned int)count & 31u);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_add(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left + (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_sub(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left - (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_mul(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left * (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_div(long long left, long long right)
+{
+    if (right == 0LL ||
+        (left == (-9223372036854775807LL - 1LL) && right == -1LL))
+    {
+        __trap();
+        return 0LL;
+    }
+    return left / right;
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_rem(long long left, long long right)
+{
+    if (right == 0LL)
+    {
+        __trap();
+        return 0LL;
+    }
+    if (left == (-9223372036854775807LL - 1LL) && right == -1LL)
+        return 0LL;
+    return left % right;
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_and(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left & (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_or(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left | (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_xor(long long left, long long right)
+{
+    return csharp2cuda_i64_from_bits((unsigned long long)left ^ (unsigned long long)right);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_not(long long value)
+{
+    return csharp2cuda_i64_from_bits(~(unsigned long long)value);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_neg(long long value)
+{
+    return csharp2cuda_i64_from_bits(0ull - (unsigned long long)value);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_shl(long long value, int count)
+{
+    unsigned int shift = (unsigned int)count & 63u;
+    return csharp2cuda_i64_from_bits((unsigned long long)value << shift);
+}
+
+static __device__ __forceinline__ long long csharp2cuda_i64_shr(long long value, int count)
+{
+    unsigned int shift = (unsigned int)count & 63u;
+    if (shift == 0u)
+        return value;
+    unsigned long long bits = (unsigned long long)value >> shift;
+    if (value < 0LL)
+        bits |= ~0ull << (64u - shift);
+    return csharp2cuda_i64_from_bits(bits);
+}
+
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_div(unsigned long long left, unsigned long long right)
+{
+    if (right == 0ull)
+    {
+        __trap();
+        return 0ull;
+    }
+    return left / right;
+}
+
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_rem(unsigned long long left, unsigned long long right)
+{
+    if (right == 0ull)
+    {
+        __trap();
+        return 0ull;
+    }
+    return left % right;
+}
+
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_shl(unsigned long long value, int count)
+{
+    return value << ((unsigned int)count & 63u);
+}
+
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_shr(unsigned long long value, int count)
+{
+    return value >> ((unsigned int)count & 63u);
+}
+
+static __device__ __forceinline__ int csharp2cuda_i32_add_assign(int& target, int value) { return target = csharp2cuda_i32_add(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_sub_assign(int& target, int value) { return target = csharp2cuda_i32_sub(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_mul_assign(int& target, int value) { return target = csharp2cuda_i32_mul(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_div_assign(int& target, int value) { return target = csharp2cuda_i32_div(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_rem_assign(int& target, int value) { return target = csharp2cuda_i32_rem(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_and_assign(int& target, int value) { return target = csharp2cuda_i32_and(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_or_assign(int& target, int value) { return target = csharp2cuda_i32_or(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_xor_assign(int& target, int value) { return target = csharp2cuda_i32_xor(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_shl_assign(int& target, int value) { return target = csharp2cuda_i32_shl(target, value); }
+static __device__ __forceinline__ int csharp2cuda_i32_shr_assign(int& target, int value) { return target = csharp2cuda_i32_shr(target, value); }
+
+static __device__ __forceinline__ long long csharp2cuda_i64_add_assign(long long& target, long long value) { return target = csharp2cuda_i64_add(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_sub_assign(long long& target, long long value) { return target = csharp2cuda_i64_sub(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_mul_assign(long long& target, long long value) { return target = csharp2cuda_i64_mul(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_div_assign(long long& target, long long value) { return target = csharp2cuda_i64_div(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_rem_assign(long long& target, long long value) { return target = csharp2cuda_i64_rem(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_and_assign(long long& target, long long value) { return target = csharp2cuda_i64_and(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_or_assign(long long& target, long long value) { return target = csharp2cuda_i64_or(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_xor_assign(long long& target, long long value) { return target = csharp2cuda_i64_xor(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_shl_assign(long long& target, int value) { return target = csharp2cuda_i64_shl(target, value); }
+static __device__ __forceinline__ long long csharp2cuda_i64_shr_assign(long long& target, int value) { return target = csharp2cuda_i64_shr(target, value); }
+
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_div_assign(unsigned int& target, unsigned int value) { return target = csharp2cuda_u32_div(target, value); }
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_rem_assign(unsigned int& target, unsigned int value) { return target = csharp2cuda_u32_rem(target, value); }
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_shl_assign(unsigned int& target, int value) { return target = csharp2cuda_u32_shl(target, value); }
+static __device__ __forceinline__ unsigned int csharp2cuda_u32_shr_assign(unsigned int& target, int value) { return target = csharp2cuda_u32_shr(target, value); }
+
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_div_assign(unsigned long long& target, unsigned long long value) { return target = csharp2cuda_u64_div(target, value); }
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_rem_assign(unsigned long long& target, unsigned long long value) { return target = csharp2cuda_u64_rem(target, value); }
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_shl_assign(unsigned long long& target, int value) { return target = csharp2cuda_u64_shl(target, value); }
+static __device__ __forceinline__ unsigned long long csharp2cuda_u64_shr_assign(unsigned long long& target, int value) { return target = csharp2cuda_u64_shr(target, value); }
+
+static __device__ __forceinline__ int csharp2cuda_i32_pre_increment(int& target) { return target = csharp2cuda_i32_add(target, 1); }
+static __device__ __forceinline__ int csharp2cuda_i32_post_increment(int& target) { int result = target; target = csharp2cuda_i32_add(target, 1); return result; }
+static __device__ __forceinline__ int csharp2cuda_i32_pre_decrement(int& target) { return target = csharp2cuda_i32_sub(target, 1); }
+static __device__ __forceinline__ int csharp2cuda_i32_post_decrement(int& target) { int result = target; target = csharp2cuda_i32_sub(target, 1); return result; }
+static __device__ __forceinline__ long long csharp2cuda_i64_pre_increment(long long& target) { return target = csharp2cuda_i64_add(target, 1LL); }
+static __device__ __forceinline__ long long csharp2cuda_i64_post_increment(long long& target) { long long result = target; target = csharp2cuda_i64_add(target, 1LL); return result; }
+static __device__ __forceinline__ long long csharp2cuda_i64_pre_decrement(long long& target) { return target = csharp2cuda_i64_sub(target, 1LL); }
+static __device__ __forceinline__ long long csharp2cuda_i64_post_decrement(long long& target) { long long result = target; target = csharp2cuda_i64_sub(target, 1LL); return result; }
+#endif
+
+struct MathBlockGeometryEdge;
+
 struct MathBlockGeometryEdge
 {
     int from;
     int to;
     double weight;
 };
+
+__device__ double mathblocks_geometry_distance_coordinates(
+    double left_x,
+    double left_y,
+    double right_x,
+    double right_y);
+__device__ double mathblocks_geometry_distance(
+    const double* left,
+    int left_index,
+    const double* right,
+    int right_index);
+__device__ double mathblocks_geometry_cross(
+    double origin_x,
+    double origin_y,
+    double left_x,
+    double left_y,
+    double right_x,
+    double right_y);
+__device__ double mathblocks_geometry_point_to_segment(
+    double point_x,
+    double point_y,
+    double start_x,
+    double start_y,
+    double end_x,
+    double end_y);
+__device__ void mathblocks_geometry_barycentric(
+    double point_x,
+    double point_y,
+    double first_x,
+    double first_y,
+    double second_x,
+    double second_y,
+    double third_x,
+    double third_y,
+    double* result);
+__device__ bool mathblocks_geometry_try_circumcircle(
+    const double* points,
+    int first,
+    int second,
+    int third,
+    double* center_x,
+    double* center_y,
+    double* radius_square);
+__device__ bool mathblocks_geometry_point_less(
+    const double* points,
+    int left,
+    int right);
+__device__ void mathblocks_geometry_sort_indices(
+    const double* points,
+    int count,
+    int* indices);
+__device__ int mathblocks_geometry_find(int* parent, int value);
+__device__ bool mathblocks_geometry_edge_less(
+    const MathBlockGeometryEdge& left,
+    const MathBlockGeometryEdge& right);
+extern "C" __global__ void mathblocks_geometry(
+    int opcode,
+    const MathBlockSlot* const* inputs,
+    int input_count,
+    MathBlockSlot* output);
 
 __device__ double mathblocks_geometry_distance_coordinates(
     double left_x,
@@ -23,10 +376,10 @@ __device__ double mathblocks_geometry_distance(
     int right_index)
 {
     return mathblocks_geometry_distance_coordinates(
-        left[2 * left_index],
-        left[2 * left_index + 1],
-        right[2 * right_index],
-        right[2 * right_index + 1]);
+        left[csharp2cuda_i32_mul(2, left_index)],
+        left[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, left_index), 1)],
+        right[csharp2cuda_i32_mul(2, right_index)],
+        right[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, right_index), 1)]);
 }
 
 __device__ double mathblocks_geometry_cross(
@@ -95,12 +448,12 @@ __device__ bool mathblocks_geometry_try_circumcircle(
     double* center_y,
     double* radius_square)
 {
-    double first_x = points[2 * first];
-    double first_y = points[2 * first + 1];
-    double second_x = points[2 * second];
-    double second_y = points[2 * second + 1];
-    double third_x = points[2 * third];
-    double third_y = points[2 * third + 1];
+    double first_x = points[csharp2cuda_i32_mul(2, first)];
+    double first_y = points[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, first), 1)];
+    double second_x = points[csharp2cuda_i32_mul(2, second)];
+    double second_y = points[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, second), 1)];
+    double third_x = points[csharp2cuda_i32_mul(2, third)];
+    double third_y = points[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, third), 1)];
     double denominator = 2.0 * (first_x * (second_y - third_y) +
                                 second_x * (third_y - first_y) +
                                 third_x * (first_y - second_y));
@@ -131,14 +484,14 @@ __device__ bool mathblocks_geometry_point_less(
     int left,
     int right)
 {
-    double left_x = points[2 * left];
-    double right_x = points[2 * right];
+    double left_x = points[csharp2cuda_i32_mul(2, left)];
+    double right_x = points[csharp2cuda_i32_mul(2, right)];
     if (left_x < right_x)
         return true;
     if (right_x < left_x)
         return false;
-    double left_y = points[2 * left + 1];
-    double right_y = points[2 * right + 1];
+    double left_y = points[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, left), 1)];
+    double right_y = points[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, right), 1)];
     if (left_y < right_y)
         return true;
     if (right_y < left_y)
@@ -151,14 +504,14 @@ __device__ void mathblocks_geometry_sort_indices(
     int count,
     int* indices)
 {
-    for (int index = 0; index < count; index++)
+    for (int index = 0; index < count; csharp2cuda_i32_post_increment(index))
     {
         int value = index;
         int position = index;
-        while (position > 0 && mathblocks_geometry_point_less(points, value, indices[position - 1]))
+        while (position > 0 && mathblocks_geometry_point_less(points, value, indices[csharp2cuda_i32_sub(position, 1)]))
         {
-            indices[position] = indices[position - 1];
-            position--;
+            indices[position] = indices[csharp2cuda_i32_sub(position, 1)];
+            csharp2cuda_i32_post_decrement(position);
         }
         indices[position] = value;
     }
@@ -216,8 +569,8 @@ extern "C" __global__ void mathblocks_geometry(
     if (!output->valid)
         return;
 
-    const double* a = first == nullptr ? nullptr : (const double*)first->data_pointer;
-    const double* b = second == nullptr ? nullptr : (const double*)second->data_pointer;
+    const double* a = first == nullptr ? nullptr : (double*)first->data_pointer;
+    const double* b = second == nullptr ? nullptr : (double*)second->data_pointer;
     double* result = (double*)output->data_pointer;
     double* scratch = (double*)output->scratch_pointer;
 
@@ -234,7 +587,7 @@ extern "C" __global__ void mathblocks_geometry(
                 }
                 mathblocks_geometry_barycentric(
                     a[0], a[1], b[0], b[1], b[2], b[3], b[4], b[5], result);
-                for (int index = 0; index < 3; index++)
+                for (int index = 0; index < 3; csharp2cuda_i32_post_increment(index))
                     if (!isfinite(result[index])) output->valid = 0;
                 break;
             case 1:
@@ -247,10 +600,10 @@ extern "C" __global__ void mathblocks_geometry(
                 }
                 result[0] = 0.0;
                 result[1] = 0.0;
-                for (int index = 0; index < first->count; index++)
+                for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
                 {
-                    result[0] += a[2 * index];
-                    result[1] += a[2 * index + 1];
+                    result[0] += a[csharp2cuda_i32_mul(2, index)];
+                    result[1] += a[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, index), 1)];
                 }
                 result[0] /= first->count;
                 result[1] /= first->count;
@@ -281,13 +634,13 @@ extern "C" __global__ void mathblocks_geometry(
                 bool inside = false;
                 double point_x = b[0];
                 double point_y = b[1];
-                for (int current = 0; current < first->count; current++)
+                for (int current = 0; current < first->count; csharp2cuda_i32_post_increment(current))
                 {
-                    int previous = current == 0 ? first->count - 1 : current - 1;
-                    double left_x = a[2 * current];
-                    double left_y = a[2 * current + 1];
-                    double right_x = a[2 * previous];
-                    double right_y = a[2 * previous + 1];
+                    int previous = current == 0 ? csharp2cuda_i32_sub(first->count, 1) : csharp2cuda_i32_sub(current, 1);
+                    double left_x = a[csharp2cuda_i32_mul(2, current)];
+                    double left_y = a[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, current), 1)];
+                    double right_x = a[csharp2cuda_i32_mul(2, previous)];
+                    double right_y = a[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, previous), 1)];
                     if (mathblocks_geometry_point_to_segment(
                         point_x, point_y, left_x, left_y, right_x, right_y) == 0.0)
                     {
@@ -312,31 +665,31 @@ extern "C" __global__ void mathblocks_geometry(
                 }
             {
                 double* sorted = scratch;
-                double* hull = scratch + first->count * 2;
+                double* hull = csharp2cuda_pointer_add(scratch, csharp2cuda_i32_mul(first->count, 2));
                 int unique_count = 0;
-                for (int index = 0; index < first->count; index++)
+                for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
                 {
-                    double x = a[2 * index];
-                    double y = a[2 * index + 1];
+                    double x = a[csharp2cuda_i32_mul(2, index)];
+                    double y = a[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, index), 1)];
                     int position = unique_count;
                     while (position > 0 &&
-                           (sorted[2 * (position - 1)] > x ||
-                            (sorted[2 * (position - 1)] == x &&
-                             sorted[2 * (position - 1) + 1] > y)))
-                        position--;
-                    if (position < unique_count && sorted[2 * position] == x &&
-                        sorted[2 * position + 1] == y)
+                           (sorted[csharp2cuda_i32_mul(2, (csharp2cuda_i32_sub(position, 1)))] > x ||
+                            (sorted[csharp2cuda_i32_mul(2, (csharp2cuda_i32_sub(position, 1)))] == x &&
+                             sorted[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, (csharp2cuda_i32_sub(position, 1))), 1)] > y)))
+                        csharp2cuda_i32_post_decrement(position);
+                    if (position < unique_count && sorted[csharp2cuda_i32_mul(2, position)] == x &&
+                        sorted[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, position), 1)] == y)
                     {
                         continue;
                     }
-                    for (int move = unique_count; move > position; move--)
+                    for (int move = unique_count; move > position; csharp2cuda_i32_post_decrement(move))
                     {
-                        sorted[2 * move] = sorted[2 * (move - 1)];
-                        sorted[2 * move + 1] = sorted[2 * (move - 1) + 1];
+                        sorted[csharp2cuda_i32_mul(2, move)] = sorted[csharp2cuda_i32_mul(2, (csharp2cuda_i32_sub(move, 1)))];
+                        sorted[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, move), 1)] = sorted[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, (csharp2cuda_i32_sub(move, 1))), 1)];
                     }
-                    sorted[2 * position] = x;
-                    sorted[2 * position + 1] = y;
-                    unique_count++;
+                    sorted[csharp2cuda_i32_mul(2, position)] = x;
+                    sorted[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, position), 1)] = y;
+                    csharp2cuda_i32_post_increment(unique_count);
                 }
                 int count = 0;
                 if (unique_count <= 1)
@@ -350,34 +703,34 @@ extern "C" __global__ void mathblocks_geometry(
                 }
                 else
                 {
-                    for (int index = 0; index < unique_count; index++)
+                    for (int index = 0; index < unique_count; csharp2cuda_i32_post_increment(index))
                     {
                         while (count >= 2 && mathblocks_geometry_cross(
-                            hull[2 * (count - 2)], hull[2 * (count - 2) + 1],
-                            hull[2 * (count - 1)], hull[2 * (count - 1) + 1],
-                            sorted[2 * index], sorted[2 * index + 1]) <= 0.0)
+                            hull[csharp2cuda_i32_mul(2, (csharp2cuda_i32_sub(count, 2)))], hull[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, (csharp2cuda_i32_sub(count, 2))), 1)],
+                            hull[csharp2cuda_i32_mul(2, (csharp2cuda_i32_sub(count, 1)))], hull[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, (csharp2cuda_i32_sub(count, 1))), 1)],
+                            sorted[csharp2cuda_i32_mul(2, index)], sorted[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, index), 1)]) <= 0.0)
                         {
-                            count--;
+                            csharp2cuda_i32_post_decrement(count);
                         }
-                        hull[2 * count] = sorted[2 * index];
-                        hull[2 * count + 1] = sorted[2 * index + 1];
-                        count++;
+                        hull[csharp2cuda_i32_mul(2, count)] = sorted[csharp2cuda_i32_mul(2, index)];
+                        hull[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, count), 1)] = sorted[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, index), 1)];
+                        csharp2cuda_i32_post_increment(count);
                     }
                     int lower_count = count;
-                    for (int index = unique_count - 2; index >= 0; index--)
+                    for (int index = csharp2cuda_i32_sub(unique_count, 2); index >= 0; csharp2cuda_i32_post_decrement(index))
                     {
                         while (count > lower_count && mathblocks_geometry_cross(
-                            hull[2 * (count - 2)], hull[2 * (count - 2) + 1],
-                            hull[2 * (count - 1)], hull[2 * (count - 1) + 1],
-                            sorted[2 * index], sorted[2 * index + 1]) <= 0.0)
+                            hull[csharp2cuda_i32_mul(2, (csharp2cuda_i32_sub(count, 2)))], hull[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, (csharp2cuda_i32_sub(count, 2))), 1)],
+                            hull[csharp2cuda_i32_mul(2, (csharp2cuda_i32_sub(count, 1)))], hull[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, (csharp2cuda_i32_sub(count, 1))), 1)],
+                            sorted[csharp2cuda_i32_mul(2, index)], sorted[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, index), 1)]) <= 0.0)
                         {
-                            count--;
+                            csharp2cuda_i32_post_decrement(count);
                         }
-                        hull[2 * count] = sorted[2 * index];
-                        hull[2 * count + 1] = sorted[2 * index + 1];
-                        count++;
+                        hull[csharp2cuda_i32_mul(2, count)] = sorted[csharp2cuda_i32_mul(2, index)];
+                        hull[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, count), 1)] = sorted[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, index), 1)];
+                        csharp2cuda_i32_post_increment(count);
                     }
-                    count--;
+                    csharp2cuda_i32_post_decrement(count);
                 }
                 output->rows = count;
                 output->count = count;
@@ -386,7 +739,7 @@ extern "C" __global__ void mathblocks_geometry(
                     output->valid = 0;
                     break;
                 }
-                for (int index = 0; index < count * 2; index++)
+                for (int index = 0; index < csharp2cuda_i32_mul(count, 2); csharp2cuda_i32_post_increment(index))
                     result[index] = hull[index];
                 break;
             }
@@ -399,14 +752,14 @@ extern "C" __global__ void mathblocks_geometry(
             {
                 int count = first->count;
                 int* adjacency = (int*)scratch;
-                int* ordered = adjacency + count * count;
-                for (int index = 0; index < count * count; index++)
+                int* ordered = csharp2cuda_pointer_add(adjacency, csharp2cuda_i32_mul(count, count));
+                for (int index = 0; index < csharp2cuda_i32_mul(count, count); csharp2cuda_i32_post_increment(index))
                     adjacency[index] = 0;
-                for (int first_index = 0; first_index < count; first_index++)
+                for (int first_index = 0; first_index < count; csharp2cuda_i32_post_increment(first_index))
                 {
-                    for (int second_index = first_index + 1; second_index < count; second_index++)
+                    for (int second_index = csharp2cuda_i32_add(first_index, 1); second_index < count; csharp2cuda_i32_post_increment(second_index))
                     {
-                        for (int third_index = second_index + 1; third_index < count; third_index++)
+                        for (int third_index = csharp2cuda_i32_add(second_index, 1); third_index < count; csharp2cuda_i32_post_increment(third_index))
                         {
                             double center_x;
                             double center_y;
@@ -418,12 +771,12 @@ extern "C" __global__ void mathblocks_geometry(
                                 continue;
                             }
                             bool empty = true;
-                            for (int index = 0; index < count; index++)
+                            for (int index = 0; index < count; csharp2cuda_i32_post_increment(index))
                             {
                                 if (index == first_index || index == second_index || index == third_index)
                                     continue;
-                                double x = a[2 * index] - center_x;
-                                double y = a[2 * index + 1] - center_y;
+                                double x = a[csharp2cuda_i32_mul(2, index)] - center_x;
+                                double y = a[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, index), 1)] - center_y;
                                 if (x * x + y * y < radius_square)
                                 {
                                     empty = false;
@@ -432,50 +785,50 @@ extern "C" __global__ void mathblocks_geometry(
                             }
                             if (!empty)
                                 continue;
-                            adjacency[first_index * count + second_index] = 1;
-                            adjacency[first_index * count + third_index] = 1;
-                            adjacency[second_index * count + third_index] = 1;
+                            adjacency[csharp2cuda_i32_add(csharp2cuda_i32_mul(first_index, count), second_index)] = 1;
+                            adjacency[csharp2cuda_i32_add(csharp2cuda_i32_mul(first_index, count), third_index)] = 1;
+                            adjacency[csharp2cuda_i32_add(csharp2cuda_i32_mul(second_index, count), third_index)] = 1;
                         }
                     }
                 }
                 int edge_count = 0;
-                for (int left = 0; left < count; left++)
-                    for (int right = left + 1; right < count; right++)
-                        edge_count += adjacency[left * count + right];
+                for (int left = 0; left < count; csharp2cuda_i32_post_increment(left))
+                    for (int right = csharp2cuda_i32_add(left, 1); right < count; csharp2cuda_i32_post_increment(right))
+                        csharp2cuda_i32_add_assign(edge_count, adjacency[csharp2cuda_i32_add(csharp2cuda_i32_mul(left, count), right)]);
                 if (edge_count == 0)
                 {
                     mathblocks_geometry_sort_indices(a, count, ordered);
-                    for (int index = 1; index < count; index++)
+                    for (int index = 1; index < count; csharp2cuda_i32_post_increment(index))
                     {
-                        int left = ordered[index - 1] < ordered[index]
-                            ? ordered[index - 1]
+                        int left = ordered[csharp2cuda_i32_sub(index, 1)] < ordered[index]
+                            ? ordered[csharp2cuda_i32_sub(index, 1)]
                             : ordered[index];
-                        int right = ordered[index - 1] < ordered[index]
+                        int right = ordered[csharp2cuda_i32_sub(index, 1)] < ordered[index]
                             ? ordered[index]
-                            : ordered[index - 1];
-                        adjacency[left * count + right] = 1;
+                            : ordered[csharp2cuda_i32_sub(index, 1)];
+                        adjacency[csharp2cuda_i32_add(csharp2cuda_i32_mul(left, count), right)] = 1;
                     }
                 }
                 MathBlockGeometryEdge* edges = (MathBlockGeometryEdge*)output->data_pointer;
                 edge_count = 0;
-                for (int left = 0; left < count; left++)
+                for (int left = 0; left < count; csharp2cuda_i32_post_increment(left))
                 {
-                    for (int right = left + 1; right < count; right++)
+                    for (int right = csharp2cuda_i32_add(left, 1); right < count; csharp2cuda_i32_post_increment(right))
                     {
-                        if (!adjacency[left * count + right])
+                        if (!((adjacency[csharp2cuda_i32_add(csharp2cuda_i32_mul(left, count), right)])!=0))
                             continue;
                         if (edge_count >= output->capacity)
                         {
                             output->count = output->capacity == 2147483647
                                 ? -1
-                                : output->capacity + 1;
+                                : csharp2cuda_i32_add(output->capacity, 1);
                             output->valid = 0;
                             break;
                         }
                         edges[edge_count].from = left;
                         edges[edge_count].to = right;
                         edges[edge_count].weight = mathblocks_geometry_distance(a, left, a, right);
-                        edge_count++;
+                        csharp2cuda_i32_post_increment(edge_count);
                     }
                 }
                 output->rows = count;
@@ -491,8 +844,8 @@ extern "C" __global__ void mathblocks_geometry(
                 }
             {
                 double maximum = 0.0;
-                for (int left = 0; left < first->count; left++)
-                    for (int right = left + 1; right < first->count; right++)
+                for (int left = 0; left < first->count; csharp2cuda_i32_post_increment(left))
+                    for (int right = csharp2cuda_i32_add(left, 1); right < first->count; csharp2cuda_i32_post_increment(right))
                     {
                         double distance = mathblocks_geometry_distance(a, left, a, right);
                         maximum = maximum > distance ? maximum : distance;
@@ -507,34 +860,34 @@ extern "C" __global__ void mathblocks_geometry(
                     break;
                 }
             {
-                for (int left = 0; left < first->count; left++)
+                for (int left = 0; left < first->count; csharp2cuda_i32_post_increment(left))
                 {
-                    for (int right = 0; right < second->count; right++)
+                    for (int right = 0; right < second->count; csharp2cuda_i32_post_increment(right))
                     {
                         double distance = mathblocks_geometry_distance(a, left, b, right);
-                        int target = left * second->count + right;
+                        int target = csharp2cuda_i32_add(csharp2cuda_i32_mul(left, second->count), right);
                         if (left == 0 && right == 0)
                             scratch[0] = distance;
                         else if (left == 0)
-                            scratch[right] = scratch[right - 1] > distance
-                                ? scratch[right - 1]
+                            scratch[right] = scratch[csharp2cuda_i32_sub(right, 1)] > distance
+                                ? scratch[csharp2cuda_i32_sub(right, 1)]
                                 : distance;
                         else if (right == 0)
-                            scratch[left * second->count] = scratch[(left - 1) * second->count] > distance
-                                ? scratch[(left - 1) * second->count]
+                            scratch[csharp2cuda_i32_mul(left, second->count)] = scratch[csharp2cuda_i32_mul((csharp2cuda_i32_sub(left, 1)), second->count)] > distance
+                                ? scratch[csharp2cuda_i32_mul((csharp2cuda_i32_sub(left, 1)), second->count)]
                                 : distance;
                         else
                         {
-                            double preceding = scratch[(left - 1) * second->count + right];
-                            double candidate = scratch[(left - 1) * second->count + right - 1];
+                            double preceding = scratch[csharp2cuda_i32_add(csharp2cuda_i32_mul((csharp2cuda_i32_sub(left, 1)), second->count), right)];
+                            double candidate = scratch[csharp2cuda_i32_sub(csharp2cuda_i32_add(csharp2cuda_i32_mul((csharp2cuda_i32_sub(left, 1)), second->count), right), 1)];
                             preceding = preceding < candidate ? preceding : candidate;
-                            candidate = scratch[left * second->count + right - 1];
+                            candidate = scratch[csharp2cuda_i32_sub(csharp2cuda_i32_add(csharp2cuda_i32_mul(left, second->count), right), 1)];
                             preceding = preceding < candidate ? preceding : candidate;
                             scratch[target] = preceding > distance ? preceding : distance;
                         }
                     }
                 }
-                output->scalar_value = scratch[first->count * second->count - 1];
+                output->scalar_value = scratch[csharp2cuda_i32_sub(csharp2cuda_i32_mul(first->count, second->count), 1)];
                 break;
             }
             case 8:
@@ -551,7 +904,7 @@ extern "C" __global__ void mathblocks_geometry(
                 }
             {
                 double affinity = 0.0;
-                for (int index = 0; index < first->count; index++)
+                for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
                     affinity += mathblocks_square_root(a[index] * b[index]);
                 affinity = affinity < -1.0 ? -1.0 : affinity > 1.0 ? 1.0 : affinity;
                 output->scalar_value = 2.0 * mathblocks_arc_cosine(affinity);
@@ -566,19 +919,19 @@ extern "C" __global__ void mathblocks_geometry(
             {
                 MathBlockGeometryEdge* edges = (MathBlockGeometryEdge*)output->data_pointer;
                 int edge_count = 0;
-                for (int left = 0; left < first->count; left++)
+                for (int left = 0; left < first->count; csharp2cuda_i32_post_increment(left))
                 {
-                    for (int right = left + 1; right < first->count; right++)
+                    for (int right = csharp2cuda_i32_add(left, 1); right < first->count; csharp2cuda_i32_post_increment(right))
                     {
-                        double center_x = (a[2 * left] + a[2 * right]) / 2.0;
-                        double center_y = (a[2 * left + 1] + a[2 * right + 1]) / 2.0;
+                        double center_x = (a[csharp2cuda_i32_mul(2, left)] + a[csharp2cuda_i32_mul(2, right)]) / 2.0;
+                        double center_y = (a[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, left), 1)] + a[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, right), 1)]) / 2.0;
                         double radius = mathblocks_geometry_distance(a, left, a, right) / 2.0;
                         bool empty = true;
-                        for (int index = 0; index < first->count; index++)
+                        for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
                         {
                             if (index != left && index != right &&
                                 mathblocks_geometry_distance_coordinates(
-                                    a[2 * index], a[2 * index + 1], center_x, center_y) < radius)
+                                    a[csharp2cuda_i32_mul(2, index)], a[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, index), 1)], center_x, center_y) < radius)
                             {
                                 empty = false;
                                 break;
@@ -590,14 +943,14 @@ extern "C" __global__ void mathblocks_geometry(
                         {
                             output->count = output->capacity == 2147483647
                                 ? -1
-                                : output->capacity + 1;
+                                : csharp2cuda_i32_add(output->capacity, 1);
                             output->valid = 0;
                             break;
                         }
                         edges[edge_count].from = left;
                         edges[edge_count].to = right;
                         edges[edge_count].weight = 2.0 * radius;
-                        edge_count++;
+                        csharp2cuda_i32_post_increment(edge_count);
                     }
                 }
                 output->rows = first->count;
@@ -616,14 +969,14 @@ extern "C" __global__ void mathblocks_geometry(
                 double point_y = b[1];
                 int coincident = 0;
                 int vector_count = 0;
-                for (int index = 0; index < first->count; index++)
+                for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
                 {
-                    double x = a[2 * index] - point_x;
-                    double y = a[2 * index + 1] - point_y;
+                    double x = a[csharp2cuda_i32_mul(2, index)] - point_x;
+                    double y = a[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, index), 1)] - point_y;
                     if (x == 0.0 && y == 0.0)
-                        coincident++;
+                        csharp2cuda_i32_post_increment(coincident);
                     else
-                        vector_count++;
+                        csharp2cuda_i32_post_increment(vector_count);
                 }
                 if (vector_count == 0)
                 {
@@ -631,27 +984,27 @@ extern "C" __global__ void mathblocks_geometry(
                     break;
                 }
                 int maximum = 0;
-                for (int pivot = 0; pivot < first->count; pivot++)
+                for (int pivot = 0; pivot < first->count; csharp2cuda_i32_post_increment(pivot))
                 {
-                    double pivot_x = a[2 * pivot] - point_x;
-                    double pivot_y = a[2 * pivot + 1] - point_y;
+                    double pivot_x = a[csharp2cuda_i32_mul(2, pivot)] - point_x;
+                    double pivot_y = a[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, pivot), 1)] - point_y;
                     if (pivot_x == 0.0 && pivot_y == 0.0)
                         continue;
                     int count = 0;
-                    for (int index = 0; index < first->count; index++)
+                    for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
                     {
-                        double x = a[2 * index] - point_x;
-                        double y = a[2 * index + 1] - point_y;
+                        double x = a[csharp2cuda_i32_mul(2, index)] - point_x;
+                        double y = a[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, index), 1)] - point_y;
                         if (x == 0.0 && y == 0.0)
                             continue;
                         double cross = pivot_x * y - pivot_y * x;
                         double dot = pivot_x * x + pivot_y * y;
                         if (cross > 0.0 || (cross == 0.0 && dot > 0.0))
-                            count++;
+                            csharp2cuda_i32_post_increment(count);
                     }
                     maximum = maximum > count ? maximum : count;
                 }
-                output->scalar_value = (double)(coincident + vector_count - maximum) /
+                output->scalar_value = (double)(csharp2cuda_i32_sub(csharp2cuda_i32_add(coincident, vector_count), maximum)) /
                     first->count;
                 break;
             }
@@ -663,10 +1016,10 @@ extern "C" __global__ void mathblocks_geometry(
                 }
             {
                 double directed_left = 0.0;
-                for (int left = 0; left < first->count; left++)
+                for (int left = 0; left < first->count; csharp2cuda_i32_post_increment(left))
                 {
                     double minimum = mathblocks_positive_infinity();
-                    for (int right = 0; right < second->count; right++)
+                    for (int right = 0; right < second->count; csharp2cuda_i32_post_increment(right))
                     {
                         double distance = mathblocks_geometry_distance(a, left, b, right);
                         minimum = minimum < distance ? minimum : distance;
@@ -674,10 +1027,10 @@ extern "C" __global__ void mathblocks_geometry(
                     directed_left = directed_left > minimum ? directed_left : minimum;
                 }
                 double directed_right = 0.0;
-                for (int right = 0; right < second->count; right++)
+                for (int right = 0; right < second->count; csharp2cuda_i32_post_increment(right))
                 {
                     double minimum = mathblocks_positive_infinity();
-                    for (int left = 0; left < first->count; left++)
+                    for (int left = 0; left < first->count; csharp2cuda_i32_post_increment(left))
                     {
                         double distance = mathblocks_geometry_distance(b, right, a, left);
                         minimum = minimum < distance ? minimum : distance;
@@ -699,10 +1052,10 @@ extern "C" __global__ void mathblocks_geometry(
             {
                 double total = 0.0;
                 int start = opcode == 13 ? 1 : 0;
-                for (int index = start; index < first->count; index++)
+                for (int index = start; index < first->count; csharp2cuda_i32_post_increment(index))
                 {
-                    int previous = opcode == 13 ? index - 1 : index;
-                    int next = opcode == 13 ? index : (index + 1) % first->count;
+                    int previous = opcode == 13 ? csharp2cuda_i32_sub(index, 1) : index;
+                    int next = opcode == 13 ? index : csharp2cuda_i32_rem((csharp2cuda_i32_add(index, 1)), first->count);
                     total += mathblocks_geometry_distance(a, previous, a, next);
                 }
                 output->scalar_value = total;
@@ -726,11 +1079,11 @@ extern "C" __global__ void mathblocks_geometry(
                 }
             {
                 double twice_area = 0.0;
-                for (int index = 0; index < first->count; index++)
+                for (int index = 0; index < first->count; csharp2cuda_i32_post_increment(index))
                 {
-                    int next = (index + 1) % first->count;
-                    twice_area += a[2 * index] * a[2 * next + 1] -
-                                  a[2 * next] * a[2 * index + 1];
+                    int next = csharp2cuda_i32_rem((csharp2cuda_i32_add(index, 1)), first->count);
+                    twice_area += a[csharp2cuda_i32_mul(2, index)] * a[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, next), 1)] -
+                                  a[csharp2cuda_i32_mul(2, next)] * a[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, index), 1)];
                 }
                 output->scalar_value = opcode == 16 ? fabs(twice_area / 2.0) : twice_area / 2.0;
                 break;
@@ -745,22 +1098,22 @@ extern "C" __global__ void mathblocks_geometry(
                 int containing = 0;
                 int total = 0;
                 double coordinates[3];
-                for (int one = 0; one < first->count; one++)
-                    for (int two = one + 1; two < first->count; two++)
-                        for (int three = two + 1; three < first->count; three++)
+                for (int one = 0; one < first->count; csharp2cuda_i32_post_increment(one))
+                    for (int two = csharp2cuda_i32_add(one, 1); two < first->count; csharp2cuda_i32_post_increment(two))
+                        for (int three = csharp2cuda_i32_add(two, 1); three < first->count; csharp2cuda_i32_post_increment(three))
                         {
-                            total++;
+                            csharp2cuda_i32_post_increment(total);
                             mathblocks_geometry_barycentric(
                                 b[0], b[1],
-                                a[2 * one], a[2 * one + 1],
-                                a[2 * two], a[2 * two + 1],
-                                a[2 * three], a[2 * three + 1],
+                                a[csharp2cuda_i32_mul(2, one)], a[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, one), 1)],
+                                a[csharp2cuda_i32_mul(2, two)], a[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, two), 1)],
+                                a[csharp2cuda_i32_mul(2, three)], a[csharp2cuda_i32_add(csharp2cuda_i32_mul(2, three), 1)],
                                 coordinates);
                             if (coordinates[0] >= 0.0 && coordinates[0] <= 1.0 &&
                                 coordinates[1] >= 0.0 && coordinates[1] <= 1.0 &&
                                 coordinates[2] >= 0.0 && coordinates[2] <= 1.0)
                             {
-                                containing++;
+                                csharp2cuda_i32_post_increment(containing);
                             }
                         }
                 output->scalar_value = (double)containing / total;
@@ -774,7 +1127,7 @@ extern "C" __global__ void mathblocks_geometry(
                     output->valid = 0;
                     break;
                 }
-                for (int index = 0; index < first->rows * 2; index++)
+                for (int index = 0; index < csharp2cuda_i32_mul(first->rows, 2); csharp2cuda_i32_post_increment(index))
                     result[index] = a[index];
                 break;
             case 20:
@@ -784,7 +1137,7 @@ extern "C" __global__ void mathblocks_geometry(
                     output->valid = 0;
                     break;
                 }
-                for (int index = 0; index < first->count * 2; index++)
+                for (int index = 0; index < csharp2cuda_i32_mul(first->count, 2); csharp2cuda_i32_post_increment(index))
                     result[index] = a[index];
                 break;
             case 21:
@@ -800,37 +1153,37 @@ extern "C" __global__ void mathblocks_geometry(
                 }
             {
                 int vertex_count = first->count;
-                int edge_capacity = vertex_count * (vertex_count - 1) / 2;
+                int edge_capacity = csharp2cuda_i32_div(csharp2cuda_i32_mul(vertex_count, (csharp2cuda_i32_sub(vertex_count, 1))), 2);
                 MathBlockGeometryEdge* edges = (MathBlockGeometryEdge*)scratch;
                 int edge_count = 0;
-                for (int left = 0; left < vertex_count; left++)
-                    for (int right = left + 1; right < vertex_count; right++)
+                for (int left = 0; left < vertex_count; csharp2cuda_i32_post_increment(left))
+                    for (int right = csharp2cuda_i32_add(left, 1); right < vertex_count; csharp2cuda_i32_post_increment(right))
                     {
                         edges[edge_count].from = left;
                         edges[edge_count].to = right;
                         edges[edge_count].weight = mathblocks_geometry_distance(a, left, a, right);
-                        edge_count++;
+                        csharp2cuda_i32_post_increment(edge_count);
                     }
-                for (int index = 1; index < edge_count; index++)
+                for (int index = 1; index < edge_count; csharp2cuda_i32_post_increment(index))
                 {
                     MathBlockGeometryEdge value = edges[index];
                     int position = index;
-                    while (position > 0 && mathblocks_geometry_edge_less(value, edges[position - 1]))
+                    while (position > 0 && mathblocks_geometry_edge_less(value, edges[csharp2cuda_i32_sub(position, 1)]))
                     {
-                        edges[position] = edges[position - 1];
-                        position--;
+                        edges[position] = edges[csharp2cuda_i32_sub(position, 1)];
+                        csharp2cuda_i32_post_decrement(position);
                     }
                     edges[position] = value;
                 }
-                int* parent = (int*)(edges + edge_capacity);
-                unsigned char* rank = (unsigned char*)(parent + vertex_count);
-                for (int index = 0; index < vertex_count; index++)
+                int* parent = (int*)(csharp2cuda_pointer_add(edges, edge_capacity));
+                unsigned char* rank = (unsigned char*)(csharp2cuda_pointer_add(parent, vertex_count));
+                for (int index = 0; index < vertex_count; csharp2cuda_i32_post_increment(index))
                 {
                     parent[index] = index;
                     rank[index] = 0;
                 }
                 int selected = 0;
-                for (int index = 0; index < edge_count && selected < vertex_count - 1; index++)
+                for (int index = 0; index < edge_count && selected < csharp2cuda_i32_sub(vertex_count, 1); csharp2cuda_i32_post_increment(index))
                 {
                     int left = mathblocks_geometry_find(parent, edges[index].from);
                     int right = mathblocks_geometry_find(parent, edges[index].to);
@@ -845,7 +1198,7 @@ extern "C" __global__ void mathblocks_geometry(
                         parent[right] = left;
                         rank[left]++;
                     }
-                    result[selected++] = edges[index].weight;
+                    result[csharp2cuda_i32_post_increment(selected)] = edges[index].weight;
                 }
                 mathblocks_sequence_set_vector_shape(output, selected);
                 break;
