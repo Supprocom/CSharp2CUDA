@@ -40,3 +40,19 @@ if (!result.Succeeded)
 
 string cudaSource = result.Source;
 ```
+
+## Build and test
+
+Open `CSharp2CUDA.slnx` in Visual Studio 2026. You can also run
+`dotnet test CSharp2CUDA.slnx -c Release` from the repository root.
+
+Package creation requires `RepositoryCommit` and `RepositoryBranch` MSBuild properties.
+These properties bind package metadata to the reviewed Git source.
+
+## License
+
+CSharp2CUDA is licensed under `AGPL-3.0-only`. See [LICENSE.md](LICENSE.md) for
+the complete license text.
+
+Contributions use the terms in [.github/CONTRIBUTING.md](.github/CONTRIBUTING.md).
+See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for dependency license identities.

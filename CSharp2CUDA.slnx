@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="CSharp2CUDA.Tests/CSharp2CUDA.Tests.csproj" />
+  <Project Path="CSharp2CUDA/CSharp2CUDA.csproj" />
+</Solution>
