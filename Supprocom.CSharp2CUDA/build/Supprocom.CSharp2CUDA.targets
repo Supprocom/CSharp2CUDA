@@ -13,6 +13,7 @@
   <PropertyGroup>
     <_SupprocomCSharp2CUDATaskAssembly>$(MSBuildThisFileDirectory)task/Supprocom.CSharp2CUDA.Build.dll</_SupprocomCSharp2CUDATaskAssembly>
     <_SupprocomCSharp2CUDACompilerAssembly>$(MSBuildThisFileDirectory)compiler/Supprocom.CSharp2CUDA.Compiler.dll</_SupprocomCSharp2CUDACompilerAssembly>
+    <_SupprocomCSharp2CUDACompilerCoreAssembly>$(MSBuildThisFileDirectory)compiler/Supprocom.CSharp2CUDA.dll</_SupprocomCSharp2CUDACompilerCoreAssembly>
     <SupprocomCSharp2CUDAEnabled>true</SupprocomCSharp2CUDAEnabled>
     <_SupprocomCSharp2CUDAManifest Condition="$([System.IO.Path]::IsPathRooted('$(IntermediateOutputPath)'))">$([System.IO.Path]::Combine('$(IntermediateOutputPath)', 'Supprocom.CSharp2CUDA.outputs'))</_SupprocomCSharp2CUDAManifest>
     <_SupprocomCSharp2CUDAManifest Condition="!$([System.IO.Path]::IsPathRooted('$(IntermediateOutputPath)'))">$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'Supprocom.CSharp2CUDA.outputs'))</_SupprocomCSharp2CUDAManifest>
@@ -22,6 +23,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Analyzer Include="$(_SupprocomCSharp2CUDACompilerCoreAssembly)" />
     <Analyzer Include="$(_SupprocomCSharp2CUDACompilerAssembly)" />
     <CompilerVisibleProperty Include="SupprocomCSharp2CUDAEnabled" />
     <CompilerVisibleProperty Include="SupprocomCSharp2CUDAIntermediatePayloadPath" />
