@@ -73,7 +73,9 @@ The generated source contains a `__device__` function for `Add` and an `extern "
 
 ## Source model
 
-A translation unit is a static, non-generic class marked with `CudaTranslationUnitAttribute`. The class can contain CUDA structs and static methods. Unsupported members produce diagnostics.
+A translation unit is a static, non-generic class marked with `CudaTranslationUnitAttribute`. The class can contain CUDA structs, constant arrays, and static methods.
+
+Mark a static read-only `int` array with `CudaConstantAttribute`. Each element must have a compile-time value, and the array cannot be empty.
 
 A struct becomes a CUDA `struct`. Its fields must have supported types and must not be static, constant, read-only, volatile, initialized, or decorated with extra attributes.
 
@@ -85,13 +87,37 @@ All emitted identifiers must start with an ASCII letter and use only ASCII lette
 
 ## CUDA surface
 
-The `Cuda` type supplies source-level bindings for CUDA dimensions, barriers, atomics, and explicit conversion markers. Dimension, barrier, and atomic members throw if managed code executes them. The conversion helpers also provide managed C# behavior for Roslyn binding.
+The `Cuda` type supplies typed bindings for CUDA dimensions, storage, synchronization, atomics, exact operations, math calls, and explicit conversions.
 
-`Cuda.ThreadIdx`, `Cuda.BlockIdx`, `Cuda.BlockDim`, and `Cuda.GridDim` provide the `X`, `Y`, and `Z` dimensions. `Cuda.SyncThreads` emits `__syncthreads`. `Cuda.AtomicAdd` and `Cuda.AtomicExchange` emit CUDA atomic functions.
+Storage, synchronization, and atomic members throw if managed code executes them. Math and conversion members provide managed behavior for Roslyn binding and parity tests.
+
+`Cuda.ThreadIdx`, `Cuda.BlockIdx`, `Cuda.BlockDim`, and `Cuda.GridDim` provide the `X`, `Y`, and `Z` dimensions. `Cuda.SyncThreads` emits `__syncthreads`.
+
+Use `Cuda.Shared<T>` for a shared scalar. Use `Cuda.SharedArray<T>` for a fixed shared array with a positive compile-time length.
+
+Use `Cuda.DynamicSharedBytes` once in a kernel for launch-sized storage. Its alignment must be `1`, `2`, `4`, `8`, or `16`.
+
+Use `Cuda.DynamicSharedView<T>` to create an aligned pointer view. Its offset counts `T` elements, which keeps every accepted view naturally aligned.
+
+Shared storage supports `int`, `uint`, `long`, `ulong`, and `double`. Shared declarations are valid only inside global functions.
+
+`Cuda.ThreadFence` and `Cuda.ThreadFenceSystem` emit the device and system fence intrinsics. `Cuda.NanoSleep` emits `__nanosleep`.
+
+`Cuda.SyncWarp` accepts no mask or a nonzero compile-time `uint` mask. `Cuda.ShuffleDownSync` requires an explicit mask and valid compile-time width.
+
+`Cuda.AtomicAdd`, `Cuda.AtomicExchange`, `Cuda.AtomicCompareExchange`, `Cuda.AtomicXor`, and `Cuda.AtomicMin` support `int`, `uint`, `long`, and `ulong` locations.
+
+Use the atomic add operation with zero for an atomic read. Unsupported atomic types produce `CS2CUDA019`.
 
 `Cuda.Bool` converts an integer to a nonzero test. `Cuda.Int` converts a Boolean value to `0` or `1`. `Cuda.Unsigned` converts a signed `long` value to `unsigned long long` before an unsigned operation.
 
-Use `Cuda.FloatingRemainder` for floating-point remainder. Use `Cuda.NearbyInteger` and `Cuda.SignBit` for the supported CUDA math mappings.
+Use `Cuda.FloatingRemainder` for floating-point remainder. Use `Cuda.NearbyInteger` and `Cuda.SignBit` for the original CUDA math mappings.
+
+`Cuda.DoubleAddRoundNearest`, `Cuda.DoubleSubtractRoundNearest`, `Cuda.DoubleMultiplyRoundNearest`, and `Cuda.DoubleDivideRoundNearest` emit exact round-to-nearest intrinsics.
+
+These calls keep explicit operation boundaries. CUDA compilation cannot contract them into a multiply-add instruction.
+
+`Cuda.Log1p`, `Cuda.Sqrt`, `Cuda.Exp`, `Cuda.Pow`, and `Cuda.NaN` emit package-owned named CUDA math calls.
 
 Use `Cuda.ReadOnly` for a local pointer value that must be read-only through the expression tree. Use `CudaReadOnlyAttribute` on a pointer parameter when the external contract guarantees deep read-only access.
 
@@ -146,7 +172,11 @@ Run the test suite from the repository root.
 dotnet test CSharp2CUDA.slnx -c Release
 ```
 
-The compatibility suite translates complete C# catalog files and compares the output with exact CUDA golden files. Focused tests cover diagnostics, identifier rules, runtime mappings, declaration ordering, integer behavior, CUDA intrinsics, and evaluation order.
+The compatibility suite translates complete C# catalog files and compares the output with exact CUDA golden files.
+
+Focused tests cover diagnostics, identifiers, declarations, integer behavior, storage, synchronization, atomics, math, and evaluation order.
+
+CUDA-capable test machines also compile the generated module with NVRTC. Real-device tests verify storage, contention, fences, warp masks, constants, and exact bits.
 
 Create a package after setting the repository provenance properties.
 

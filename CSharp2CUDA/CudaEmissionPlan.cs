@@ -8,6 +8,7 @@ namespace CSharp2CUDA;
 internal sealed class CudaEmissionPlan
 {
     internal const string ExternalAttributeName = "CSharp2CUDA.CudaExternalAttribute";
+    internal const string ConstantAttributeName = "CSharp2CUDA.CudaConstantAttribute";
     internal const string DeviceAttributeName = "CSharp2CUDA.CudaDeviceAttribute";
     internal const string GlobalAttributeName = "CSharp2CUDA.CudaGlobalAttribute";
     internal const string ReadOnlyAttributeName = "CSharp2CUDA.CudaReadOnlyAttribute";
@@ -69,6 +70,25 @@ internal sealed class CudaEmissionPlan
         SyntaxKind.ProtectedKeyword
     ];
 
+    private static readonly HashSet<SyntaxKind> ConstantFieldModifiers =
+    [
+        SyntaxKind.InternalKeyword,
+        SyntaxKind.PrivateKeyword,
+        SyntaxKind.PublicKeyword,
+        SyntaxKind.ProtectedKeyword,
+        SyntaxKind.ReadOnlyKeyword,
+        SyntaxKind.StaticKeyword
+    ];
+
+    private static readonly HashSet<SpecialType> StorageElementTypes =
+    [
+        SpecialType.System_Int32,
+        SpecialType.System_UInt32,
+        SpecialType.System_Int64,
+        SpecialType.System_UInt64,
+        SpecialType.System_Double
+    ];
+
     private readonly CSharpCompilation compilation;
     private readonly ImmutableArray<Diagnostic>.Builder diagnostics;
     private readonly Dictionary<ISymbol, string> identifierNames =
@@ -78,6 +98,13 @@ internal sealed class CudaEmissionPlan
     private readonly Dictionary<INamedTypeSymbol, CudaStructPlan> structPlans =
         new(SymbolEqualityComparer.Default);
     private readonly HashSet<LocalDeclarationStatementSyntax> fixedLocalArrays = [];
+    private readonly HashSet<LocalDeclarationStatementSyntax> recognizedStorageDeclarations = [];
+    private readonly Dictionary<LocalDeclarationStatementSyntax, CudaStoragePlan>
+        storageDeclarations = [];
+    private readonly Dictionary<ILocalSymbol, CudaStoragePlan> dynamicSharedStorage =
+        new(SymbolEqualityComparer.Default);
+    private readonly Dictionary<IFieldSymbol, CudaConstantArrayPlan> constantArrayPlans =
+        new(SymbolEqualityComparer.Default);
     private readonly HashSet<IMethodSymbol> pureFunctions =
         new(SymbolEqualityComparer.Default);
     private readonly Dictionary<BinaryExpressionSyntax, string> binaryHelpers = [];
@@ -107,6 +134,8 @@ internal sealed class CudaEmissionPlan
     public ImmutableArray<CudaStructPlan> Structs { get; private set; } = [];
 
     public ImmutableArray<CudaFunctionPlan> Functions { get; private set; } = [];
+
+    public ImmutableArray<CudaConstantArrayPlan> ConstantArrays { get; private set; } = [];
 
     public static CudaEmissionPlan Create(
         CSharpCompilation compilation,
@@ -140,6 +169,44 @@ internal sealed class CudaEmissionPlan
 
     public bool IsFixedLocalArray(LocalDeclarationStatementSyntax declaration) =>
         fixedLocalArrays.Contains(declaration);
+
+    public bool IsRecognizedStorageDeclaration(LocalDeclarationStatementSyntax declaration) =>
+        recognizedStorageDeclarations.Contains(declaration);
+
+    public bool TryGetStorageDeclaration(
+        LocalDeclarationStatementSyntax declaration,
+        out CudaStoragePlan storage) => storageDeclarations.TryGetValue(declaration, out storage!);
+
+    public bool IsStorageInvocation(InvocationExpressionSyntax invocation) =>
+        invocation.Ancestors().OfType<LocalDeclarationStatementSyntax>().FirstOrDefault() is
+        { } declaration &&
+        recognizedStorageDeclarations.Contains(declaration) &&
+        declaration.Declaration.Variables.Count == 1 &&
+        declaration.Declaration.Variables[0].Initializer?.Value is { } initializer &&
+        initializer.SyntaxTree == invocation.SyntaxTree &&
+        initializer.Span == invocation.Span;
+
+    public bool TryGetDynamicSharedStorage(ISymbol? symbol, out CudaStoragePlan storage)
+    {
+        if (symbol is ILocalSymbol local && dynamicSharedStorage.TryGetValue(local, out storage!))
+            return true;
+        storage = null!;
+        return false;
+    }
+
+    public bool TryGetConstantArray(IFieldSymbol field, out CudaConstantArrayPlan constant) =>
+        constantArrayPlans.TryGetValue(field, out constant!);
+
+    public static bool IsStorageElementType(ITypeSymbol type) =>
+        StorageElementTypes.Contains(type.SpecialType);
+
+    public static int GetNaturalAlignment(ITypeSymbol type) => type.SpecialType switch
+    {
+        SpecialType.System_Int32 or SpecialType.System_UInt32 => 4,
+        SpecialType.System_Int64 or SpecialType.System_UInt64 or
+            SpecialType.System_Double => 8,
+        _ => 0
+    };
 
     public void PlanBinaryHelper(BinaryExpressionSyntax expression, string helper) =>
         binaryHelpers[expression] = helper;
@@ -195,8 +262,21 @@ internal sealed class CudaEmissionPlan
             return method.Name switch
             {
                 nameof(Cuda.SyncThreads) => new(CudaCallKind.Direct, "__syncthreads"),
-                nameof(Cuda.AtomicAdd) => new(CudaCallKind.Atomic, "atomicAdd"),
-                nameof(Cuda.AtomicExchange) => new(CudaCallKind.Atomic, "atomicExch"),
+                nameof(Cuda.ThreadFence) => new(CudaCallKind.Direct, "__threadfence"),
+                nameof(Cuda.ThreadFenceSystem) =>
+                    new(CudaCallKind.Direct, "__threadfence_system"),
+                nameof(Cuda.SyncWarp) => new(CudaCallKind.Direct, "__syncwarp"),
+                nameof(Cuda.ShuffleDownSync) =>
+                    new(CudaCallKind.Direct, "__shfl_down_sync"),
+                nameof(Cuda.NanoSleep) => new(CudaCallKind.Direct, "__nanosleep"),
+                nameof(Cuda.Shared) or nameof(Cuda.SharedArray) or
+                    nameof(Cuda.DynamicSharedBytes) =>
+                    new(CudaCallKind.Storage, string.Empty),
+                nameof(Cuda.DynamicSharedView) =>
+                    new(CudaCallKind.DynamicSharedView, string.Empty),
+                nameof(Cuda.AtomicAdd) or nameof(Cuda.AtomicExchange) or
+                    nameof(Cuda.AtomicCompareExchange) or nameof(Cuda.AtomicXor) or
+                    nameof(Cuda.AtomicMin) => GetAtomicCallPlan(method),
                 nameof(Cuda.Int) => new(CudaCallKind.BooleanToInteger, string.Empty),
                 nameof(Cuda.Bool) => new(CudaCallKind.IntegerToBoolean, string.Empty),
                 nameof(Cuda.Unsigned) => new(CudaCallKind.SignedToUnsigned, string.Empty),
@@ -204,6 +284,18 @@ internal sealed class CudaEmissionPlan
                 nameof(Cuda.FloatingRemainder) => new(CudaCallKind.Direct, "fmod"),
                 nameof(Cuda.NearbyInteger) => new(CudaCallKind.Direct, "nearbyint"),
                 nameof(Cuda.SignBit) => new(CudaCallKind.Direct, "signbit"),
+                nameof(Cuda.DoubleAddRoundNearest) => new(CudaCallKind.Direct, "__dadd_rn"),
+                nameof(Cuda.DoubleSubtractRoundNearest) =>
+                    new(CudaCallKind.Direct, "__dsub_rn"),
+                nameof(Cuda.DoubleMultiplyRoundNearest) =>
+                    new(CudaCallKind.Direct, "__dmul_rn"),
+                nameof(Cuda.DoubleDivideRoundNearest) =>
+                    new(CudaCallKind.Direct, "__ddiv_rn"),
+                nameof(Cuda.Log1p) => new(CudaCallKind.Direct, "log1p"),
+                nameof(Cuda.Sqrt) => new(CudaCallKind.Direct, "sqrt"),
+                nameof(Cuda.Exp) => new(CudaCallKind.Direct, "exp"),
+                nameof(Cuda.Pow) => new(CudaCallKind.Direct, "pow"),
+                nameof(Cuda.NaN) => new(CudaCallKind.NaN, "nan"),
                 _ => null
             };
         }
@@ -224,9 +316,35 @@ internal sealed class CudaEmissionPlan
                 CudaCallKind.IntegerToBoolean or
                 CudaCallKind.SignedToUnsigned or
                 CudaCallKind.Unwrap or
-                CudaCallKind.Direct) &&
-            call.Name != "__syncthreads";
+                CudaCallKind.DynamicSharedView or
+                CudaCallKind.NaN ||
+                call.Kind == CudaCallKind.Direct && !IsImpureIntrinsic(call.Name));
     }
+
+    private static CudaCallPlan GetAtomicCallPlan(IMethodSymbol method)
+    {
+        if (method.IsGenericMethod)
+            return new(CudaCallKind.InvalidAtomic, method.Name);
+
+        var name = method.Name switch
+        {
+            nameof(Cuda.AtomicAdd) => "atomicAdd",
+            nameof(Cuda.AtomicExchange) => "atomicExch",
+            nameof(Cuda.AtomicCompareExchange) => "atomicCAS",
+            nameof(Cuda.AtomicXor) => "atomicXor",
+            nameof(Cuda.AtomicMin) => "atomicMin",
+            _ => string.Empty
+        };
+        var type = method.Parameters[0].Type;
+        return type.SpecialType == SpecialType.System_Int64 &&
+            method.Name != nameof(Cuda.AtomicMin)
+            ? new(CudaCallKind.SignedInt64Atomic, name)
+            : new(CudaCallKind.Atomic, name);
+    }
+
+    private static bool IsImpureIntrinsic(string name) => name is
+        "__syncthreads" or "__threadfence" or "__threadfence_system" or
+        "__syncwarp" or "__shfl_down_sync" or "__nanosleep";
 
     public bool TryGetDimensionReplacement(
         MemberAccessExpressionSyntax expression,
@@ -343,6 +461,7 @@ internal sealed class CudaEmissionPlan
     {
         var structures = new List<CudaStructPlan>();
         var functions = new List<CudaFunctionPlan>();
+        var constants = new List<CudaConstantArrayPlan>();
 
         foreach (var unit in Units)
         {
@@ -357,6 +476,9 @@ internal sealed class CudaEmissionPlan
                     case MethodDeclarationSyntax method:
                         RegisterFunction(unit, method, functions);
                         break;
+                    case FieldDeclarationSyntax field:
+                        RegisterConstantArray(unit, field, constants);
+                        break;
                     default:
                         diagnostics.Add(Diagnostic.Create(
                             CudaDiagnostics.UnsupportedMember,
@@ -369,6 +491,7 @@ internal sealed class CudaEmissionPlan
 
         Structs = OrderStructs(structures).ToImmutableArray();
         Functions = functions.ToImmutableArray();
+        ConstantArrays = constants.ToImmutableArray();
 
         foreach (var structure in structures)
             ValidateStruct(structure);
@@ -383,6 +506,70 @@ internal sealed class CudaEmissionPlan
             var validator = new CudaSyntaxValidator(this, function.Model, diagnostics);
             validator.Visit(function.Syntax.Body);
         }
+    }
+
+    private void RegisterConstantArray(
+        CudaUnitPlan unit,
+        FieldDeclarationSyntax syntax,
+        ICollection<CudaConstantArrayPlan> constants)
+    {
+        var hasConstantAttribute = syntax.Declaration.Variables
+            .Select(variable => unit.Model.GetDeclaredSymbol(variable))
+            .OfType<IFieldSymbol>()
+            .Any(symbol => HasAttribute(symbol, ConstantAttributeName));
+        if (!hasConstantAttribute)
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.UnsupportedMember,
+                syntax.GetLocation(),
+                syntax.Kind().ToString()));
+            return;
+        }
+
+        if (syntax.Declaration.Variables.Count != 1 ||
+            syntax.Modifiers.Any(modifier => !ConstantFieldModifiers.Contains(modifier.Kind())) ||
+            !syntax.Modifiers.Any(SyntaxKind.StaticKeyword) ||
+            !syntax.Modifiers.Any(SyntaxKind.ReadOnlyKeyword) ||
+            !HasOnlyAttributes(syntax.AttributeLists, ConstantAttributeName))
+        {
+            ReportInvalidStorage(syntax, "device constant array");
+            return;
+        }
+
+        var variable = syntax.Declaration.Variables[0];
+        if (unit.Model.GetDeclaredSymbol(variable) is not IFieldSymbol symbol)
+            return;
+        var name = RegisterIdentifier(
+            symbol,
+            variable.Identifier.ValueText,
+            variable.Identifier.GetLocation());
+
+        if (symbol.Type is not IArrayTypeSymbol
+            {
+                Rank: 1,
+                ElementType.SpecialType: SpecialType.System_Int32
+            })
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InvalidStorageType,
+                syntax.Declaration.Type.GetLocation(),
+                symbol.Type.ToDisplayString(),
+                "device constant array"));
+            return;
+        }
+
+        if (!TryGetConstantValues(variable.Initializer?.Value, unit.Model, out var values))
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InvalidConstantInitializer,
+                variable.Initializer?.GetLocation() ?? variable.GetLocation(),
+                symbol.Name));
+            return;
+        }
+
+        var constant = new CudaConstantArrayPlan(syntax, variable, symbol, name, values);
+        constants.Add(constant);
+        constantArrayPlans[symbol] = constant;
     }
 
     private void ValidateUnit(CudaUnitPlan unit)
@@ -499,8 +686,141 @@ internal sealed class CudaEmissionPlan
             {
                 if (IsValidFixedLocalArray(declaration, unit.Model))
                     fixedLocalArrays.Add(declaration);
+                else
+                    RegisterStorageDeclaration(declaration, function);
             }
         }
+    }
+
+    private void RegisterStorageDeclaration(
+        LocalDeclarationStatementSyntax declaration,
+        CudaFunctionPlan function)
+    {
+        if (declaration.Declaration.Variables.Count != 1 ||
+            declaration.Declaration.Variables[0].Initializer?.Value is not
+                InvocationExpressionSyntax invocation ||
+            function.Model.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method ||
+            method.ContainingType.ToDisplayString() != "CSharp2CUDA.Cuda" ||
+            method.Name is not (nameof(Cuda.Shared) or nameof(Cuda.SharedArray) or
+                nameof(Cuda.DynamicSharedBytes)))
+        {
+            return;
+        }
+
+        recognizedStorageDeclarations.Add(declaration);
+        var variable = declaration.Declaration.Variables[0];
+        if (function.Model.GetDeclaredSymbol(variable) is not ILocalSymbol local)
+            return;
+
+        if (function.Kind != CudaFunctionKind.Global ||
+            declaration.Modifiers.Count != 0 ||
+            declaration.UsingKeyword != default ||
+            declaration.AwaitKeyword != default)
+        {
+            ReportInvalidStorage(declaration, method.Name);
+            return;
+        }
+
+        if (method.Name == nameof(Cuda.DynamicSharedBytes))
+        {
+            RegisterDynamicSharedBytes(declaration, invocation, local, function);
+            return;
+        }
+
+        var elementType = method.TypeArguments.Single();
+        if (!IsStorageElementType(elementType))
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InvalidStorageType,
+                invocation.GetLocation(),
+                elementType.ToDisplayString(),
+                method.Name));
+            return;
+        }
+
+        if (method.Name == nameof(Cuda.Shared))
+        {
+            if (!SymbolEqualityComparer.Default.Equals(local.Type, elementType))
+            {
+                ReportInvalidStorage(declaration, method.Name);
+                return;
+            }
+            storageDeclarations[declaration] = new CudaStoragePlan(
+                declaration,
+                local,
+                CudaStorageKind.SharedScalar,
+                elementType,
+                0,
+                0);
+            return;
+        }
+
+        if (local.Type is not IPointerTypeSymbol pointer ||
+            !SymbolEqualityComparer.Default.Equals(pointer.PointedAtType, elementType) ||
+            invocation.ArgumentList.Arguments.Count != 1 ||
+            function.Model.GetConstantValue(invocation.ArgumentList.Arguments[0].Expression) is not
+            { HasValue: true, Value: int length } ||
+            length <= 0)
+        {
+            ReportInvalidStorage(declaration, method.Name);
+            return;
+        }
+
+        storageDeclarations[declaration] = new CudaStoragePlan(
+            declaration,
+            local,
+            CudaStorageKind.SharedArray,
+            elementType,
+            length,
+            0);
+    }
+
+    private void RegisterDynamicSharedBytes(
+        LocalDeclarationStatementSyntax declaration,
+        InvocationExpressionSyntax invocation,
+        ILocalSymbol local,
+        CudaFunctionPlan function)
+    {
+        if (local.Type is not IPointerTypeSymbol
+            {
+                PointedAtType.SpecialType: SpecialType.System_Byte
+            } ||
+            invocation.ArgumentList.Arguments.Count != 1)
+        {
+            ReportInvalidStorage(declaration, nameof(Cuda.DynamicSharedBytes));
+            return;
+        }
+
+        var constant = function.Model.GetConstantValue(
+            invocation.ArgumentList.Arguments[0].Expression);
+        if (constant is not { HasValue: true, Value: int alignment } ||
+            alignment is not (1 or 2 or 4 or 8 or 16))
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InvalidAlignment,
+                invocation.ArgumentList.Arguments[0].GetLocation(),
+                constant.HasValue ? constant.Value?.ToString() ?? "null" : "nonconstant",
+                nameof(Cuda.DynamicSharedBytes)));
+            return;
+        }
+
+        if (dynamicSharedStorage.Values.Any(storage =>
+                storage.Declaration.Ancestors().OfType<MethodDeclarationSyntax>().FirstOrDefault() ==
+                function.Syntax))
+        {
+            ReportInvalidStorage(declaration, nameof(Cuda.DynamicSharedBytes));
+            return;
+        }
+
+        var storage = new CudaStoragePlan(
+            declaration,
+            local,
+            CudaStorageKind.DynamicSharedBytes,
+            ((IPointerTypeSymbol)local.Type).PointedAtType,
+            0,
+            alignment);
+        storageDeclarations[declaration] = storage;
+        dynamicSharedStorage[local] = storage;
     }
 
     private void ValidateStruct(CudaStructPlan structure)
@@ -664,7 +984,8 @@ internal sealed class CudaEmissionPlan
             ReportUnsupportedSyntax(declaration);
         }
 
-        if (fixedLocalArrays.Contains(declaration))
+        if (fixedLocalArrays.Contains(declaration) ||
+            recognizedStorageDeclarations.Contains(declaration))
             return;
 
         var type = model.GetTypeInfo(declaration.Declaration.Type).Type;
@@ -675,6 +996,11 @@ internal sealed class CudaEmissionPlan
     private void ValidateGlobalCollisions()
     {
         var names = new Dictionary<string, Location>(StringComparer.Ordinal);
+        foreach (var constant in ConstantArrays)
+        {
+            if (!names.TryAdd(constant.EmittedName, constant.Variable.Identifier.GetLocation()))
+                ReportCollision(constant.EmittedName, constant.Variable.Identifier.GetLocation());
+        }
         foreach (var structure in Structs)
         {
             if (!names.TryAdd(structure.EmittedName, structure.Syntax.Identifier.GetLocation()))
@@ -880,6 +1206,54 @@ internal sealed class CudaEmissionPlan
         return false;
     }
 
+    private static bool TryGetConstantValues(
+        ExpressionSyntax? initializer,
+        SemanticModel model,
+        out ImmutableArray<int> values)
+    {
+        IEnumerable<ExpressionSyntax>? expressions;
+        if (initializer is CollectionExpressionSyntax collection)
+        {
+            if (collection.Elements.Any(static element => element is not ExpressionElementSyntax))
+            {
+                values = [];
+                return false;
+            }
+            expressions = collection.Elements
+                .Cast<ExpressionElementSyntax>()
+                .Select(static element => element.Expression);
+        }
+        else
+        {
+            expressions = initializer switch
+            {
+                ArrayCreationExpressionSyntax { Initializer: { } array } => array.Expressions,
+                ImplicitArrayCreationExpressionSyntax { Initializer: { } array } =>
+                    array.Expressions,
+                _ => null
+            };
+        }
+        if (expressions is null)
+        {
+            values = [];
+            return false;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<int>();
+        foreach (var expression in expressions)
+        {
+            var constant = model.GetConstantValue(expression);
+            if (constant is not { HasValue: true, Value: int value })
+            {
+                values = [];
+                return false;
+            }
+            builder.Add(value);
+        }
+        values = builder.ToImmutable();
+        return values.Length > 0;
+    }
+
     private string RegisterIdentifier(ISymbol symbol, string name, Location location)
     {
         if (!CudaIdentifier.IsValid(name))
@@ -912,6 +1286,12 @@ internal sealed class CudaEmissionPlan
             CudaDiagnostics.UnsupportedSyntax,
             syntax.GetLocation(),
             syntax.Kind().ToString()));
+
+    private void ReportInvalidStorage(SyntaxNode syntax, string name) =>
+        diagnostics.Add(Diagnostic.Create(
+            CudaDiagnostics.InvalidStorage,
+            syntax.GetLocation(),
+            name));
 
     private void ReportCollision(string name, Location location) =>
         diagnostics.Add(Diagnostic.Create(
@@ -994,6 +1374,28 @@ internal sealed record CudaFieldPlan(
     VariableDeclaratorSyntax Variable,
     IFieldSymbol Symbol);
 
+internal sealed record CudaConstantArrayPlan(
+    FieldDeclarationSyntax Declaration,
+    VariableDeclaratorSyntax Variable,
+    IFieldSymbol Symbol,
+    string EmittedName,
+    ImmutableArray<int> Values);
+
+internal sealed record CudaStoragePlan(
+    LocalDeclarationStatementSyntax Declaration,
+    ILocalSymbol Symbol,
+    CudaStorageKind Kind,
+    ITypeSymbol ElementType,
+    int Length,
+    int Alignment);
+
+internal enum CudaStorageKind
+{
+    SharedScalar,
+    SharedArray,
+    DynamicSharedBytes
+}
+
 internal sealed record CudaFunctionPlan(
     MethodDeclarationSyntax Syntax,
     IMethodSymbol Symbol,
@@ -1022,6 +1424,11 @@ internal enum CudaCallKind
     PlannedFunction,
     Direct,
     Atomic,
+    SignedInt64Atomic,
+    InvalidAtomic,
+    Storage,
+    DynamicSharedView,
+    NaN,
     BooleanToInteger,
     IntegerToBoolean,
     SignedToUnsigned,
@@ -1055,12 +1462,16 @@ internal static class CudaIdentifier
         "CSHARP2CUDA_INTEGER_SEMANTICS_0_1",
         "asin",
         "atomicAdd",
+        "atomicCAS",
         "atomicExch",
+        "atomicMin",
+        "atomicXor",
         "blockDim",
         "blockIdx",
         "ceil",
         "copysign",
         "fabs",
+        "exp",
         "floor",
         "fmax",
         "fmin",
@@ -1071,8 +1482,12 @@ internal static class CudaIdentifier
         "isinf",
         "isnan",
         "ldexp",
+        "log1p",
+        "nan",
         "nearbyint",
+        "pow",
         "signbit",
+        "sqrt",
         "threadIdx",
         "trunc"
     };

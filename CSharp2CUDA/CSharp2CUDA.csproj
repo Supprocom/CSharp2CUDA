@@ -16,7 +16,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>cuda;csharp;roslyn;transpiler;source-translation;gpu</PackageTags>
-    <PackageReleaseNotes>Initial package release of the strict Roslyn-based CUDA source transpiler.</PackageReleaseNotes>
+    <PackageReleaseNotes>Add typed CUDA storage, synchronization, atomic, exact-double, and named math contracts.</PackageReleaseNotes>
     <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>

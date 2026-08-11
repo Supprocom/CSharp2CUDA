@@ -19,6 +19,9 @@ public sealed class CudaGlobalAttribute : Attribute
 [AttributeUsage(AttributeTargets.Parameter, AllowMultiple = false, Inherited = false)]
 public sealed class CudaReadOnlyAttribute : Attribute;
 
+[AttributeUsage(AttributeTargets.Field, AllowMultiple = false, Inherited = false)]
+public sealed class CudaConstantAttribute : Attribute;
+
 [AttributeUsage(
     AttributeTargets.Struct | AttributeTargets.Method,
     AllowMultiple = false,

@@ -93,11 +93,57 @@ Use `Cuda.SyncThreads` for a block barrier.
 Cuda.SyncThreads();
 ```
 
-Use `Cuda.AtomicExchange` or `Cuda.AtomicAdd` with a `ref` argument for atomic memory operations.
+Use a typed atomic method with a `ref` argument for an atomic memory operation.
 
 ```csharp
 Cuda.AtomicExchange(ref output->valid, 0);
 ```
+
+Atomic add, exchange, compare-exchange, XOR, and minimum operations support `int`, `uint`, `long`, and `ulong` locations.
+
+Use `Cuda.ThreadFence` for device publication. Use `Cuda.ThreadFenceSystem` before a mapped host checkpoint becomes ready.
+
+Use `Cuda.SyncWarp` for warp synchronization. A supplied mask must be a nonzero compile-time `uint` value.
+
+`Cuda.ShuffleDownSync` accepts an `int` value, an unsigned delta, and an explicit width. The width must be a valid compile-time warp width.
+
+## Use shared and constant storage
+
+Use typed local initializers for shared storage inside a global function.
+
+```csharp
+int ready = Cuda.Shared<int>();
+int* lanes = Cuda.SharedArray<int>(8);
+byte* storage = Cuda.DynamicSharedBytes(8);
+double* totals = Cuda.DynamicSharedView<double>(storage, 0UL);
+int* counts = Cuda.DynamicSharedView<int>(storage, 16UL);
+```
+
+`Cuda.SharedArray` requires a positive compile-time length. The dynamic storage alignment must be `1`, `2`, `4`, `8`, or `16`.
+
+The dynamic view offset counts elements of the requested type. In the example, the `int` view starts after eight `double` values.
+
+Mark a static read-only `int` array with `CudaConstantAttribute` for device constant storage.
+
+```csharp
+[CudaConstant]
+private static readonly int[] Thresholds = [2, 4, 8, 16];
+```
+
+Each constant array needs a nonempty compile-time initializer. CSharp2CUDA emits `__device__ __constant__` storage with the exact values.
+
+## Use exact and named math
+
+Use the round-to-nearest double methods when each operation boundary must remain exact.
+
+```csharp
+double product = Cuda.DoubleMultiplyRoundNearest(left, right);
+double result = Cuda.DoubleAddRoundNearest(product, bias);
+```
+
+The generated source calls `__dmul_rn` and `__dadd_rn`. CUDA compilation cannot contract these calls into one multiply-add operation.
+
+Use `Cuda.Log1p`, `Cuda.Sqrt`, `Cuda.Exp`, `Cuda.Pow`, and `Cuda.NaN` for named CUDA math calls.
 
 Use `Cuda.Bool`, `Cuda.Int`, and `Cuda.Unsigned` when the generated expression needs an explicit C++ conversion.
 

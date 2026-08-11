@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
@@ -17,6 +18,8 @@ internal sealed class CudaModuleEmitter(
 
         if (functions.Length > 0)
             sections.Add(NormalizeNewLines(IntegerSemantics));
+        foreach (var constant in plan.ConstantArrays)
+            sections.Add(EmitConstantArray(constant));
         if (structures.Length > 0)
             sections.Add(EmitStructForwardDeclarations(structures));
         foreach (var structure in structures)
@@ -27,6 +30,27 @@ internal sealed class CudaModuleEmitter(
             sections.Add(EmitFunction(function));
 
         return string.Join(options.NewLine + options.NewLine, sections);
+    }
+
+    private string EmitConstantArray(CudaConstantArrayPlan constant)
+    {
+        using var output = CreateWriter();
+        output.Write("__device__ __constant__ int ");
+        output.Write(constant.EmittedName);
+        output.Write('[');
+        output.Write(constant.Values.Length.ToString(CultureInfo.InvariantCulture));
+        output.Write("] = { ");
+        for (var index = 0; index < constant.Values.Length; index++)
+        {
+            if (index > 0)
+                output.Write(", ");
+            var value = constant.Values[index];
+            output.Write(value == int.MinValue
+                ? "(-2147483647 - 1)"
+                : value.ToString(CultureInfo.InvariantCulture));
+        }
+        output.Write(" };");
+        return output.ToString();
     }
 
     private string EmitStructForwardDeclarations(IEnumerable<CudaStructPlan> structures)

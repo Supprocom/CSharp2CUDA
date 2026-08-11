@@ -110,7 +110,8 @@ internal sealed class CudaSyntaxValidator(
     {
         var method = semanticModel.GetSymbolInfo(node).Symbol as IMethodSymbol;
         var operation = semanticModel.GetOperation(node) as IInvocationOperation;
-        if (method is null || plan.GetCallPlan(method) is null ||
+        var call = method is null ? null : plan.GetCallPlan(method);
+        if (method is null || call is null ||
             operation is null ||
             operation.Arguments.Any(argument => argument.ArgumentKind == ArgumentKind.DefaultValue) ||
             node.ArgumentList.Arguments.Any(argument => argument.NameColon is not null))
@@ -120,20 +121,48 @@ internal sealed class CudaSyntaxValidator(
         }
         else
         {
-            var call = plan.GetCallPlan(method)!;
             var arguments = node.ArgumentList.Arguments;
-            if (call.Kind == CudaCallKind.Atomic)
+            if (call.Kind == CudaCallKind.InvalidAtomic)
             {
-                if (arguments.Count != 2 ||
+                var type = method.TypeArguments.FirstOrDefault()?.ToDisplayString() ?? "unknown";
+                diagnostics.Add(Diagnostic.Create(
+                    CudaDiagnostics.InvalidAtomicType,
+                    node.GetLocation(),
+                    type,
+                    method.Name));
+            }
+            else if (call.Kind is CudaCallKind.Atomic or CudaCallKind.SignedInt64Atomic)
+            {
+                var expectedCount = method.Name == nameof(Cuda.AtomicCompareExchange) ? 3 : 2;
+                if (arguments.Count != expectedCount ||
                     !arguments[0].RefKindKeyword.IsKind(SyntaxKind.RefKeyword) ||
-                    arguments[1].RefKindKeyword != default)
+                    arguments.Skip(1).Any(argument => argument.RefKindKeyword != default))
                 {
                     ReportUnsupportedCall(node, method.ToDisplayString());
                 }
             }
+            else if (call.Kind == CudaCallKind.Storage && !plan.IsStorageInvocation(node))
+            {
+                diagnostics.Add(Diagnostic.Create(
+                    CudaDiagnostics.InvalidStorage,
+                    node.GetLocation(),
+                    method.Name));
+            }
+            else if (call.Kind == CudaCallKind.DynamicSharedView)
+            {
+                ValidateDynamicSharedView(node, method);
+            }
             else if (arguments.Any(argument => argument.RefKindKeyword != default))
             {
                 ReportUnsupportedCall(node, method.ToDisplayString());
+            }
+
+            if (method.Name == nameof(Cuda.SyncWarp) && arguments.Count == 1)
+                ValidateWarpMask(arguments[0].Expression);
+            else if (method.Name == nameof(Cuda.ShuffleDownSync))
+            {
+                ValidateWarpMask(arguments[0].Expression);
+                ValidateWarpWidth(arguments[3].Expression);
             }
 
             if (!HasSafeArgumentOrder(arguments))
@@ -154,7 +183,9 @@ internal sealed class CudaSyntaxValidator(
     public override void VisitElementAccessExpression(ElementAccessExpressionSyntax node)
     {
         var expressionType = semanticModel.GetTypeInfo(node.Expression).Type;
-        if (expressionType is not IPointerTypeSymbol && !IsFixedLocalArrayReference(node.Expression))
+        if (expressionType is not IPointerTypeSymbol &&
+            !IsFixedLocalArrayReference(node.Expression) &&
+            !IsConstantArrayReference(node.Expression))
             ReportUnsupportedSyntax(node);
         base.VisitElementAccessExpression(node);
     }
@@ -483,6 +514,8 @@ internal sealed class CudaSyntaxValidator(
         var symbol = semanticModel.GetSymbolInfo(node).Symbol;
         if (symbol is IFieldSymbol field)
         {
+            if (field.IsStatic && plan.TryGetConstantArray(field, out _))
+                return true;
             return !field.IsStatic &&
                 field.ContainingType is { } containingType &&
                 plan.TryGetStruct(containingType, out _) &&
@@ -510,6 +543,8 @@ internal sealed class CudaSyntaxValidator(
             return plan.TryGetIdentifier(symbol, out _);
         if (symbol is IFieldSymbol field)
         {
+            if (field.IsStatic && plan.TryGetConstantArray(field, out _))
+                return true;
             return !field.IsStatic &&
                 field.ContainingType is { } containingType &&
                 plan.TryGetStruct(containingType, out _) &&
@@ -556,6 +591,64 @@ internal sealed class CudaSyntaxValidator(
             return false;
         }
         return plan.IsFixedLocalArray(declaration);
+    }
+
+    private bool IsConstantArrayReference(ExpressionSyntax expression) =>
+        semanticModel.GetSymbolInfo(expression).Symbol is IFieldSymbol field &&
+        plan.TryGetConstantArray(field, out _);
+
+    private void ValidateDynamicSharedView(
+        InvocationExpressionSyntax node,
+        IMethodSymbol method)
+    {
+        var elementType = method.TypeArguments[0];
+        if (!CudaEmissionPlan.IsStorageElementType(elementType))
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InvalidStorageType,
+                node.GetLocation(),
+                elementType.ToDisplayString(),
+                nameof(Cuda.DynamicSharedView)));
+            return;
+        }
+
+        var storageExpression = node.ArgumentList.Arguments[0].Expression;
+        var storageSymbol = semanticModel.GetSymbolInfo(storageExpression).Symbol;
+        var requiredAlignment = CudaEmissionPlan.GetNaturalAlignment(elementType);
+        if (!plan.TryGetDynamicSharedStorage(storageSymbol, out var storage) ||
+            storage.Alignment < requiredAlignment)
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InvalidAlignment,
+                storageExpression.GetLocation(),
+                plan.TryGetDynamicSharedStorage(storageSymbol, out var candidate)
+                    ? candidate.Alignment.ToString()
+                    : "unplanned",
+                nameof(Cuda.DynamicSharedView)));
+        }
+    }
+
+    private void ValidateWarpMask(ExpressionSyntax expression)
+    {
+        var constant = semanticModel.GetConstantValue(expression);
+        if (constant is not { HasValue: true, Value: uint value } || value == 0u)
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InvalidWarpMask,
+                expression.GetLocation()));
+        }
+    }
+
+    private void ValidateWarpWidth(ExpressionSyntax expression)
+    {
+        var constant = semanticModel.GetConstantValue(expression);
+        if (constant is not { HasValue: true, Value: int value } ||
+            value is not (1 or 2 or 4 or 8 or 16 or 32))
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InvalidWarpWidth,
+                expression.GetLocation()));
+        }
     }
 
     private bool HasSafeArgumentOrder(SeparatedSyntaxList<ArgumentSyntax> arguments)

@@ -101,4 +101,60 @@ internal static class CudaDiagnostics
         Category,
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InvalidStorage = new(
+        "CS2CUDA013",
+        "CUDA storage declaration is invalid",
+        "CUDA storage declaration '{0}' is invalid",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InvalidStorageType = new(
+        "CS2CUDA014",
+        "CUDA storage element type is invalid",
+        "Type '{0}' is not valid for CUDA storage '{1}'",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InvalidAlignment = new(
+        "CS2CUDA015",
+        "CUDA storage alignment is invalid",
+        "Alignment '{0}' is not valid for CUDA storage '{1}'",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InvalidConstantInitializer = new(
+        "CS2CUDA016",
+        "CUDA constant initializer is invalid",
+        "CUDA constant array '{0}' requires a nonempty compile-time initializer",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InvalidWarpMask = new(
+        "CS2CUDA017",
+        "CUDA warp mask is invalid",
+        "CUDA warp mask must be a nonzero compile-time uint value",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InvalidWarpWidth = new(
+        "CS2CUDA018",
+        "CUDA warp width is invalid",
+        "CUDA warp width must be a compile-time power of two from 1 through 32",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InvalidAtomicType = new(
+        "CS2CUDA019",
+        "CUDA atomic type is invalid",
+        "Type '{0}' is not valid for CUDA atomic operation '{1}'",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
 }

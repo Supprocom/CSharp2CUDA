@@ -102,6 +102,8 @@ internal sealed class CudaSyntaxTranslator(
     {
         if (plan.IsFixedLocalArray(node))
             return TranslateFixedLocalArray(node);
+        if (plan.TryGetStorageDeclaration(node, out var storage))
+            return TranslateStorageDeclaration(node, storage);
 
         var readOnly = node.Declaration.Variables.Count > 0 &&
             node.Declaration.Variables.All(variable => IsCudaMethod(
@@ -126,7 +128,11 @@ internal sealed class CudaSyntaxTranslator(
         {
             CudaCallKind.PlannedFunction or CudaCallKind.Direct =>
                 ReplaceInvocationName(node, call.Name),
-            CudaCallKind.Atomic => TranslateAtomic(node, call.Name),
+            CudaCallKind.Atomic => TranslateAtomic(node, call.Name, signedInt64: false),
+            CudaCallKind.SignedInt64Atomic =>
+                TranslateAtomic(node, call.Name, signedInt64: true),
+            CudaCallKind.DynamicSharedView => TranslateDynamicSharedView(node, method!),
+            CudaCallKind.NaN => TranslateNaN(node),
             CudaCallKind.BooleanToInteger => TranslateBooleanToInteger(node),
             CudaCallKind.IntegerToBoolean => TranslateIntegerToBoolean(node),
             CudaCallKind.SignedToUnsigned => TranslateSignedToUnsigned(node),
@@ -141,7 +147,13 @@ internal sealed class CudaSyntaxTranslator(
             return SyntaxFactory.ParseExpression(replacement).WithTriviaFrom(node);
 
         if (semanticModel.GetSymbolInfo(node).Symbol is IFieldSymbol field &&
-            plan.TryGetIdentifier(field, out var fieldName))
+            plan.TryGetConstantArray(field, out var constant))
+        {
+            return SyntaxFactory.IdentifierName(constant.EmittedName).WithTriviaFrom(node);
+        }
+
+        if (semanticModel.GetSymbolInfo(node).Symbol is IFieldSymbol fieldSymbol &&
+            plan.TryGetIdentifier(fieldSymbol, out var fieldName))
         {
             var target = (ExpressionSyntax)Visit(node.Expression)!;
             var name = SyntaxFactory.IdentifierName(fieldName).WithTriviaFrom(node.Name);
@@ -232,7 +244,10 @@ internal sealed class CudaSyntaxTranslator(
         return node.WithValue(value);
     }
 
-    private SyntaxNode TranslateAtomic(InvocationExpressionSyntax node, string name)
+    private SyntaxNode TranslateAtomic(
+        InvocationExpressionSyntax node,
+        string name,
+        bool signedInt64)
     {
         var arguments = node.ArgumentList.Arguments;
         var location = (ExpressionSyntax)Visit(arguments[0].Expression)!;
@@ -240,16 +255,69 @@ internal sealed class CudaSyntaxTranslator(
             SyntaxKind.AddressOfExpression,
             location.WithoutLeadingTrivia())
             .WithLeadingTrivia(location.GetLeadingTrivia());
+        ExpressionSyntax translatedAddress = address;
+        if (signedInt64)
+        {
+            translatedAddress = SyntaxFactory.CastExpression(
+                SyntaxFactory.ParseTypeName("unsigned long long*"),
+                Parenthesize(address));
+        }
         var first = arguments[0]
             .WithRefKindKeyword(default)
-            .WithExpression(address);
-        var second = (ArgumentSyntax)Visit(arguments[1])!;
+            .WithExpression(translatedAddress);
+        var rewritten = new List<ArgumentSyntax> { first };
+        for (var index = 1; index < arguments.Count; index++)
+        {
+            var argument = (ArgumentSyntax)Visit(arguments[index])!;
+            if (signedInt64)
+            {
+                argument = argument.WithExpression(SyntaxFactory.CastExpression(
+                    SyntaxFactory.ParseTypeName("unsigned long long"),
+                    Parenthesize(argument.Expression)));
+            }
+            rewritten.Add(argument);
+        }
         var rewrittenArguments = SyntaxFactory.SeparatedList(
-            [first, second],
-            [arguments.GetSeparator(0)]);
-        return node
+            rewritten,
+            arguments.GetSeparators());
+        var invocation = node
             .WithExpression(SyntaxFactory.IdentifierName(name).WithTriviaFrom(node.Expression))
             .WithArgumentList(node.ArgumentList.WithArguments(rewrittenArguments));
+        return signedInt64
+            ? CreateTranslatedHelperCall(
+                "csharp2cuda_i64_from_bits",
+                node,
+                invocation.WithoutTrivia())
+            : invocation;
+    }
+
+    private SyntaxNode TranslateDynamicSharedView(
+        InvocationExpressionSyntax node,
+        IMethodSymbol method)
+    {
+        var storage = (ExpressionSyntax)Visit(node.ArgumentList.Arguments[0].Expression)!;
+        var offset = (ExpressionSyntax)Visit(node.ArgumentList.Arguments[1].Expression)!;
+        var elementType = method.TypeArguments[0];
+        var pointerType = plan.FormatType(elementType, false, node.GetLocation()) + "*";
+        var pointer = SyntaxFactory.CastExpression(
+            SyntaxFactory.ParseTypeName(pointerType),
+            Parenthesize(storage));
+        return SyntaxFactory.BinaryExpression(
+                SyntaxKind.AddExpression,
+                Parenthesize(pointer),
+                Parenthesize(offset))
+            .WithTriviaFrom(node);
+    }
+
+    private static SyntaxNode TranslateNaN(InvocationExpressionSyntax node)
+    {
+        var argument = SyntaxFactory.Argument(SyntaxFactory.LiteralExpression(
+            SyntaxKind.StringLiteralExpression,
+            SyntaxFactory.Literal(string.Empty)));
+        return SyntaxFactory.InvocationExpression(
+                SyntaxFactory.IdentifierName("nan"),
+                SyntaxFactory.ArgumentList(SyntaxFactory.SingletonSeparatedList(argument)))
+            .WithTriviaFrom(node);
     }
 
     private SyntaxNode TranslateBooleanToInteger(InvocationExpressionSyntax node)
@@ -357,6 +425,36 @@ internal sealed class CudaSyntaxTranslator(
             replacement += " =" + lineBreak + initializer.ToFullString();
         }
         replacement += ";";
+
+        string marker;
+        do
+        {
+            marker = $"csharp2cuda_generated_fixed_array_{fixedLocalArrayMarker++}";
+        }
+        while (sourceText.Contains(marker, StringComparison.Ordinal));
+        fixedLocalArrays.Add(new(marker, replacement));
+        return SyntaxFactory.ExpressionStatement(SyntaxFactory.IdentifierName(marker))
+            .WithTriviaFrom(node);
+    }
+
+    private StatementSyntax TranslateStorageDeclaration(
+        LocalDeclarationStatementSyntax node,
+        CudaStoragePlan storage)
+    {
+        var name = plan.GetIdentifier(storage.Symbol);
+        var type = plan.FormatType(
+            storage.ElementType,
+            false,
+            node.Declaration.Type.GetLocation());
+        var replacement = storage.Kind switch
+        {
+            CudaStorageKind.SharedScalar => $"__shared__ {type} {name};",
+            CudaStorageKind.SharedArray =>
+                $"__shared__ {type} {name}[{storage.Length.ToString(CultureInfo.InvariantCulture)}];",
+            CudaStorageKind.DynamicSharedBytes =>
+                $"extern __shared__ __align__({storage.Alignment.ToString(CultureInfo.InvariantCulture)}) unsigned char {name}[];",
+            _ => throw new InvalidOperationException("Unknown CUDA storage kind.")
+        };
 
         string marker;
         do
