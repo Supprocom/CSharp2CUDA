@@ -47,3 +47,17 @@ jobs:
           --output artifacts/package
           -p:RepositoryCommit=$GITHUB_SHA
           -p:RepositoryBranch=$GITHUB_REF_NAME
+
+      - name: Verify package build integration
+        shell: pwsh
+        run: >-
+          ./Supprocom.CSharp2CUDA.PackageTests/Verify.ps1
+          -PackageDirectory artifacts/package
+          -ExpectedCommit $env:GITHUB_SHA
+
+      - name: Verify exact-package source suite
+        shell: pwsh
+        run: >-
+          ./Supprocom.CSharp2CUDA.PackageTests/VerifySourceSuite.ps1
+          -PackageDirectory artifacts/package
+          -ResultsDirectory artifacts/package-source-tests/trx

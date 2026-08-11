@@ -185,7 +185,7 @@ public sealed class CudaRealExecutionTests
 
     private static CudaTestRuntime CreateRuntime()
     {
-        var result = CudaTranspiler.Transpile(IntegrationSource);
+        var result = CudaTestCompiler.Transpile(IntegrationSource);
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         return CudaTestRuntime.Create(result.Source);
     }
@@ -197,7 +197,7 @@ public sealed class CudaRealExecutionTests
     private const string IntegrationSource = """
         using Supprocom.CSharp2CUDA;
 
-        [CudaTranslationUnit]
+        [TranspileToCUDA]
         internal static unsafe class RuntimeModule
         {
             [CudaConstant]

@@ -1,7 +1,8 @@
 using System;
+#pragma warning disable CS0078, CS0649
+
 using Supprocom.CSharp2CUDA;
 
-[CudaTranslationUnit]
 internal static unsafe class DeviceDispatchModule
 {
     [CudaExternal]

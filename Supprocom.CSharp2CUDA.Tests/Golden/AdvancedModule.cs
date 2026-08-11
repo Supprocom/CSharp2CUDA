@@ -1,7 +1,8 @@
+#pragma warning disable CS0078, CS0649
+
 using System;
 using Supprocom.CSharp2CUDA;
 
-[CudaTranslationUnit]
 internal static unsafe class AdvancedModule
 {
     [CudaExternal]

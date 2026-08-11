@@ -12,9 +12,6 @@ internal sealed class CudaEmissionPlan
     internal const string DeviceAttributeName = "Supprocom.CSharp2CUDA.CudaDeviceAttribute";
     internal const string GlobalAttributeName = "Supprocom.CSharp2CUDA.CudaGlobalAttribute";
     internal const string ReadOnlyAttributeName = "Supprocom.CSharp2CUDA.CudaReadOnlyAttribute";
-    internal const string TranslationUnitAttributeName =
-        "Supprocom.CSharp2CUDA.CudaTranslationUnitAttribute";
-
     private static readonly IReadOnlyDictionary<string, string> RuntimeMethodMappings =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {

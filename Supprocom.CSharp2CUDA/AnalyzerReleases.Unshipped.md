@@ -24,3 +24,5 @@ CS2CUDA017 | Supprocom.CSharp2CUDA | Error | Reports an invalid CUDA warp mask.
 CS2CUDA018 | Supprocom.CSharp2CUDA | Error | Reports an invalid CUDA warp width.
 CS2CUDA019 | Supprocom.CSharp2CUDA | Error | Reports an invalid CUDA atomic type.
 CS2CUDA020 | Supprocom.CSharp2CUDA | Error | Reports a write to CUDA constant storage.
+CS2CUDA021 | Supprocom.CSharp2CUDA | Error | Reports an invalid CUDA output path.
+CS2CUDA022 | Supprocom.CSharp2CUDA | Error | Reports conflicting CUDA output paths.

@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TranspileToCUDA>true</TranspileToCUDA>
+    <TranspileToCUDAOutputPath>../Escape.cu</TranspileToCUDAOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Supprocom.CSharp2CUDA" Version="[0.2.0]" />
+  </ItemGroup>
+</Project>

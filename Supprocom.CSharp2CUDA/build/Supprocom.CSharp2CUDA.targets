@@ -1,0 +1,97 @@
+<Project>
+  <PropertyGroup Condition="'$(TranspileToCUDA)' == 'true'">
+    <CopyBuildOutputToOutputDirectory>false</CopyBuildOutputToOutputDirectory>
+    <CopyOutputSymbolsToOutputDirectory>false</CopyOutputSymbolsToOutputDirectory>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+    <GenerateRuntimeConfigurationFiles>false</GenerateRuntimeConfigurationFiles>
+    <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
+    <SkipCopyBuildProduct>true</SkipCopyBuildProduct>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <_SupprocomCSharp2CUDATaskAssembly>$(MSBuildThisFileDirectory)task/Supprocom.CSharp2CUDA.Build.dll</_SupprocomCSharp2CUDATaskAssembly>
+    <_SupprocomCSharp2CUDALanguageVersion Condition="'$(LangVersion)' == ''">14.0</_SupprocomCSharp2CUDALanguageVersion>
+    <_SupprocomCSharp2CUDALanguageVersion Condition="'$(LangVersion)' != ''">$(LangVersion)</_SupprocomCSharp2CUDALanguageVersion>
+    <_SupprocomCSharp2CUDANullable Condition="'$(Nullable)' == ''">disable</_SupprocomCSharp2CUDANullable>
+    <_SupprocomCSharp2CUDANullable Condition="'$(Nullable)' != ''">$(Nullable)</_SupprocomCSharp2CUDANullable>
+    <_SupprocomCSharp2CUDAManifest Condition="$([System.IO.Path]::IsPathRooted('$(IntermediateOutputPath)'))">$([System.IO.Path]::Combine('$(IntermediateOutputPath)', 'Supprocom.CSharp2CUDA.outputs'))</_SupprocomCSharp2CUDAManifest>
+    <_SupprocomCSharp2CUDAManifest Condition="!$([System.IO.Path]::IsPathRooted('$(IntermediateOutputPath)'))">$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'Supprocom.CSharp2CUDA.outputs'))</_SupprocomCSharp2CUDAManifest>
+  </PropertyGroup>
+
+  <UsingTask TaskName="Supprocom.CSharp2CUDA.Build.TranspileTask"
+             AssemblyFile="$(_SupprocomCSharp2CUDATaskAssembly)" />
+
+  <Target Name="SupprocomPrepareCUDAOutput"
+          BeforeTargets="CoreCompile"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">
+    <ItemGroup>
+      <_SupprocomCSharp2CUDAPreviousManagedOutput Include="$(TargetPath)"
+                                                  Condition="'$(TargetPath)' != ''" />
+      <_SupprocomCSharp2CUDAPreviousManagedOutput Include="$(TargetDir)$(TargetName).pdb"
+                                                  Condition="'$(TargetDir)' != ''" />
+      <_SupprocomCSharp2CUDAPreviousManagedOutput Include="$(ProjectDepsFilePath)"
+                                                  Condition="'$(ProjectDepsFilePath)' != ''" />
+      <_SupprocomCSharp2CUDAPreviousManagedOutput Include="$(ProjectRuntimeConfigFilePath)"
+                                                  Condition="'$(ProjectRuntimeConfigFilePath)' != ''" />
+    </ItemGroup>
+
+    <Supprocom.CSharp2CUDA.Build.TranspileTask
+        ManagedOutputFiles="@(_SupprocomCSharp2CUDAPreviousManagedOutput)"
+        OutputDirectory="$(TargetDir)"
+        ManifestPath="$(_SupprocomCSharp2CUDAManifest)"
+        TranspileEntireProject="$(TranspileToCUDA)"
+        CleanOnly="true" />
+  </Target>
+
+  <Target Name="SupprocomTranspileToCUDA"
+          AfterTargets="CoreCompile"
+          Condition="'$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true'">
+    <ItemGroup>
+      <_SupprocomCSharp2CUDAReference Include="@(ReferencePathWithRefAssemblies)" />
+      <_SupprocomCSharp2CUDAReference Include="@(ReferencePath)"
+                                       Condition="'@(_SupprocomCSharp2CUDAReference)' == ''" />
+      <_SupprocomCSharp2CUDAManagedOutput Include="$(TargetPath)"
+                                          Condition="'$(TargetPath)' != ''" />
+      <_SupprocomCSharp2CUDAManagedOutput Include="$(TargetDir)$(TargetName).pdb"
+                                          Condition="'$(TargetDir)' != ''" />
+      <_SupprocomCSharp2CUDAManagedOutput Include="$(ProjectDepsFilePath)"
+                                          Condition="'$(ProjectDepsFilePath)' != ''" />
+      <_SupprocomCSharp2CUDAManagedOutput Include="$(ProjectRuntimeConfigFilePath)"
+                                          Condition="'$(ProjectRuntimeConfigFilePath)' != ''" />
+    </ItemGroup>
+
+    <Supprocom.CSharp2CUDA.Build.TranspileTask
+        SourceFiles="@(Compile)"
+        ReferencePaths="@(_SupprocomCSharp2CUDAReference)"
+        ManagedOutputFiles="@(_SupprocomCSharp2CUDAManagedOutput)"
+        OutputDirectory="$(TargetDir)"
+        ManifestPath="$(_SupprocomCSharp2CUDAManifest)"
+        AssemblyName="$(AssemblyName)"
+        ProjectOutputPath="$(TranspileToCUDAOutputPath)"
+        StartupObject="$(StartupObject)"
+        DefineConstants="$(DefineConstants)"
+        LanguageVersion="$(_SupprocomCSharp2CUDALanguageVersion)"
+        NullableMode="$(_SupprocomCSharp2CUDANullable)"
+        OutputType="$(OutputType)"
+        TranspileEntireProject="$(TranspileToCUDA)"
+        AllowUnsafe="$(AllowUnsafeBlocks)"
+        CheckOverflow="$(CheckForOverflowUnderflow)"
+        Optimize="$(Optimize)">
+      <Output TaskParameter="GeneratedFile" PropertyName="_SupprocomCSharp2CUDAGeneratedFile" />
+    </Supprocom.CSharp2CUDA.Build.TranspileTask>
+
+    <ItemGroup Condition="'$(_SupprocomCSharp2CUDAGeneratedFile)' != ''">
+      <FileWrites Include="$(_SupprocomCSharp2CUDAGeneratedFile)" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="SupprocomCleanCUDAOutput"
+          BeforeTargets="Clean"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Supprocom.CSharp2CUDA.Build.TranspileTask
+        OutputDirectory="$(TargetDir)"
+        ManifestPath="$(_SupprocomCSharp2CUDAManifest)"
+        CleanOnly="true" />
+  </Target>
+</Project>

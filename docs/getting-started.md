@@ -1,6 +1,7 @@
 # Getting started with CSharp2CUDA
 
-This guide shows how to create a small C# translation unit, call the transpiler, inspect diagnostics, and use the generated CUDA source.
+This guide shows how to create a compile-checked CUDA project.
+It also explains class markers and manual file selection.
 
 ## Before you start
 
@@ -8,61 +9,148 @@ Install the .NET 10 SDK. Use Visual Studio 2026 or the `dotnet` command when you
 
 You do not need the CUDA toolkit to translate C# source. You need a CUDA toolchain later when you compile and run the generated `.cu` file.
 
-Add a project reference to `Supprocom.CSharp2CUDA/Supprocom.CSharp2CUDA.csproj` while you work from this repository. Use the same identity for package builds.
+Add the `Supprocom.CSharp2CUDA` package to a .NET 10 project.
+Version 0.2.0 supplies the file APIs and build integration in this guide.
+
+Add the package directly to each project that uses automatic build transpilation.
+
+## Create a CUDA project
+
+Create a class library project.
+Set `TranspileToCUDA` to select the complete project for CUDA emission.
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TranspileToCUDA>true</TranspileToCUDA>
+    <TranspileToCUDAOutputPath>cuda/HelloCuda.cu</TranspileToCUDAOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Supprocom.CSharp2CUDA" Version="0.2.0" />
+  </ItemGroup>
+</Project>
+```
+
+The project still passes through Roslyn compile checking.
+The build does not keep a managed assembly in its output directory.
+It writes the selected `.cu` file relative to that directory.
 
 ## Create a translation unit
 
-The source must compile as valid C#. The `Supprocom.CSharp2CUDA` assembly supplies the attributes and the `Cuda` type.
-
-Create a source string with a static unsafe class. Mark the class with `CudaTranslationUnitAttribute`.
+Create `HelloCuda.cs` in Visual Studio 2026.
+The file is ordinary C# source, and the editor checks it as C#.
 
 ```csharp
-const string source = """
-    using Supprocom.CSharp2CUDA;
+using Supprocom.CSharp2CUDA;
 
-    [CudaTranslationUnit]
-    internal static unsafe class HelloCuda
+internal static unsafe class HelloCuda
+{
+    [CudaDevice]
+    private static int Add(int left, int right)
     {
-        [CudaDevice]
-        private static int Add(int left, int right)
-        {
-            return left + right;
-        }
-
-        [CudaGlobal(Name = "hello_kernel")]
-        private static void Kernel(int* output)
-        {
-            output[0] = Add(Cuda.ThreadIdx.X, 1);
-        }
+        return left + right;
     }
-    """;
+
+    [CudaGlobal(Name = "hello_kernel")]
+    private static void Kernel(int* output)
+    {
+        output[0] = Add(Cuda.ThreadIdx.X, 1);
+    }
+}
 ```
 
-This source defines one device function and one global function. The global function writes the thread index plus one to the first output element.
+This source defines one device function and one global function.
+The global function writes the thread index plus one to the first output
+element.
 
-The `unsafe` modifier is required because the example uses an `int*` parameter. Pointer types provide the direct memory model that CUDA code needs.
+The `unsafe` modifier is required because the example uses an `int*`
+parameter.
+Pointer types provide the direct memory model that CUDA code needs.
 
-## Run the transpiler
+## Build the CUDA project
 
-Call `CudaTranspiler.Transpile` with the source string. Pass a source path to improve diagnostic locations.
+Build the project in Visual Studio 2026 or with the .NET CLI.
+
+```text
+dotnet build -c Release
+```
+
+The build writes `cuda/HelloCuda.cu` below the assembly output directory.
+Omit `TranspileToCUDAOutputPath` to use `<AssemblyName>.cu`.
+
+A failed C# compilation stops before CUDA emission.
+A CSharp2CUDA error also stops the build and removes the previous generated
+output.
+
+The output path must identify a relative `.cu` file below the assembly output
+directory.
+An absolute path or directory traversal produces `CS2CUDA021`.
+
+## Mark a class in a managed project
+
+Use `TranspileToCUDAAttribute` when the project must keep its managed assembly.
+The build selects only marked classes.
 
 ```csharp
-var result = CudaTranspiler.Transpile(source, path: "HelloCuda.cs");
+using Supprocom.CSharp2CUDA;
 
+[TranspileToCUDA("cuda/HelloCuda.cu")]
+internal static unsafe class HelloCuda
+{
+    [CudaGlobal(Name = "hello_kernel")]
+    private static void Kernel(int* output)
+    {
+        output[0] = Cuda.ThreadIdx.X + 1;
+    }
+}
+```
+
+Use `[TranspileToCUDA]` or `[TranspileToCUDA("")]` to select
+`<AssemblyName>.cu`.
+All marked classes form one module.
+Their nonempty custom paths must match.
+
+## Select files manually
+
+Use `TranspileFile` for one normal C# file.
+Use `TranspileFiles` when one CUDA module spans multiple files.
+
+```csharp
+var result = CudaTranspiler.TranspileFile("HelloCuda.cs");
 if (!result.Succeeded)
 {
     foreach (var diagnostic in result.Diagnostics)
         Console.Error.WriteLine(diagnostic);
 }
-else
-{
-    File.WriteAllText("HelloCuda.cu", result.Source);
-}
 ```
 
-`result.Source` contains CUDA C++ when `result.Succeeded` is `true`. The source is empty when an error diagnostic exists.
+`result.Source` contains CUDA C++ when `result.Succeeded` is `true`.
+The source is empty when an error diagnostic exists.
 
-`result.Diagnostics` contains Roslyn diagnostics and CSharp2CUDA diagnostics. Always inspect the diagnostics when translation fails.
+`result.Diagnostics` contains Roslyn diagnostics and CSharp2CUDA diagnostics.
+Always inspect the diagnostics when translation fails.
+
+The manual file APIs select all top-level classes in the supplied files.
+They ignore class marker selection and output paths.
+
+```csharp
+var module = CudaTranspiler.TranspileFiles(
+    ["Kernel.cs", "DeviceFunctions.cs"]);
+```
+
+Use `CudaFileCompilationOptions` when selected files need extra metadata
+references, preprocessor symbols, or compilation settings.
+Manual APIs return source and never write an output file.
+
+Set `OutputKind` and `MainTypeName` when executable source needs those Roslyn compilation settings.
+
+Use `CudaTranspiler.Transpile(CSharpCompilation)` when another Roslyn-based tool
+already owns the selected syntax trees, references, and compilation options.
 
 ## Understand the generated source
 
@@ -185,7 +273,7 @@ Use `CudaExternalAttribute` for a type or method that another CUDA source unit p
 using System;
 using Supprocom.CSharp2CUDA;
 
-[CudaTranslationUnit]
+[TranspileToCUDA]
 internal static unsafe class ExternalModule
 {
     [CudaExternal(IsPure = true)]

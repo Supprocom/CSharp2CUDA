@@ -24,12 +24,11 @@ public sealed class CudaTranspilerTests
     public void Transpile_ProducesExactCatalog(string catalog)
     {
         var goldenDirectory = Path.Combine(AppContext.BaseDirectory, "Golden");
-        var source = File.ReadAllText(
-            Path.Combine(goldenDirectory, $"{catalog}Module.cs.txt"));
+        var sourcePath = Path.Combine(goldenDirectory, $"{catalog}Module.cs");
         var expected = File.ReadAllText(
             Path.Combine(goldenDirectory, $"{catalog}CudaBlockCatalog.cu"));
 
-        var result = CudaTranspiler.Transpile(source, path: $"{catalog}Module.cs");
+        var result = CudaTranspiler.TranspileFile(sourcePath);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Equal(expected, result.Source);
@@ -57,19 +56,15 @@ public sealed class CudaTranspilerTests
 
         foreach (var (catalog, entryPoint) in catalogs)
         {
-            var source = File.ReadAllText(
-                Path.Combine(goldenDirectory, $"{catalog}Module.cs.txt"));
-            var result = CudaTranspiler.Transpile(source, path: $"{catalog}Module.cs");
+            var sourcePath = Path.Combine(goldenDirectory, $"{catalog}Module.cs");
+            var result = CudaTranspiler.TranspileFile(sourcePath);
 
             Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
             AppendDeviceCatalog(builder, result.Source, entryPoint);
         }
 
-        var dispatchInput = File.ReadAllText(
-            Path.Combine(goldenDirectory, "DeviceDispatchModule.cs.txt"));
-        var dispatch = CudaTranspiler.Transpile(
-            dispatchInput,
-            path: "DeviceDispatchModule.cs");
+        var dispatch = CudaTranspiler.TranspileFile(
+            Path.Combine(goldenDirectory, "DeviceDispatchModule.cs"));
         Assert.True(dispatch.Succeeded, FormatDiagnostics(dispatch.Diagnostics));
         builder.Append('\n').Append(dispatch.Source);
 
@@ -91,7 +86,7 @@ public sealed class CudaTranspilerTests
             using System;
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static unsafe class ScalarModule
             {
                 public struct MathBlockSlot
@@ -145,7 +140,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Contains("struct MathBlockSlot;", result.Source, StringComparison.Ordinal);
@@ -168,7 +163,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static unsafe class KernelModule
             {
                 public struct MathBlockSlot
@@ -192,7 +187,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Contains("int thread = threadIdx.x;", result.Source, StringComparison.Ordinal);
@@ -208,7 +203,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class InvalidModule
             {
                 [CudaDevice]
@@ -219,7 +214,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -232,7 +227,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class InvalidModule
             {
                 [CudaDevice]
@@ -243,7 +238,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -256,7 +251,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static unsafe class InvalidModule
             {
                 [CudaDevice]
@@ -268,7 +263,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -282,7 +277,7 @@ public sealed class CudaTranspilerTests
             using System;
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class InvalidModule
             {
                 [CudaDevice]
@@ -294,7 +289,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -312,7 +307,7 @@ public sealed class CudaTranspilerTests
                 public const string Add = "cuda_add";
             }
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class ValidModule
             {
                 [CudaDevice(Name = FunctionNames.Add)]
@@ -329,7 +324,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Contains(
@@ -349,7 +344,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class ProviderModule
             {
                 [CudaDevice(Name = "cuda_add")]
@@ -359,7 +354,7 @@ public sealed class CudaTranspilerTests
                 }
             }
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class CallerModule
             {
                 [CudaDevice]
@@ -370,7 +365,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Contains("return cuda_add(left, right);", result.Source, StringComparison.Ordinal);
@@ -388,7 +383,7 @@ public sealed class CudaTranspilerTests
                     "safe() { return 1; }\n__device__ int injected";
             }
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class InvalidModule
             {
                 [CudaDevice(Name = FunctionNames.Injection)]
@@ -404,7 +399,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -423,7 +418,7 @@ public sealed class CudaTranspilerTests
         var source = $$"""
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class InvalidModule
             {
                 [CudaDevice(Name = "{{name}}")]
@@ -434,7 +429,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -490,7 +485,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class InvalidModule
             {
                 public struct @class
@@ -507,7 +502,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -522,7 +517,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class ValidModule
             {
                 [CudaDevice]
@@ -534,7 +529,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Contains("Echo(int value)", result.Source, StringComparison.Ordinal);
@@ -549,7 +544,7 @@ public sealed class CudaTranspilerTests
             using System;
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class InvalidModule
             {
                 [CudaDevice]
@@ -560,7 +555,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -573,7 +568,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class ConversionModule
             {
                 [CudaDevice]
@@ -590,7 +585,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Contains("((value)!=0)", result.Source, StringComparison.Ordinal);
@@ -604,7 +599,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class ForwardModule
             {
                 [CudaDevice]
@@ -621,7 +616,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         var prototype = result.Source.IndexOf(
@@ -640,7 +635,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class DuplicateModule
             {
                 [CudaDevice(Name = "same")]
@@ -657,7 +652,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -670,7 +665,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class OptionalModule
             {
                 [CudaDevice]
@@ -687,7 +682,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -715,7 +710,7 @@ public sealed class CudaTranspilerTests
                 First
             }
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class EnumModule
             {
                 [CudaDevice]
@@ -726,7 +721,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -739,7 +734,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class StaticFieldModule
             {
                 public struct Data
@@ -755,7 +750,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -768,7 +763,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class IntegerModule
             {
                 [CudaDevice]
@@ -785,7 +780,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Contains("csharp2cuda_i32_add(left, right)", result.Source, StringComparison.Ordinal);
@@ -799,7 +794,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static unsafe class OrderModule
             {
                 [CudaDevice]
@@ -822,7 +817,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -836,7 +831,7 @@ public sealed class CudaTranspilerTests
             using Supprocom.CSharp2CUDA;
             using static System.Math;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class ConstantModule
             {
                 [CudaDevice]
@@ -847,7 +842,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -860,7 +855,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static unsafe class PointerModule
             {
                 [CudaDevice]
@@ -871,7 +866,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -910,7 +905,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static unsafe class AssignmentModule
             {
                 [CudaDevice]
@@ -927,7 +922,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -942,7 +937,7 @@ public sealed class CudaTranspilerTests
         var source = $$"""
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static unsafe class BinaryModule
             {
                 [CudaDevice]
@@ -959,7 +954,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -972,7 +967,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static unsafe class CompoundModule
             {
                 [CudaDevice]
@@ -989,7 +984,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -1003,7 +998,7 @@ public sealed class CudaTranspilerTests
             using System;
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class ExternalModule
             {
                 [CudaExternal]
@@ -1017,7 +1012,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -1031,7 +1026,7 @@ public sealed class CudaTranspilerTests
             using System;
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class ExternalModule
             {
                 [CudaExternal(IsPure = true)]
@@ -1045,7 +1040,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Contains(
@@ -1061,7 +1056,7 @@ public sealed class CudaTranspilerTests
             using System;
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static unsafe class ExternalModule
             {
                 [CudaExternal(IsPure = true)]
@@ -1075,7 +1070,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -1088,7 +1083,7 @@ public sealed class CudaTranspilerTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class CheckedModule
             {
                 [CudaDevice]
@@ -1110,7 +1105,7 @@ public sealed class CudaTranspilerTests
                 OutputKind.DynamicallyLinkedLibrary,
                 checkOverflow: true));
 
-        var result = CudaTranspiler.Transpile(compilation);
+        var result = CudaTestCompiler.Transpile(compilation);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -1123,7 +1118,7 @@ public sealed class CudaTranspilerTests
         var source = new StringBuilder("""
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class ComparisonModule
             {
             """);
@@ -1163,7 +1158,7 @@ public sealed class CudaTranspilerTests
         }
         source.AppendLine("}");
 
-        var result = CudaTranspiler.Transpile(source.ToString());
+        var result = CudaTestCompiler.Transpile(source.ToString());
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Equal(336, expectedDefinitions.Count);
@@ -1178,7 +1173,7 @@ public sealed class CudaTranspilerTests
             using System;
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class FloatingModule
             {
                 [CudaDevice]
@@ -1219,7 +1214,7 @@ public sealed class CudaTranspilerTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Contains(maximumHelper, result.Source, StringComparison.Ordinal);
@@ -1302,7 +1297,7 @@ public sealed class CudaTranspilerTests
         var source = $$"""
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class TestModule
             {
                 [CudaDevice]
@@ -1312,7 +1307,7 @@ public sealed class CudaTranspilerTests
                 }
             }
             """;
-        return CudaTranspiler.Transpile(source);
+        return CudaTestCompiler.Transpile(source);
     }
 
     private static IReadOnlyCollection<MetadataReference> GetCompilationReferences()

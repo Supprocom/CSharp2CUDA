@@ -9,7 +9,7 @@ internal static class CudaDiagnostics
     public static readonly DiagnosticDescriptor MissingTranslationUnit = new(
         "CS2CUDA001",
         "Translation unit is missing",
-        "The compilation does not contain a type with CudaTranslationUnitAttribute",
+        "The selected source does not contain a top-level class",
         Category,
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
@@ -162,6 +162,22 @@ internal static class CudaDiagnostics
         "CS2CUDA020",
         "CUDA constant storage is read-only",
         "CUDA constant array '{0}' is read-only",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InvalidOutputPath = new(
+        "CS2CUDA021",
+        "CUDA output path is invalid",
+        "CUDA output path '{0}' must be a relative .cu file path below the assembly output directory",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor ConflictingOutputPaths = new(
+        "CS2CUDA022",
+        "CUDA output path is not unique",
+        "CUDA output path '{0}' conflicts with output path '{1}'",
         Category,
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);

@@ -22,7 +22,17 @@ Translation stops when the source uses a C# feature without an exact CUDA rule. 
 
 ## How translation works
 
-`CudaTranspiler.Transpile` accepts a source string or a Roslyn `CSharpCompilation`. The source overload parses C# 14 syntax and creates a release compilation with unsafe code enabled.
+The public input boundary has three forms.
+A dedicated project can set `TranspileToCUDA` and make CUDA source its build
+output.
+A normal project can mark selected classes with `TranspileToCUDAAttribute`.
+Manual code can call `TranspileFile`, `TranspileFiles`, or
+`Transpile(CSharpCompilation)`.
+
+CSharp2CUDA does not accept raw C# source strings.
+File input reads normal `.cs` files.
+The compilation input uses a Roslyn compilation that the caller constructed
+from selected syntax trees and references.
 
 The compilation then passes through a semantic plan, a syntax validator, and a CUDA emitter. The plan registers translation units, structs, functions, parameters, locals, identifiers, and expression helper rewrites.
 
@@ -32,48 +42,115 @@ The emitter writes the integer semantics helpers, struct declarations, struct de
 
 ## Quick start
 
-Add a reference to the `Supprocom.CSharp2CUDA` project or package. The project targets .NET 10 and uses C# 14.
+Add the `Supprocom.CSharp2CUDA` package to a .NET 10 class library.
+Set `TranspileToCUDA` to make the complete project a CUDA project.
 
-Create a static unsafe class with `CudaTranslationUnitAttribute`. Mark device methods with `CudaDeviceAttribute` and kernel methods with `CudaGlobalAttribute`.
+Add the package directly to each project that uses automatic build transpilation.
+
+```xml
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TranspileToCUDA>true</TranspileToCUDA>
+    <TranspileToCUDAOutputPath>cuda/HelloCuda.cu</TranspileToCUDAOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Supprocom.CSharp2CUDA" Version="0.2.0" />
+  </ItemGroup>
+</Project>
+```
+
+Create `HelloCuda.cs` as an ordinary compile-checked C# file.
+Mark device methods with `CudaDeviceAttribute`.
+Mark kernel methods with `CudaGlobalAttribute`.
 
 ```csharp
-const string source = """
-    using Supprocom.CSharp2CUDA;
+using Supprocom.CSharp2CUDA;
 
-    [CudaTranslationUnit]
-    internal static unsafe class HelloCuda
+internal static unsafe class HelloCuda
+{
+    [CudaDevice]
+    private static int Add(int left, int right)
     {
-        [CudaDevice]
-        private static int Add(int left, int right)
-        {
-            return left + right;
-        }
-
-        [CudaGlobal(Name = "hello_kernel")]
-        private static void Kernel(int* output)
-        {
-            output[0] = Add(Cuda.ThreadIdx.X, 1);
-        }
+        return left + right;
     }
-    """;
 
-var result = CudaTranspiler.Transpile(source, path: "HelloCuda.cs");
+    [CudaGlobal(Name = "hello_kernel")]
+    private static void Kernel(int* output)
+    {
+        output[0] = Add(Cuda.ThreadIdx.X, 1);
+    }
+}
+```
+
+Build the project in Visual Studio 2026 or with `dotnet build`.
+Roslyn checks the C# source before CUDA emission.
+The output directory contains `cuda/HelloCuda.cu` and does not contain the
+project managed assembly.
+
+Omit `TranspileToCUDAOutputPath` to use `<AssemblyName>.cu`.
+A custom project path follows the same assembly-relative rules as a class
+marker path.
+
+Use a class marker when a normal managed project must also emit one CUDA
+module.
+The managed assembly remains in the output directory.
+
+```csharp
+using Supprocom.CSharp2CUDA;
+
+[TranspileToCUDA("cuda/HelloCuda.cu")]
+internal static unsafe class HelloCuda
+{
+    [CudaGlobal(Name = "hello_kernel")]
+    private static void Kernel(int* output)
+    {
+        output[0] = Cuda.ThreadIdx.X + 1;
+    }
+}
+```
+
+Use `[TranspileToCUDA]` or `[TranspileToCUDA("")]` for the default path.
+The default path is `<AssemblyName>.cu`.
+A custom path is relative to the managed assembly output directory.
+
+Use a manual API when code selects files explicitly.
+
+```csharp
+var result = CudaTranspiler.TranspileFile("HelloCuda.cs");
 if (!result.Succeeded)
 {
     foreach (var diagnostic in result.Diagnostics)
         Console.Error.WriteLine(diagnostic);
 }
-else
-{
-    File.WriteAllText("HelloCuda.cu", result.Source);
-}
 ```
 
-The generated source contains a `__device__` function for `Add` and an `extern "C" __global__` function named `hello_kernel`. The emitter also adds any integer helper functions required by the source.
+`TranspileFiles` accepts all files for one CUDA module.
+`Transpile(CSharpCompilation)` accepts a caller-owned Roslyn compilation.
+Manual APIs return source and never write a file.
+
+The generated source contains a `__device__` function for `Add`.
+It also contains an `extern "C" __global__` function named `hello_kernel`.
+The emitter adds the integer helper functions that the source requires.
 
 ## Source model
 
-A translation unit is a static, non-generic class marked with `CudaTranslationUnitAttribute`. The class can contain CUDA structs, constant arrays, and static methods.
+A translation unit is a selected static, non-generic class.
+A dedicated project selects all top-level classes.
+It ignores class markers and uses the project output path.
+
+A manual API selects all top-level classes in its supplied files or
+compilation.
+It ignores class marker selection and output paths.
+A normal managed build selects classes marked with
+`TranspileToCUDAAttribute`.
+
+All marked classes in one managed project form one CUDA module.
+Their nonempty output paths must match.
+An invalid path produces `CS2CUDA021`.
+Conflicting paths produce `CS2CUDA022`.
 
 Mark a static read-only `int` array with `CudaConstantAttribute`. Each element must have a compile-time value, and the array cannot be empty.
 
@@ -152,7 +229,7 @@ External methods have unknown effects by default. Set `CudaExternalAttribute.IsP
 using System;
 using Supprocom.CSharp2CUDA;
 
-[CudaTranslationUnit]
+[TranspileToCUDA]
 internal static unsafe class ExternalModule
 {
     [CudaExternal(IsPure = true)]

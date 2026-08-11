@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TranspileToCUDA>true</TranspileToCUDA>
+    <TranspileToCUDAOutputPath>cuda/Dedicated.cu</TranspileToCUDAOutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Supprocom.CSharp2CUDA" Version="[0.2.0]" />
+  </ItemGroup>
+</Project>

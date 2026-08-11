@@ -28,7 +28,7 @@ public sealed class CudaLogTests
     [Fact]
     public void Transpile_EmitsDirectLogForExactCudaSymbol()
     {
-        var result = CudaTranspiler.Transpile(GeneratedProbeSource);
+        var result = CudaTestCompiler.Transpile(GeneratedProbeSource);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Contains("output[0] = log(value);", result.Source, StringComparison.Ordinal);
@@ -41,7 +41,7 @@ public sealed class CudaLogTests
     [MemberData(nameof(InvalidLogSources))]
     public void Transpile_RejectsInvalidLogUse(string source, string diagnosticId)
     {
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
@@ -147,7 +147,7 @@ public sealed class CudaLogTests
             """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class InvalidModule
             {
                 [CudaDevice]
@@ -163,7 +163,7 @@ public sealed class CudaLogTests
             """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class InvalidModule
             {
                 [CudaConstant]
@@ -182,7 +182,7 @@ public sealed class CudaLogTests
             """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class InvalidModule
             {
                 [CudaDevice]
@@ -203,7 +203,7 @@ public sealed class CudaLogTests
                 }
             }
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static class InvalidModule
             {
                 [CudaDevice]
@@ -248,7 +248,7 @@ public sealed class CudaLogTests
 
     private static CudaTestRuntime CreateRuntime()
     {
-        var result = CudaTranspiler.Transpile(GeneratedProbeSource);
+        var result = CudaTestCompiler.Transpile(GeneratedProbeSource);
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         return CudaTestRuntime.Create(result.Source + Environment.NewLine + HandwrittenOracleSource);
     }
@@ -276,7 +276,7 @@ public sealed class CudaLogTests
     private const string GeneratedProbeSource = """
         using Supprocom.CSharp2CUDA;
 
-        [CudaTranslationUnit]
+        [TranspileToCUDA]
         internal static unsafe class LogModule
         {
             [CudaGlobal(Name = "transpiled_log")]

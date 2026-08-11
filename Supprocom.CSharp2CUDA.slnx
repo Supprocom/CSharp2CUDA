@@ -1,4 +1,6 @@
 <Solution>
+  <Project Path="Supprocom.CSharp2CUDA.PackageTests/Audit/Audit.csproj" />
+  <Project Path="Supprocom.CSharp2CUDA.Build/Supprocom.CSharp2CUDA.Build.csproj" />
   <Project Path="Supprocom.CSharp2CUDA.Tests/Supprocom.CSharp2CUDA.Tests.csproj" />
   <Project Path="Supprocom.CSharp2CUDA/Supprocom.CSharp2CUDA.csproj" />
 </Solution>

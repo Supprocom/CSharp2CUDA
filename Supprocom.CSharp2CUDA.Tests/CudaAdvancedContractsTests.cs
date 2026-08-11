@@ -22,7 +22,7 @@ public sealed class CudaAdvancedContractsTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static unsafe class AdvancedModule
             {
                 [CudaConstant]
@@ -89,7 +89,7 @@ public sealed class CudaAdvancedContractsTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Contains(
@@ -139,7 +139,7 @@ public sealed class CudaAdvancedContractsTests
         var source = $$"""
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static unsafe class InvalidModule
             {
                 [CudaGlobal]
@@ -150,7 +150,7 @@ public sealed class CudaAdvancedContractsTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == diagnosticId);
@@ -163,7 +163,7 @@ public sealed class CudaAdvancedContractsTests
         var source = $$"""
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static unsafe class InvalidModule
             {
                 {{declaration}}
@@ -175,7 +175,7 @@ public sealed class CudaAdvancedContractsTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == diagnosticId);
@@ -188,7 +188,7 @@ public sealed class CudaAdvancedContractsTests
         var source = $$"""
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static unsafe class InvalidModule
             {
                 [CudaConstant]
@@ -202,7 +202,7 @@ public sealed class CudaAdvancedContractsTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
         var errors = result.Diagnostics
             .Where(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
             .ToArray();
@@ -219,7 +219,7 @@ public sealed class CudaAdvancedContractsTests
         const string source = """
             using Supprocom.CSharp2CUDA;
 
-            [CudaTranslationUnit]
+            [TranspileToCUDA]
             internal static unsafe class InvalidModule
             {
                 [CudaDevice]
@@ -231,7 +231,7 @@ public sealed class CudaAdvancedContractsTests
             }
             """;
 
-        var result = CudaTranspiler.Transpile(source);
+        var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA013");

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Supprocom.CSharp2CUDA.Build</AssemblyName>
+    <RootNamespace>Supprocom.CSharp2CUDA.Build</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <DebugType>portable</DebugType>
+    <RepositoryUrl>https://github.com/Supprocom/CSharp2CUDA</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <SourceRevisionId Condition="'$(RepositoryCommit)' != ''">$(RepositoryCommit)</SourceRevisionId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Supprocom.CSharp2CUDA\Supprocom.CSharp2CUDA.csproj" />
+    <Reference Include="Microsoft.Build.Framework"
+               HintPath="$(MSBuildBinPath)\Microsoft.Build.Framework.dll"
+               Private="false" />
+    <Reference Include="Microsoft.Build.Utilities.Core"
+               HintPath="$(MSBuildBinPath)\Microsoft.Build.Utilities.Core.dll"
+               Private="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="RepositoryCommit"
+                      Value="$(RepositoryCommit)"
+                      Condition="'$(RepositoryCommit)' != ''" />
+  </ItemGroup>
+</Project>

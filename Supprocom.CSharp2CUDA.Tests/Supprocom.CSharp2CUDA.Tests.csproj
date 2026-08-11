@@ -16,11 +16,18 @@
     </PackageReference>
   </ItemGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(CSharp2CUDAPackageDirectory)' == ''">
     <ProjectReference Include="..\Supprocom.CSharp2CUDA\Supprocom.CSharp2CUDA.csproj" />
   </ItemGroup>
 
+  <ItemGroup Condition="'$(CSharp2CUDAPackageDirectory)' != ''">
+    <PackageReference Include="Supprocom.CSharp2CUDA"
+                      Version="[$(CSharp2CUDAPackageVersion)]" />
+  </ItemGroup>
+
   <ItemGroup>
-    <None Include="Golden\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <Compile Update="Golden\*Module.cs" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Golden\*.cu" CopyToOutputDirectory="PreserveNewest" />
+    <Compile Update="FileInputs\**\*.cs" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
