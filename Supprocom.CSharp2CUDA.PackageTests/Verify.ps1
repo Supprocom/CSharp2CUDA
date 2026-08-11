@@ -109,10 +109,15 @@ function Invoke-DotNet {
 function Invoke-Case {
     param(
         [string] $Name,
-        [bool] $ExpectSuccess
+        [bool] $ExpectSuccess,
+        [string] $ProjectName,
+        [string[]] $BuildArguments = @()
     )
 
-    $project = Join-Path $PSScriptRoot "$Name/$Name.csproj"
+    if ([string]::IsNullOrWhiteSpace($ProjectName)) {
+        $ProjectName = $Name
+    }
+    $project = Join-Path $PSScriptRoot "$ProjectName/$ProjectName.csproj"
     $caseRoot = Join-Path $runRoot $Name
     $casePath = [System.IO.Path]::GetFullPath($caseRoot)
     $runPrefix = [System.IO.Path]::GetFullPath($runRoot) +
@@ -148,7 +153,7 @@ function Invoke-Case {
         '--configuration',
         'Release',
         '--no-restore'
-    ) + $common)
+    ) + $BuildArguments + $common)
     return [pscustomobject]@{
         Root = Join-Path $baseOutput 'Release/net10.0'
         IntermediateRoot = $baseIntermediate
@@ -164,6 +169,16 @@ function Assert-NoCompilerPayload {
     if (Get-ChildItem -LiteralPath $Case.IntermediateRoot -Recurse -File -Filter (
             'Supprocom.CSharp2CUDA.payload')) {
         throw 'The build kept an intermediate CUDA compiler payload.'
+    }
+}
+
+function Assert-NoAutomaticState {
+    param([object] $Case)
+
+    Assert-NoCompilerPayload -Case $Case
+    if (Get-ChildItem -LiteralPath $Case.IntermediateRoot -Recurse -File -Filter (
+            'Supprocom.CSharp2CUDA.outputs')) {
+        throw 'The build kept an automatic output manifest.'
     }
 }
 
@@ -228,6 +243,53 @@ Invoke-DotNet -Name 'Generator-build' -ExpectedExitCode 0 -Arguments @(
     '--no-restore'
 ) | Out-Null
 
+$lookalikeProject = Join-Path $repositoryRoot (
+    'Supprocom.CSharp2CUDA.PackageTests.Lookalike/' +
+    'Supprocom.CSharp2CUDA.PackageTests.Lookalike.csproj')
+Invoke-DotNet -Name 'Lookalike-restore' -ExpectedExitCode 0 -Arguments @(
+    'restore',
+    $lookalikeProject,
+    '--configfile',
+    $nugetPath,
+    '--packages',
+    $packagesRoot,
+    '--force',
+    '--no-cache'
+) | Out-Null
+Invoke-DotNet -Name 'Lookalike-build' -ExpectedExitCode 0 -Arguments @(
+    'build',
+    $lookalikeProject,
+    '--configuration',
+    'Release',
+    '--no-restore'
+) | Out-Null
+
+$lookalikeAttributed = Invoke-Case `
+    -Name 'LookalikeAttributed' `
+    -ExpectSuccess $true `
+    -BuildArguments @('-p:RunAnalyzers=false')
+Assert-NoAutomaticState -Case $lookalikeAttributed
+if (-not (Test-Path -LiteralPath (
+        Join-Path $lookalikeAttributed.Root 'LookalikeAttributed.dll'))) {
+    throw 'The lookalike-marker project did not create its managed assembly.'
+}
+if (Get-ChildItem -LiteralPath $lookalikeAttributed.Root -Recurse -File -Filter '*.cu') {
+    throw 'The lookalike-marker project created CUDA source.'
+}
+
+$disabledAttributed = Invoke-Case `
+    -Name 'AttributedDisabledFirst' `
+    -ProjectName 'Attributed' `
+    -ExpectSuccess $false `
+    -BuildArguments @('-p:RunAnalyzers=false')
+if ($disabledAttributed.Output -notmatch 'CS2CUDA023') {
+    throw 'The first disabled class-marker build did not report CS2CUDA023.'
+}
+Assert-NoAutomaticState -Case $disabledAttributed
+if (Get-ChildItem -LiteralPath $disabledAttributed.Root -Recurse -File -Filter '*.cu') {
+    throw 'The first disabled class-marker build created CUDA source.'
+}
+
 $attributed = Invoke-Case -Name 'Attributed' -ExpectSuccess $true
 Assert-NoCompilerPayload -Case $attributed
 $attributedCuda = Join-Path $attributed.Root 'cuda/Attributed.cu'
@@ -240,6 +302,25 @@ if (-not (Test-Path -LiteralPath (Join-Path $attributed.Root 'Attributed.dll')))
 Invoke-RepeatCase -Name 'Attributed' -Case $attributed
 if (-not (Test-Path -LiteralPath $attributedCuda)) {
     throw 'The repeated attributed build did not create CUDA source.'
+}
+$disabledAttributedOutput = Invoke-DotNet `
+    -Name 'Attributed-analyzers-disabled-build' `
+    -ExpectedExitCode 1 `
+    -Arguments (@(
+        'build',
+        $attributed.Project,
+        '--configuration',
+        'Release',
+        '--no-restore',
+        '-t:Rebuild',
+        '-p:RunAnalyzers=false'
+    ) + $attributed.Common)
+if ($disabledAttributedOutput -notmatch 'CS2CUDA023') {
+    throw 'The repeated disabled class-marker build did not report CS2CUDA023.'
+}
+Assert-NoAutomaticState -Case $attributed
+if (Test-Path -LiteralPath $attributedCuda) {
+    throw 'The repeated disabled class-marker build kept stale CUDA source.'
 }
 
 $attributedDefault = Invoke-Case -Name 'AttributedDefault' -ExpectSuccess $true
@@ -374,6 +455,25 @@ if (-not (Test-Path -LiteralPath (
 Invoke-RepeatCase -Name 'GeneratedAttributed' -Case $generatedAttributed
 if (-not (Test-Path -LiteralPath $generatedAttributedCuda)) {
     throw 'The repeated generated attributed build did not create CUDA source.'
+}
+$disabledGeneratedOutput = Invoke-DotNet `
+    -Name 'GeneratedAttributed-analyzers-disabled-build' `
+    -ExpectedExitCode 1 `
+    -Arguments (@(
+        'build',
+        $generatedAttributed.Project,
+        '--configuration',
+        'Release',
+        '--no-restore',
+        '-t:Rebuild',
+        '-p:RunAnalyzers=false'
+    ) + $generatedAttributed.Common)
+if ($disabledGeneratedOutput -notmatch 'CS2CUDA023') {
+    throw 'The disabled generated class-marker build did not report CS2CUDA023.'
+}
+Assert-NoAutomaticState -Case $generatedAttributed
+if (Test-Path -LiteralPath $generatedAttributedCuda) {
+    throw 'The disabled generated class-marker build kept stale CUDA source.'
 }
 
 $generatedProject = Invoke-Case -Name 'GeneratedProject' -ExpectSuccess $true

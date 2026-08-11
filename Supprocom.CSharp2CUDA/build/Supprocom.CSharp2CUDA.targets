@@ -67,20 +67,19 @@
   <Target Name="SupprocomPublishCUDAOutput"
           AfterTargets="CoreCompile"
           Condition="'$(DesignTimeBuild)' != 'true'
-                     and '$(IsCrossTargetingBuild)' != 'true'
-                     and ('$(TranspileToCUDA)' == 'true'
-                       or Exists('$(_SupprocomCSharp2CUDAIntermediatePayload)'))">
+                     and '$(IsCrossTargetingBuild)' != 'true'">
     <Error Condition="'$(TranspileToCUDA)' == 'true'
                       and !Exists('$(_SupprocomCSharp2CUDAIntermediatePayload)')"
            Code="CS2CUDA023"
            Text="The CUDA compiler analyzer did not create an intermediate payload." />
 
     <Supprocom.CSharp2CUDA.Build.CudaOutputTask
-        Condition="Exists('$(_SupprocomCSharp2CUDAIntermediatePayload)')"
         IntermediatePayloadPath="$(_SupprocomCSharp2CUDAIntermediatePayload)"
+        ManagedAssemblyPath="@(IntermediateAssembly)"
         OutputDirectory="$(TargetDir)"
         ManifestPath="$(_SupprocomCSharp2CUDAManifest)"
-        Publish="true">
+        Publish="true"
+        ValidateAttributedPayload="true">
       <Output TaskParameter="GeneratedFile" PropertyName="_SupprocomCSharp2CUDAGeneratedFile" />
     </Supprocom.CSharp2CUDA.Build.CudaOutputTask>
 

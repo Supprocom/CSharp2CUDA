@@ -20,6 +20,10 @@ public sealed class CudaOutputTask : Microsoft.Build.Utilities.Task
 
     public bool Publish { get; set; }
 
+    public bool ValidateAttributedPayload { get; set; }
+
+    public string ManagedAssemblyPath { get; set; } = string.Empty;
+
     [Output]
     public string GeneratedFile { get; private set; } = string.Empty;
 
@@ -61,7 +65,10 @@ public sealed class CudaOutputTask : Microsoft.Build.Utilities.Task
     private void PublishPayload(string outputRoot)
     {
         if (!File.Exists(IntermediatePayloadPath))
+        {
+            ValidateMissingPayload();
             return;
+        }
 
         var payload = File.ReadAllText(IntermediatePayloadPath, Encoding.UTF8);
         DeleteIntermediatePayload();
@@ -90,6 +97,23 @@ public sealed class CudaOutputTask : Microsoft.Build.Utilities.Task
         }
         GeneratedFile = outputPath;
         Log.LogMessage(MessageImportance.High, "Generated CUDA source: {0}", outputPath);
+    }
+
+    private void ValidateMissingPayload()
+    {
+        if (!ValidateAttributedPayload)
+            return;
+        if (string.IsNullOrWhiteSpace(ManagedAssemblyPath) ||
+            !File.Exists(ManagedAssemblyPath))
+        {
+            throw new InvalidOperationException(
+                "The managed compiler output is unavailable for CUDA marker validation.");
+        }
+        if (CudaAssemblyInspector.HasProductClassMarker(ManagedAssemblyPath))
+        {
+            throw new InvalidOperationException(
+                "The CUDA compiler analyzer did not create a payload for a marked class.");
+        }
     }
 
     private void DeleteIntermediatePayload()

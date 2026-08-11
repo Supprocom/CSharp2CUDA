@@ -1,6 +1,7 @@
 <Solution>
   <Project Path="Supprocom.CSharp2CUDA.PackageTests/Audit/Audit.csproj" />
   <Project Path="Supprocom.CSharp2CUDA.PackageTests.Generator/Supprocom.CSharp2CUDA.PackageTests.Generator.csproj" />
+  <Project Path="Supprocom.CSharp2CUDA.PackageTests.Lookalike/Supprocom.CSharp2CUDA.PackageTests.Lookalike.csproj" />
   <Project Path="Supprocom.CSharp2CUDA.Build/Supprocom.CSharp2CUDA.Build.csproj" />
   <Project Path="Supprocom.CSharp2CUDA.Compiler/Supprocom.CSharp2CUDA.Compiler.csproj" />
   <Project Path="Supprocom.CSharp2CUDA.Tests/Supprocom.CSharp2CUDA.Tests.csproj" />

@@ -91,6 +91,8 @@ output.
 
 The compiler analyzer stages one intermediate payload during `CoreCompile`.
 The build publishes that payload only after the compiler succeeds.
+The build also checks the exact class marker in the managed compiler output.
+A missing payload for a marked class produces `CS2CUDA023`.
 
 The output path must identify a relative `.cu` file below the assembly output
 directory.
