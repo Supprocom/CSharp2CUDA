@@ -1,11 +1,9 @@
-using System.Globalization;
 using System.Text;
 using Microsoft.Build.Framework;
-using Microsoft.CodeAnalysis;
 
 namespace Supprocom.CSharp2CUDA.Build;
 
-public sealed class TranspileTask : Microsoft.Build.Utilities.Task
+public sealed class CudaOutputTask : Microsoft.Build.Utilities.Task
 {
     [Required]
     public string OutputDirectory { get; set; } = string.Empty;
@@ -13,35 +11,14 @@ public sealed class TranspileTask : Microsoft.Build.Utilities.Task
     [Required]
     public string ManifestPath { get; set; } = string.Empty;
 
-    public ITaskItem[] SourceFiles { get; set; } = [];
-
-    public ITaskItem[] ReferencePaths { get; set; } = [];
+    [Required]
+    public string IntermediatePayloadPath { get; set; } = string.Empty;
 
     public ITaskItem[] ManagedOutputFiles { get; set; } = [];
 
-    public string AssemblyName { get; set; } = string.Empty;
-
-    public string ProjectOutputPath { get; set; } = string.Empty;
-
-    public string StartupObject { get; set; } = string.Empty;
-
-    public string DefineConstants { get; set; } = string.Empty;
-
-    public string LanguageVersion { get; set; } = "14.0";
-
-    public string NullableMode { get; set; } = "disable";
-
-    public string OutputType { get; set; } = "Library";
-
     public bool TranspileEntireProject { get; set; }
 
-    public bool AllowUnsafe { get; set; }
-
-    public bool CheckOverflow { get; set; }
-
-    public bool Optimize { get; set; }
-
-    public bool CleanOnly { get; set; }
+    public bool Publish { get; set; }
 
     [Output]
     public string GeneratedFile { get; private set; } = string.Empty;
@@ -50,7 +27,11 @@ public sealed class TranspileTask : Microsoft.Build.Utilities.Task
     {
         try
         {
-            ExecuteCore();
+            var outputRoot = Path.GetFullPath(OutputDirectory);
+            if (Publish)
+                PublishPayload(outputRoot);
+            else
+                Prepare(outputRoot);
         }
         catch (Exception exception)
         {
@@ -69,70 +50,52 @@ public sealed class TranspileTask : Microsoft.Build.Utilities.Task
         return !Log.HasLoggedErrors;
     }
 
-    private void ExecuteCore()
+    private void Prepare(string outputRoot)
     {
-        var outputRoot = Path.GetFullPath(OutputDirectory);
+        DeleteIntermediatePayload();
         DeleteTrackedOutputs(outputRoot);
         if (TranspileEntireProject)
             DeleteManagedOutputs(outputRoot);
-        if (CleanOnly)
+    }
+
+    private void PublishPayload(string outputRoot)
+    {
+        if (!File.Exists(IntermediatePayloadPath))
             return;
 
-        var sourcePaths = GetExistingPaths(SourceFiles);
-        if (sourcePaths.Count == 0)
-        {
-            if (TranspileEntireProject)
-                throw new InvalidOperationException("The CUDA project does not contain a C# source file.");
-            WriteManifest(null);
-            return;
-        }
+        var payload = File.ReadAllText(IntermediatePayloadPath, Encoding.UTF8);
+        DeleteIntermediatePayload();
+        var separator = payload.IndexOf('\n');
+        if (separator <= 0)
+            throw new InvalidOperationException("The CUDA compiler payload is invalid.");
 
-        var compilationOptions = new CudaFileCompilationOptions
-        {
-            AssemblyName = string.IsNullOrWhiteSpace(AssemblyName)
-                ? "Supprocom.CSharp2CUDA.Build.Input"
-                : AssemblyName,
-            AllowUnsafe = AllowUnsafe,
-            CheckOverflow = CheckOverflow,
-            Optimize = Optimize,
-            OutputKind = ParseOutputKind(OutputType),
-            LanguageVersion = string.IsNullOrWhiteSpace(LanguageVersion)
-                ? "14.0"
-                : LanguageVersion,
-            MainTypeName = string.IsNullOrWhiteSpace(StartupObject) ? null : StartupObject,
-            Nullable = string.IsNullOrWhiteSpace(NullableMode) ? "disable" : NullableMode,
-            UseDefaultReferences = false,
-            MetadataReferencePaths = GetExistingPaths(ReferencePaths),
-            PreprocessorSymbols = DefineConstants.Split(
-                [';', ','],
-                StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-        };
-        var options = new CudaTranspilationOptions
-        {
-            TranspileAttributedClassesOnly = !TranspileEntireProject
-        };
-        var result = CudaTranspiler.TranspileFiles(sourcePaths, compilationOptions, options);
-        LogDiagnostics(result.Diagnostics);
-        if (!result.Succeeded || string.IsNullOrEmpty(result.Source))
-        {
-            if (result.Succeeded)
-                WriteManifest(null);
-            return;
-        }
-
-        var relativePath = TranspileEntireProject
-            ? ProjectOutputPath
-            : result.RequestedOutputPath;
-        if (string.IsNullOrWhiteSpace(relativePath))
-            relativePath = AssemblyName + ".cu";
-
+        var relativePath = payload[..separator].TrimEnd('\r');
+        var source = payload[(separator + 1)..];
         var outputPath = ResolveOutputPath(outputRoot, relativePath);
         if (string.IsNullOrEmpty(outputPath))
             return;
-        WriteOutput(outputPath, result.Source);
-        WriteManifest(outputPath);
+
+        var outputWritten = false;
+        try
+        {
+            WriteOutput(outputPath, source);
+            outputWritten = true;
+            WriteManifest(outputPath);
+        }
+        catch
+        {
+            if (outputWritten && File.Exists(outputPath))
+                File.Delete(outputPath);
+            throw;
+        }
         GeneratedFile = outputPath;
         Log.LogMessage(MessageImportance.High, "Generated CUDA source: {0}", outputPath);
+    }
+
+    private void DeleteIntermediatePayload()
+    {
+        if (File.Exists(IntermediatePayloadPath))
+            File.Delete(IntermediatePayloadPath);
     }
 
     private void DeleteTrackedOutputs(string outputRoot)
@@ -167,67 +130,6 @@ public sealed class TranspileTask : Microsoft.Build.Utilities.Task
             var path = Path.GetFullPath(value);
             if (IsBelowOutputRoot(outputRoot, path) && File.Exists(path))
                 File.Delete(path);
-        }
-    }
-
-    private static IReadOnlyCollection<string> GetExistingPaths(IEnumerable<ITaskItem> items)
-    {
-        var paths = new HashSet<string>(PathComparer);
-        foreach (var item in items)
-        {
-            var value = item.GetMetadata("FullPath");
-            if (!string.IsNullOrWhiteSpace(value) && File.Exists(value))
-                paths.Add(Path.GetFullPath(value));
-        }
-
-        return paths;
-    }
-
-    private static OutputKind ParseOutputKind(string value) => value switch
-    {
-        "Exe" => OutputKind.ConsoleApplication,
-        "WinExe" => OutputKind.WindowsApplication,
-        "Module" => OutputKind.NetModule,
-        "AppContainerExe" => OutputKind.WindowsRuntimeApplication,
-        _ => OutputKind.DynamicallyLinkedLibrary
-    };
-
-    private void LogDiagnostics(IEnumerable<Diagnostic> diagnostics)
-    {
-        foreach (var diagnostic in diagnostics)
-        {
-            var message = diagnostic.GetMessage(CultureInfo.InvariantCulture);
-            var lineSpan = diagnostic.Location.GetLineSpan();
-            var start = lineSpan.StartLinePosition;
-            var end = lineSpan.EndLinePosition;
-            if (diagnostic.Severity == DiagnosticSeverity.Error)
-            {
-                Log.LogError(
-                    subcategory: null,
-                    errorCode: diagnostic.Id,
-                    helpKeyword: null,
-                    file: lineSpan.Path,
-                    lineNumber: start.Line + 1,
-                    columnNumber: start.Character + 1,
-                    endLineNumber: end.Line + 1,
-                    endColumnNumber: end.Character + 1,
-                    message: message);
-            }
-            else if (diagnostic.Severity == DiagnosticSeverity.Warning)
-            {
-                if (!diagnostic.Id.StartsWith("CS2CUDA", StringComparison.Ordinal))
-                    continue;
-                Log.LogWarning(
-                    subcategory: null,
-                    warningCode: diagnostic.Id,
-                    helpKeyword: null,
-                    file: lineSpan.Path,
-                    lineNumber: start.Line + 1,
-                    columnNumber: start.Character + 1,
-                    endLineNumber: end.Line + 1,
-                    endColumnNumber: end.Character + 1,
-                    message: message);
-            }
         }
     }
 
@@ -331,16 +233,24 @@ public sealed class TranspileTask : Microsoft.Build.Utilities.Task
         }
     }
 
-    private void WriteManifest(string? outputPath)
+    private void WriteManifest(string outputPath)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(ManifestPath)!);
-        var contents = outputPath is null ? string.Empty : outputPath + Environment.NewLine;
-        File.WriteAllText(ManifestPath, contents, new UTF8Encoding(false));
+        var temporaryPath = ManifestPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            File.WriteAllText(
+                temporaryPath,
+                outputPath + Environment.NewLine,
+                new UTF8Encoding(false));
+            File.Move(temporaryPath, ManifestPath, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+                File.Delete(temporaryPath);
+        }
     }
-
-    private static StringComparer PathComparer => OperatingSystem.IsWindows()
-        ? StringComparer.OrdinalIgnoreCase
-        : StringComparer.Ordinal;
 
     private static StringComparison PathComparison => OperatingSystem.IsWindows()
         ? StringComparison.OrdinalIgnoreCase

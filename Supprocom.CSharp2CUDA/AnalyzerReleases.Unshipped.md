@@ -26,3 +26,4 @@ CS2CUDA019 | Supprocom.CSharp2CUDA | Error | Reports an invalid CUDA atomic type
 CS2CUDA020 | Supprocom.CSharp2CUDA | Error | Reports a write to CUDA constant storage.
 CS2CUDA021 | Supprocom.CSharp2CUDA | Error | Reports an invalid CUDA output path.
 CS2CUDA022 | Supprocom.CSharp2CUDA | Error | Reports conflicting CUDA output paths.
+CS2CUDA023 | Supprocom.CSharp2CUDA | Error | Reports an automatic build transpilation failure.

@@ -37,6 +37,8 @@ Set `TranspileToCUDA` to select the complete project for CUDA emission.
 ```
 
 The project still passes through Roslyn compile checking.
+Automatic transpilation uses that accepted compilation and its generated syntax
+trees.
 The build does not keep a managed assembly in its output directory.
 It writes the selected `.cu` file relative to that directory.
 
@@ -86,6 +88,9 @@ Omit `TranspileToCUDAOutputPath` to use `<AssemblyName>.cu`.
 A failed C# compilation stops before CUDA emission.
 A CSharp2CUDA error also stops the build and removes the previous generated
 output.
+
+The compiler analyzer stages one intermediate payload during `CoreCompile`.
+The build publishes that payload only after the compiler succeeds.
 
 The output path must identify a relative `.cu` file below the assembly output
 directory.
@@ -151,6 +156,8 @@ Set `OutputKind` and `MainTypeName` when executable source needs those Roslyn co
 
 Use `CudaTranspiler.Transpile(CSharpCompilation)` when another Roslyn-based tool
 already owns the selected syntax trees, references, and compilation options.
+This overload includes source-generator trees that the compilation owner added.
+`TranspileFile` and `TranspileFiles` do not run project source generators.
 
 ## Understand the generated source
 

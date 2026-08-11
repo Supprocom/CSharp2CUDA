@@ -16,7 +16,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>cuda;csharp;roslyn;transpiler;source-translation;gpu</PackageTags>
-    <PackageReleaseNotes>Replace raw source-text input with compile-checked file APIs and automatic project-build transpilation.</PackageReleaseNotes>
+    <PackageReleaseNotes>Replace raw source-text input with compile-checked file APIs and generator-complete automatic project transpilation.</PackageReleaseNotes>
     <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
@@ -40,6 +40,7 @@
           PackagePath="build\Supprocom.CSharp2CUDA.targets" />
     <AssemblyMetadata Include="RepositoryCommit" Value="$(RepositoryCommit)" Condition="'$(RepositoryCommit)' != ''" />
     <InternalsVisibleTo Include="Supprocom.CSharp2CUDA.Build" />
+    <InternalsVisibleTo Include="Supprocom.CSharp2CUDA.Compiler" />
     <InternalsVisibleTo Include="Supprocom.CSharp2CUDA.Tests" />
   </ItemGroup>
 
@@ -48,8 +49,13 @@
     <Error Condition="'$(RepositoryBranch)' == ''" Text="RepositoryBranch is required for package creation." />
   </Target>
 
-  <Target Name="BuildTranspilationTask" BeforeTargets="_GetPackageFiles">
+  <Target Name="BuildPackageTools" BeforeTargets="_GetPackageFiles">
     <MSBuild Projects="..\Supprocom.CSharp2CUDA.Build\Supprocom.CSharp2CUDA.Build.csproj"
+             Targets="Build"
+             BuildInParallel="false"
+             Condition="'$(NoBuild)' != 'true'"
+             Properties="Configuration=$(Configuration);BuildProjectReferences=false;RepositoryCommit=$(RepositoryCommit);RepositoryBranch=$(RepositoryBranch);ContinuousIntegrationBuild=$(ContinuousIntegrationBuild)" />
+    <MSBuild Projects="..\Supprocom.CSharp2CUDA.Compiler\Supprocom.CSharp2CUDA.Compiler.csproj"
              Targets="Build"
              BuildInParallel="false"
              Condition="'$(NoBuild)' != 'true'"
@@ -70,6 +76,15 @@
       <None Include="..\Supprocom.CSharp2CUDA.Build\bin\$(Configuration)\net10.0\Microsoft.CodeAnalysis.CSharp.dll"
             Pack="true"
             PackagePath="build\task\Microsoft.CodeAnalysis.CSharp.dll" />
+      <None Include="bin\$(Configuration)\net10.0\Supprocom.CSharp2CUDA.dll"
+            Pack="true"
+            PackagePath="build\compiler\Supprocom.CSharp2CUDA.dll" />
+      <None Include="..\Supprocom.CSharp2CUDA.Compiler\bin\$(Configuration)\net10.0\Supprocom.CSharp2CUDA.Compiler.dll"
+            Pack="true"
+            PackagePath="build\compiler\Supprocom.CSharp2CUDA.Compiler.dll" />
+      <None Include="..\Supprocom.CSharp2CUDA.Compiler\bin\$(Configuration)\net10.0\Supprocom.CSharp2CUDA.Compiler.pdb"
+            Pack="true"
+            PackagePath="build\compiler\Supprocom.CSharp2CUDA.Compiler.pdb" />
     </ItemGroup>
   </Target>
 </Project>

@@ -1,11 +1,15 @@
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
+using Microsoft.CodeAnalysis.Text;
 using Supprocom.CSharp2CUDA;
+using Supprocom.CSharp2CUDA.PackageTests.Manual;
 using Supprocom.CSharp2CUDA.PackageTests.Manual.Inputs;
 
 Require(SingleKernel.Double(4) == 8, "The managed source result is incorrect.");
+Require(GeneratedPattern.Matches("cuda"), "The generated managed source is incorrect.");
 
 var inputRoot = Path.Combine(AppContext.BaseDirectory, "Inputs");
 var singlePath = Path.Combine(inputRoot, "SingleKernel.cs");
@@ -31,6 +35,43 @@ Require(
     compiled.Source.Contains("return AddOne(value);", StringComparison.Ordinal),
     "Transpile(CSharpCompilation) did not emit the selected compilation.");
 
+const string generatorInput = """
+    using Supprocom.CSharp2CUDA;
+
+    namespace Supprocom.CSharp2CUDA.PackageTests.Manual.Generated;
+
+    public static class GeneratedCaller
+    {
+        [CudaDevice]
+        public static int Invoke(int value)
+        {
+            return GeneratedHelper.Increment(value);
+        }
+    }
+    """;
+var generatorCompilation = CreateCompilationFromTrees(
+    [CSharpSyntaxTree.ParseText(
+        generatorInput,
+        new CSharpParseOptions(LanguageVersion.CSharp14),
+        "GeneratedCaller.cs")],
+    "ManualGeneratedCompilation");
+GeneratorDriver generatorDriver = CSharpGeneratorDriver.Create(
+    [new ManualCudaGenerator().AsSourceGenerator()],
+    parseOptions: new CSharpParseOptions(LanguageVersion.CSharp14));
+generatorDriver.RunGeneratorsAndUpdateCompilation(
+    generatorCompilation,
+    out var generatedCompilation,
+    out var generatorDiagnostics);
+Require(
+    !generatorDiagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error),
+    "The manual source generator failed.");
+var generated = CudaTranspiler.Transpile((CSharpCompilation)generatedCompilation);
+Require(generated.Succeeded, FormatDiagnostics(generated.Diagnostics));
+Require(
+    generated.Source.Contains("__device__ int Increment(int value)", StringComparison.Ordinal) &&
+    generated.Source.Contains("return Increment(value);", StringComparison.Ordinal),
+    "Transpile(CSharpCompilation) did not emit the generated dependency.");
+
 var productAssembly = typeof(CudaTranspiler).Assembly;
 Require(
     productAssembly.GetName().Version?.ToString() == "0.2.0.0",
@@ -46,7 +87,7 @@ Require(
     informationalVersion == $"0.2.0+{repositoryCommit}",
     "The informational version does not match the repository commit.");
 
-Require(args.Length == 1, "The build task assembly path is missing.");
+Require(args.Length == 2, "The package tool assembly paths are missing.");
 var taskAssemblyPath = Path.GetFullPath(args[0]);
 Require(File.Exists(taskAssemblyPath), "The build task assembly is missing.");
 var taskAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(taskAssemblyPath);
@@ -65,6 +106,25 @@ Require(
     taskInformationalVersion == $"0.2.0+{repositoryCommit}",
     "The build task provenance is incorrect.");
 
+var compilerAssemblyPath = Path.GetFullPath(args[1]);
+Require(File.Exists(compilerAssemblyPath), "The compiler assembly is missing.");
+var compilerAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(compilerAssemblyPath);
+Require(
+    compilerAssembly.GetName().Name == "Supprocom.CSharp2CUDA.Compiler" &&
+    compilerAssembly.GetName().Version?.ToString() == "0.2.0.0",
+    "The compiler assembly identity is incorrect.");
+var compilerRepositoryCommit = compilerAssembly
+    .GetCustomAttributes<AssemblyMetadataAttribute>()
+    .Single(attribute => attribute.Key == "RepositoryCommit")
+    .Value;
+var compilerInformationalVersion = compilerAssembly
+    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+    .InformationalVersion;
+Require(
+    compilerRepositoryCommit == repositoryCommit &&
+    compilerInformationalVersion == $"0.2.0+{repositoryCommit}",
+    "The compiler provenance is incorrect.");
+
 static CSharpCompilation CreateCompilation(IEnumerable<string> paths)
 {
     var parseOptions = new CSharpParseOptions(LanguageVersion.CSharp14);
@@ -72,6 +132,13 @@ static CSharpCompilation CreateCompilation(IEnumerable<string> paths)
         File.ReadAllText(path),
         parseOptions,
         path));
+    return CreateCompilationFromTrees(syntaxTrees, "ManualCompilation");
+}
+
+static CSharpCompilation CreateCompilationFromTrees(
+    IEnumerable<SyntaxTree> syntaxTrees,
+    string assemblyName)
+{
     var references = new Dictionary<string, MetadataReference>(
         StringComparer.OrdinalIgnoreCase);
     if (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") is string trustedAssemblies)
@@ -83,7 +150,7 @@ static CSharpCompilation CreateCompilation(IEnumerable<string> paths)
     var productPath = typeof(CudaTranspiler).Assembly.Location;
     references[productPath] = MetadataReference.CreateFromFile(productPath);
     return CSharpCompilation.Create(
-        "ManualCompilation",
+        assemblyName,
         syntaxTrees,
         references.Values,
         new CSharpCompilationOptions(
@@ -99,4 +166,29 @@ static void Require(bool condition, string message)
 {
     if (!condition)
         throw new InvalidOperationException(message);
+}
+
+internal sealed class ManualCudaGenerator : IIncrementalGenerator
+{
+    public void Initialize(IncrementalGeneratorInitializationContext context)
+    {
+        context.RegisterPostInitializationOutput(static output => output.AddSource(
+            "GeneratedHelper.g.cs",
+            SourceText.From(
+                """
+                using Supprocom.CSharp2CUDA;
+
+                namespace Supprocom.CSharp2CUDA.PackageTests.Manual.Generated;
+
+                public static class GeneratedHelper
+                {
+                    [CudaDevice]
+                    public static int Increment(int value)
+                    {
+                        return value + 1;
+                    }
+                }
+                """,
+                Encoding.UTF8)));
+    }
 }

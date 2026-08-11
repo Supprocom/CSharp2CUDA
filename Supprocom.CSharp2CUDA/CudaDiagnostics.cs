@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 
 namespace Supprocom.CSharp2CUDA;
@@ -181,4 +182,39 @@ internal static class CudaDiagnostics
         Category,
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor BuildFailure = new(
+        "CS2CUDA023",
+        "CUDA build transpilation failed",
+        "CUDA build transpilation failed: {0}",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static ImmutableArray<DiagnosticDescriptor> All { get; } =
+    [
+        MissingTranslationUnit,
+        InvalidTranslationUnit,
+        UnsupportedMember,
+        MissingFunctionKind,
+        UnsupportedSyntax,
+        UnsupportedCall,
+        UnsupportedType,
+        ConflictingFunctionKinds,
+        InvalidReadOnlyParameter,
+        InvalidIdentifier,
+        DeclarationCollision,
+        CheckedOverflowCompilation,
+        InvalidStorage,
+        InvalidStorageType,
+        InvalidAlignment,
+        InvalidConstantInitializer,
+        InvalidWarpMask,
+        InvalidWarpWidth,
+        InvalidAtomicType,
+        ConstantWrite,
+        InvalidOutputPath,
+        ConflictingOutputPaths,
+        BuildFailure
+    ];
 }

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Supprocom.CSharp2CUDA.Compiler</AssemblyName>
+    <RootNamespace>Supprocom.CSharp2CUDA.Compiler</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <NoWarn>$(NoWarn);RS1035;RS1041</NoWarn>
+    <DebugType>portable</DebugType>
+    <RepositoryUrl>https://github.com/Supprocom/CSharp2CUDA</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <SourceRevisionId Condition="'$(RepositoryCommit)' != ''">$(RepositoryCommit)</SourceRevisionId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Supprocom.CSharp2CUDA\Supprocom.CSharp2CUDA.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyMetadata Include="RepositoryCommit"
+                      Value="$(RepositoryCommit)"
+                      Condition="'$(RepositoryCommit)' != ''" />
+  </ItemGroup>
+</Project>

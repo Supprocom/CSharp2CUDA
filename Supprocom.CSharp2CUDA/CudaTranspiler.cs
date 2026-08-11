@@ -155,6 +155,29 @@ public static class CudaTranspiler
             selection.RequestedOutputPath);
     }
 
+    internal static bool HasAttributedTranslationUnit(CSharpCompilation compilation)
+    {
+        var attribute = compilation.GetTypeByMetadataName(TranspileAttributeName);
+        if (attribute is null)
+            return false;
+
+        foreach (var tree in compilation.SyntaxTrees)
+        {
+            var root = tree.GetRoot();
+            var model = compilation.GetSemanticModel(tree, ignoreAccessibility: true);
+            foreach (var candidate in root.DescendantNodes().OfType<TypeDeclarationSyntax>())
+            {
+                if (model.GetDeclaredSymbol(candidate) is ISymbol symbol &&
+                    GetMarker(symbol, attribute) is not null)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     private static void ValidateOptions(CudaTranspilationOptions options)
     {
         if (options.NewLine is not "\n" and not "\r\n")

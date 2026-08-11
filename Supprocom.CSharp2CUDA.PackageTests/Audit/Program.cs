@@ -31,16 +31,20 @@ using var nupkg = ZipFile.OpenRead(nupkgPath);
 using var snupkg = ZipFile.OpenRead(snupkgPath);
 ValidateEntries(nupkg, "nupkg");
 ValidateEntries(snupkg, "snupkg");
-Require(nupkg.Entries.Count == 15, "The nupkg entry count is incorrect.");
-Require(snupkg.Entries.Count == 6, "The snupkg entry count is incorrect.");
+Require(nupkg.Entries.Count == 18, "The nupkg entry count is incorrect.");
+Require(snupkg.Entries.Count == 7, "The snupkg entry count is incorrect.");
 
 RequireEntry(nupkg, "build/Supprocom.CSharp2CUDA.targets");
+RequireEntry(nupkg, "build/compiler/Supprocom.CSharp2CUDA.Compiler.dll");
+RequireEntry(nupkg, "build/compiler/Supprocom.CSharp2CUDA.Compiler.pdb");
+RequireEntry(nupkg, "build/compiler/Supprocom.CSharp2CUDA.dll");
 RequireEntry(nupkg, "build/task/Supprocom.CSharp2CUDA.Build.dll");
 RequireEntry(nupkg, "build/task/Supprocom.CSharp2CUDA.Build.pdb");
 RequireEntry(nupkg, "build/task/Supprocom.CSharp2CUDA.dll");
 RequireEntry(nupkg, "build/task/Microsoft.CodeAnalysis.dll");
 RequireEntry(nupkg, "build/task/Microsoft.CodeAnalysis.CSharp.dll");
 RequireEntry(nupkg, "lib/net10.0/Supprocom.CSharp2CUDA.dll");
+RequireEntry(snupkg, "build/compiler/Supprocom.CSharp2CUDA.Compiler.pdb");
 RequireEntry(snupkg, "build/task/Supprocom.CSharp2CUDA.Build.pdb");
 RequireEntry(snupkg, "lib/net10.0/Supprocom.CSharp2CUDA.pdb");
 Require(
@@ -94,9 +98,15 @@ var libraryBytes = ReadEntry(RequireEntry(
 var taskCoreBytes = ReadEntry(RequireEntry(
     nupkg,
     "build/task/Supprocom.CSharp2CUDA.dll"));
+var compilerCoreBytes = ReadEntry(RequireEntry(
+    nupkg,
+    "build/compiler/Supprocom.CSharp2CUDA.dll"));
 Require(
     libraryBytes.AsSpan().SequenceEqual(taskCoreBytes),
     "The build task has a different core assembly.");
+Require(
+    libraryBytes.AsSpan().SequenceEqual(compilerCoreBytes),
+    "The compiler has a different core assembly.");
 
 var taskPdbBytes = ReadEntry(RequireEntry(
     nupkg,
@@ -107,13 +117,26 @@ var symbolTaskPdbBytes = ReadEntry(RequireEntry(
 Require(
     taskPdbBytes.AsSpan().SequenceEqual(symbolTaskPdbBytes),
     "The task symbol files differ.");
+var compilerPdbBytes = ReadEntry(RequireEntry(
+    nupkg,
+    "build/compiler/Supprocom.CSharp2CUDA.Compiler.pdb"));
+var symbolCompilerPdbBytes = ReadEntry(RequireEntry(
+    snupkg,
+    "build/compiler/Supprocom.CSharp2CUDA.Compiler.pdb"));
+Require(
+    compilerPdbBytes.AsSpan().SequenceEqual(symbolCompilerPdbBytes),
+    "The compiler symbol files differ.");
 ValidatePdb(
     ReadEntry(RequireEntry(snupkg, "lib/net10.0/Supprocom.CSharp2CUDA.pdb")),
     "/Supprocom.CSharp2CUDA/CudaTranspiler.cs",
     expectedCommit);
 ValidatePdb(
     symbolTaskPdbBytes,
-    "/Supprocom.CSharp2CUDA.Build/TranspileTask.cs",
+    "/Supprocom.CSharp2CUDA.Build/CudaOutputTask.cs",
+    expectedCommit);
+ValidatePdb(
+    symbolCompilerPdbBytes,
+    "/Supprocom.CSharp2CUDA.Compiler/CudaTranspilationAnalyzer.cs",
     expectedCommit);
 
 Console.WriteLine($"NupkgSha256={HashFile(nupkgPath)}");

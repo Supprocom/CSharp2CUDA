@@ -151,10 +151,36 @@ function Invoke-Case {
     ) + $common)
     return [pscustomobject]@{
         Root = Join-Path $baseOutput 'Release/net10.0'
+        IntermediateRoot = $baseIntermediate
         Output = $output
         Project = $project
         Common = $common
     }
+}
+
+function Assert-NoCompilerPayload {
+    param([object] $Case)
+
+    if (Get-ChildItem -LiteralPath $Case.IntermediateRoot -Recurse -File -Filter (
+            'Supprocom.CSharp2CUDA.payload')) {
+        throw 'The build kept an intermediate CUDA compiler payload.'
+    }
+}
+
+function Invoke-RepeatCase {
+    param(
+        [string] $Name,
+        [object] $Case
+    )
+
+    Invoke-DotNet -Name "$Name-repeat-build" -ExpectedExitCode 0 -Arguments (@(
+        'build',
+        $Case.Project,
+        '--configuration',
+        'Release',
+        '--no-restore'
+    ) + $Case.Common) | Out-Null
+    Assert-NoCompilerPayload -Case $Case
 }
 
 $auditProject = Join-Path $PSScriptRoot 'Audit/Audit.csproj'
@@ -181,7 +207,29 @@ Invoke-DotNet -Name 'Audit-run' -ExpectedExitCode 0 -Arguments @(
     $ExpectedCommit
 ) | Out-Null
 
+$generatorProject = Join-Path $repositoryRoot (
+    'Supprocom.CSharp2CUDA.PackageTests.Generator/' +
+    'Supprocom.CSharp2CUDA.PackageTests.Generator.csproj')
+Invoke-DotNet -Name 'Generator-restore' -ExpectedExitCode 0 -Arguments @(
+    'restore',
+    $generatorProject,
+    '--configfile',
+    $nugetPath,
+    '--packages',
+    $packagesRoot,
+    '--force',
+    '--no-cache'
+) | Out-Null
+Invoke-DotNet -Name 'Generator-build' -ExpectedExitCode 0 -Arguments @(
+    'build',
+    $generatorProject,
+    '--configuration',
+    'Release',
+    '--no-restore'
+) | Out-Null
+
 $attributed = Invoke-Case -Name 'Attributed' -ExpectSuccess $true
+Assert-NoCompilerPayload -Case $attributed
 $attributedCuda = Join-Path $attributed.Root 'cuda/Attributed.cu'
 if (-not (Test-Path -LiteralPath $attributedCuda)) {
     throw 'The attributed project did not create CUDA source.'
@@ -189,26 +237,66 @@ if (-not (Test-Path -LiteralPath $attributedCuda)) {
 if (-not (Test-Path -LiteralPath (Join-Path $attributed.Root 'Attributed.dll'))) {
     throw 'The attributed project did not keep its managed assembly.'
 }
+Invoke-RepeatCase -Name 'Attributed' -Case $attributed
+if (-not (Test-Path -LiteralPath $attributedCuda)) {
+    throw 'The repeated attributed build did not create CUDA source.'
+}
 
 $attributedDefault = Invoke-Case -Name 'AttributedDefault' -ExpectSuccess $true
+Assert-NoCompilerPayload -Case $attributedDefault
 $attributedDefaultCuda = Join-Path $attributedDefault.Root 'AttributedDefault.cu'
 if (-not (Test-Path -LiteralPath $attributedDefaultCuda)) {
     throw 'The empty attribute path did not select the default CUDA output.'
 }
+Invoke-RepeatCase -Name 'AttributedDefault' -Case $attributedDefault
+if (-not (Test-Path -LiteralPath $attributedDefaultCuda)) {
+    throw 'The repeated default-path build did not create CUDA source.'
+}
 
 $manual = Invoke-Case -Name 'Manual' -ExpectSuccess $true
+Assert-NoCompilerPayload -Case $manual
 $manualAssembly = Join-Path $manual.Root 'Manual.dll'
 $taskAssembly = Join-Path $packagesRoot (
     'supprocom.csharp2cuda/0.2.0/build/task/Supprocom.CSharp2CUDA.Build.dll')
+$compilerAssembly = Join-Path $packagesRoot (
+    'supprocom.csharp2cuda/0.2.0/build/compiler/' +
+    'Supprocom.CSharp2CUDA.Compiler.dll')
 Invoke-DotNet -Name 'Manual-run' -ExpectedExitCode 0 -Arguments @(
     $manualAssembly,
-    $taskAssembly
+    $taskAssembly,
+    $compilerAssembly
 ) | Out-Null
 if (Get-ChildItem -LiteralPath $manual.Root -Recurse -File -Filter '*.cu') {
     throw 'The manual API project created automatic CUDA source.'
 }
+Invoke-RepeatCase -Name 'Manual' -Case $manual
+if (Get-ChildItem -LiteralPath $manual.Root -Recurse -File -Filter '*.cu') {
+    throw 'The repeated manual build created automatic CUDA source.'
+}
+Invoke-DotNet `
+    -Name 'Manual-analyzers-disabled-build' `
+    -ExpectedExitCode 0 `
+    -Arguments (@(
+        'build',
+        $manual.Project,
+        '--configuration',
+        'Release',
+        '--no-restore',
+        '-t:Rebuild',
+        '-p:RunAnalyzers=false'
+    ) + $manual.Common) | Out-Null
+Assert-NoCompilerPayload -Case $manual
+Invoke-DotNet -Name 'Manual-analyzers-disabled-run' -ExpectedExitCode 0 -Arguments @(
+    $manualAssembly,
+    $taskAssembly,
+    $compilerAssembly
+) | Out-Null
+if (Get-ChildItem -LiteralPath $manual.Root -Recurse -File -Filter '*.cu') {
+    throw 'The manual project created CUDA source when analyzers were disabled.'
+}
 
 $dedicated = Invoke-Case -Name 'Dedicated' -ExpectSuccess $true
+Assert-NoCompilerPayload -Case $dedicated
 $dedicatedCuda = Join-Path $dedicated.Root 'cuda/Dedicated.cu'
 if (-not (Test-Path -LiteralPath $dedicatedCuda)) {
     throw 'The dedicated project did not create CUDA source.'
@@ -222,26 +310,127 @@ foreach ($pattern in $managedPatterns) {
         throw "The dedicated project created managed output that matches $pattern."
     }
 }
+Invoke-RepeatCase -Name 'Dedicated' -Case $dedicated
+if (-not (Test-Path -LiteralPath $dedicatedCuda)) {
+    throw 'The repeated dedicated build did not create CUDA source.'
+}
+foreach ($pattern in $managedPatterns) {
+    if (Get-ChildItem -LiteralPath $dedicated.Root -File -Filter $pattern) {
+        throw "The repeated dedicated build created managed output that matches $pattern."
+    }
+}
 
 $noMarker = Invoke-Case -Name 'NoMarker' -ExpectSuccess $true
+Assert-NoCompilerPayload -Case $noMarker
 if (Get-ChildItem -LiteralPath $noMarker.Root -Recurse -File -Filter '*.cu') {
     throw 'The unmarked project created CUDA source.'
 }
 if (-not (Test-Path -LiteralPath (Join-Path $noMarker.Root 'NoMarker.dll'))) {
     throw 'The unmarked project did not create its managed assembly.'
 }
+Invoke-DotNet -Name 'NoMarker-run' -ExpectedExitCode 0 -Arguments @(
+    (Join-Path $noMarker.Root 'NoMarker.dll')
+) | Out-Null
+Invoke-RepeatCase -Name 'NoMarker' -Case $noMarker
+if (Get-ChildItem -LiteralPath $noMarker.Root -Recurse -File -Filter '*.cu') {
+    throw 'The repeated unmarked build created CUDA source.'
+}
+Invoke-DotNet `
+    -Name 'NoMarker-analyzers-disabled-build' `
+    -ExpectedExitCode 0 `
+    -Arguments (@(
+        'build',
+        $noMarker.Project,
+        '--configuration',
+        'Release',
+        '--no-restore',
+        '-t:Rebuild',
+        '-p:RunAnalyzers=false'
+    ) + $noMarker.Common) | Out-Null
+Assert-NoCompilerPayload -Case $noMarker
+Invoke-DotNet -Name 'NoMarker-analyzers-disabled-run' -ExpectedExitCode 0 -Arguments @(
+    (Join-Path $noMarker.Root 'NoMarker.dll')
+) | Out-Null
+if (Get-ChildItem -LiteralPath $noMarker.Root -Recurse -File -Filter '*.cu') {
+    throw 'The unmarked project created CUDA source when analyzers were disabled.'
+}
+
+$generatedAttributed = Invoke-Case -Name 'GeneratedAttributed' -ExpectSuccess $true
+Assert-NoCompilerPayload -Case $generatedAttributed
+$generatedAttributedCuda = Join-Path (
+    $generatedAttributed.Root) 'cuda/GeneratedAttributed.cu'
+if (-not (Test-Path -LiteralPath $generatedAttributedCuda)) {
+    throw 'The generated attributed project did not create CUDA source.'
+}
+$generatedAttributedSource = Get-Content -Raw -LiteralPath $generatedAttributedCuda
+if ($generatedAttributedSource -notmatch '__device__ int Increment\(int value\)' -or
+    $generatedAttributedSource -notmatch 'return Increment\(value\);') {
+    throw 'The attributed CUDA source does not contain the generated dependency.'
+}
+if (-not (Test-Path -LiteralPath (
+        Join-Path $generatedAttributed.Root 'GeneratedAttributed.dll'))) {
+    throw 'The generated attributed project did not keep its managed assembly.'
+}
+Invoke-RepeatCase -Name 'GeneratedAttributed' -Case $generatedAttributed
+if (-not (Test-Path -LiteralPath $generatedAttributedCuda)) {
+    throw 'The repeated generated attributed build did not create CUDA source.'
+}
+
+$generatedProject = Invoke-Case -Name 'GeneratedProject' -ExpectSuccess $true
+Assert-NoCompilerPayload -Case $generatedProject
+$generatedProjectCuda = Join-Path $generatedProject.Root 'cuda/GeneratedProject.cu'
+if (-not (Test-Path -LiteralPath $generatedProjectCuda)) {
+    throw 'The generated complete project did not create CUDA source.'
+}
+$generatedProjectSource = Get-Content -Raw -LiteralPath $generatedProjectCuda
+if ($generatedProjectSource -notmatch '__device__ int Increment\(int value\)' -or
+    $generatedProjectSource -notmatch 'return Increment\(value\);') {
+    throw 'The complete-project CUDA source does not contain the generated dependency.'
+}
+if (Test-Path -LiteralPath (Join-Path $generatedProject.Root 'GeneratedProject.dll')) {
+    throw 'The generated complete project created a managed assembly.'
+}
+Invoke-RepeatCase -Name 'GeneratedProject' -Case $generatedProject
+if (-not (Test-Path -LiteralPath $generatedProjectCuda)) {
+    throw 'The repeated generated project build did not create CUDA source.'
+}
+if (Test-Path -LiteralPath (Join-Path $generatedProject.Root 'GeneratedProject.dll')) {
+    throw 'The repeated generated project build created a managed assembly.'
+}
+$disabledProjectOutput = Invoke-DotNet `
+    -Name 'GeneratedProject-analyzers-disabled-build' `
+    -ExpectedExitCode 1 `
+    -Arguments (@(
+        'build',
+        $generatedProject.Project,
+        '--configuration',
+        'Release',
+        '--no-restore',
+        '-t:Rebuild',
+        '-p:RunAnalyzers=false'
+    ) + $generatedProject.Common)
+if ($disabledProjectOutput -notmatch 'CS2CUDA023') {
+    throw 'The disabled automatic analyzer did not report CS2CUDA023.'
+}
+Assert-NoCompilerPayload -Case $generatedProject
+if (Test-Path -LiteralPath $generatedProjectCuda) {
+    throw 'The disabled automatic analyzer kept stale CUDA source.'
+}
 
 $invalidProject = Invoke-Case -Name 'InvalidProjectPath' -ExpectSuccess $false
+Assert-NoCompilerPayload -Case $invalidProject
 if ($invalidProject.Output -notmatch 'CS2CUDA021') {
     throw 'The invalid project path did not report CS2CUDA021.'
 }
 
 $invalidClass = Invoke-Case -Name 'InvalidClassPath' -ExpectSuccess $false
+Assert-NoCompilerPayload -Case $invalidClass
 if ($invalidClass.Output -notmatch 'CS2CUDA021') {
     throw 'The invalid class path did not report CS2CUDA021.'
 }
 
 $compileFailure = Invoke-Case -Name 'CompileFailure' -ExpectSuccess $false
+Assert-NoCompilerPayload -Case $compileFailure
 if ($compileFailure.Output -notmatch 'CS0103') {
     throw 'The compile failure did not report the C# compiler error.'
 }
@@ -250,6 +439,7 @@ if (Test-Path -LiteralPath (Join-Path $compileFailure.Root 'CompileFailure.cu'))
 }
 
 $staleOutput = Invoke-Case -Name 'StaleOutput' -ExpectSuccess $true
+Assert-NoCompilerPayload -Case $staleOutput
 $staleCuda = Join-Path $staleOutput.Root 'StaleOutput.cu'
 if (-not (Test-Path -LiteralPath $staleCuda)) {
     throw 'The stale-output probe did not create its initial CUDA source.'
@@ -262,6 +452,7 @@ Invoke-DotNet -Name 'StaleOutput-failed-build' -ExpectedExitCode 1 -Arguments (@
     '--no-restore',
     '-p:DefineConstants=FAIL'
 ) + $staleOutput.Common) | Out-Null
+Assert-NoCompilerPayload -Case $staleOutput
 if (Test-Path -LiteralPath $staleCuda) {
     throw 'A failed C# compilation kept stale CUDA source.'
 }

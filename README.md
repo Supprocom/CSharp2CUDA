@@ -34,6 +34,15 @@ File input reads normal `.cs` files.
 The compilation input uses a Roslyn compilation that the caller constructed
 from selected syntax trees and references.
 
+Automatic build modes use the compilation that the project compiler accepts.
+This compilation includes syntax trees from the project source generators.
+A project without the project property or an exact class marker does not start
+automatic translation.
+
+`Transpile(CSharpCompilation)` uses the exact supplied compilation, including
+generator output that its owner added. The file APIs do not run project source
+generators because their boundary is the selected files.
+
 The compilation then passes through a semantic plan, a syntax validator, and a CUDA emitter. The plan registers translation units, structs, functions, parameters, locals, identifiers, and expression helper rewrites.
 
 The validator accepts only syntax with an explicit CUDA rule. It also checks C# and C++ evaluation order before it accepts assignments, calls, binary operators, pointer operations, and compound assignments.
@@ -87,6 +96,9 @@ internal static unsafe class HelloCuda
 
 Build the project in Visual Studio 2026 or with `dotnet build`.
 Roslyn checks the C# source before CUDA emission.
+The compiler analyzer creates an intermediate payload from that accepted
+compilation. The build publishes the CUDA file only after `CoreCompile`
+succeeds.
 The output directory contains `cuda/HelloCuda.cu` and does not contain the
 project managed assembly.
 
