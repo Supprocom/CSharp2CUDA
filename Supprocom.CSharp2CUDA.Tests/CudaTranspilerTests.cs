@@ -1249,12 +1249,21 @@ public sealed class CudaTranspilerTests
 
         foreach (var item in cases)
         {
+            var maximum = Math.Max(item.Left, item.Right);
+            var minimum = Math.Min(item.Left, item.Right);
+            if (double.IsNaN(item.Left) || double.IsNaN(item.Right))
+            {
+                Assert.True(double.IsNaN(maximum));
+                Assert.True(double.IsNaN(minimum));
+                continue;
+            }
+
             Assert.Equal(
                 item.Maximum,
-                BitConverter.DoubleToUInt64Bits(Math.Max(item.Left, item.Right)));
+                BitConverter.DoubleToUInt64Bits(maximum));
             Assert.Equal(
                 item.Minimum,
-                BitConverter.DoubleToUInt64Bits(Math.Min(item.Left, item.Right)));
+                BitConverter.DoubleToUInt64Bits(minimum));
         }
     }
 
