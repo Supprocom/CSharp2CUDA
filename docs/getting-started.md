@@ -8,17 +8,17 @@ Install the .NET 10 SDK. Use Visual Studio 2026 or the `dotnet` command when you
 
 You do not need the CUDA toolkit to translate C# source. You need a CUDA toolchain later when you compile and run the generated `.cu` file.
 
-Add a project reference to `CSharp2CUDA/CSharp2CUDA.csproj` while you work from this repository. Use the `Supprocom.CSharp2CUDA` package when your application consumes a package build.
+Add a project reference to `Supprocom.CSharp2CUDA/Supprocom.CSharp2CUDA.csproj` while you work from this repository. Use the same identity for package builds.
 
 ## Create a translation unit
 
-The source must compile as valid C#. The `CSharp2CUDA` assembly supplies the attributes and the `Cuda` type that the source uses.
+The source must compile as valid C#. The `Supprocom.CSharp2CUDA` assembly supplies the attributes and the `Cuda` type.
 
 Create a source string with a static unsafe class. Mark the class with `CudaTranslationUnitAttribute`.
 
 ```csharp
 const string source = """
-    using CSharp2CUDA;
+    using Supprocom.CSharp2CUDA;
 
     [CudaTranslationUnit]
     internal static unsafe class HelloCuda
@@ -132,6 +132,8 @@ private static readonly int[] Thresholds = [2, 4, 8, 16];
 
 Each constant array needs a nonempty compile-time initializer. CSharp2CUDA emits `__device__ __constant__` storage with the exact values.
 
+Do not write to a device constant array. The transpiler reports `CS2CUDA020` and returns empty CUDA source.
+
 ## Use exact and named math
 
 Use the round-to-nearest double methods when each operation boundary must remain exact.
@@ -178,7 +180,7 @@ Use `CudaExternalAttribute` for a type or method that another CUDA source unit p
 
 ```csharp
 using System;
-using CSharp2CUDA;
+using Supprocom.CSharp2CUDA;
 
 [CudaTranslationUnit]
 internal static unsafe class ExternalModule
@@ -216,7 +218,7 @@ Keep expression effects visible when C# and C++ can evaluate operands in differe
 Run the full test suite from the repository root.
 
 ```text
-dotnet test CSharp2CUDA.slnx -c Release
+dotnet test Supprocom.CSharp2CUDA.slnx -c Release
 ```
 
 The tests compare complete generated CUDA modules with checked-in golden files. They also cover diagnostics, arithmetic helpers, CUDA intrinsics, external declarations, and evaluation-order rules.
@@ -226,7 +228,7 @@ Build a package only when the repository provenance properties are available.
 ```powershell
 $commit = git rev-parse HEAD
 $branch = git branch --show-current
-dotnet pack CSharp2CUDA/CSharp2CUDA.csproj -c Release `
+dotnet pack Supprocom.CSharp2CUDA/Supprocom.CSharp2CUDA.csproj -c Release `
     -p:RepositoryCommit=$commit `
     -p:RepositoryBranch=$branch
 ```
@@ -235,6 +237,6 @@ The package is written to `artifacts/packages`. The package ID is `Supprocom.CSh
 
 ## Continue learning
 
-Read the public API in `CSharp2CUDA/Cuda.cs` and `CSharp2CUDA/CudaAttributes.cs`. Read the catalog inputs in `CSharp2CUDA.Tests/Golden` for larger translation units.
+Read the public API in `Supprocom.CSharp2CUDA/Cuda.cs` and `Supprocom.CSharp2CUDA/CudaAttributes.cs`. Read `Supprocom.CSharp2CUDA.Tests/Golden` for larger translation units.
 
 Read [README.md](../README.md) for the project overview, semantic limits, and contribution links.

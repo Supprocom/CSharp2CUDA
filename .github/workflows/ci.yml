@@ -22,27 +22,27 @@ jobs:
           dotnet-version: 10.0.x
 
       - name: Restore
-        run: dotnet restore CSharp2CUDA.slnx
+        run: dotnet restore Supprocom.CSharp2CUDA.slnx
 
       - name: Verify formatting and analyzers
         run: >-
-          dotnet format CSharp2CUDA.slnx
+          dotnet format Supprocom.CSharp2CUDA.slnx
           --verify-no-changes --no-restore --severity warn
 
       - name: Build without warnings
         run: >-
-          dotnet build CSharp2CUDA.slnx
+          dotnet build Supprocom.CSharp2CUDA.slnx
           --configuration Release --no-restore
 
       - name: Test
         run: >-
-          dotnet test CSharp2CUDA.slnx
+          dotnet test Supprocom.CSharp2CUDA.slnx
           --configuration Release --no-build
           --logger "console;verbosity=minimal"
 
       - name: Pack exact source
         run: >-
-          dotnet pack CSharp2CUDA/CSharp2CUDA.csproj
+          dotnet pack Supprocom.CSharp2CUDA/Supprocom.CSharp2CUDA.csproj
           --configuration Release --no-restore
           --output artifacts/package
           -p:RepositoryCommit=$GITHUB_SHA

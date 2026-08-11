@@ -32,13 +32,13 @@ The emitter writes the integer semantics helpers, struct declarations, struct de
 
 ## Quick start
 
-Add a reference to the `CSharp2CUDA` project or to the `Supprocom.CSharp2CUDA` package. The project targets .NET 10 and uses C# 14.
+Add a reference to the `Supprocom.CSharp2CUDA` project or package. The project targets .NET 10 and uses C# 14.
 
 Create a static unsafe class with `CudaTranslationUnitAttribute`. Mark device methods with `CudaDeviceAttribute` and kernel methods with `CudaGlobalAttribute`.
 
 ```csharp
 const string source = """
-    using CSharp2CUDA;
+    using Supprocom.CSharp2CUDA;
 
     [CudaTranslationUnit]
     internal static unsafe class HelloCuda
@@ -76,6 +76,8 @@ The generated source contains a `__device__` function for `Add` and an `extern "
 A translation unit is a static, non-generic class marked with `CudaTranslationUnitAttribute`. The class can contain CUDA structs, constant arrays, and static methods.
 
 Mark a static read-only `int` array with `CudaConstantAttribute`. Each element must have a compile-time value, and the array cannot be empty.
+
+Device constant arrays are read-only in translated functions. A write attempt produces `CS2CUDA020` and no CUDA source.
 
 A struct becomes a CUDA `struct`. Its fields must have supported types and must not be static, constant, read-only, volatile, initialized, or decorated with extra attributes.
 
@@ -145,7 +147,7 @@ External methods have unknown effects by default. Set `CudaExternalAttribute.IsP
 
 ```csharp
 using System;
-using CSharp2CUDA;
+using Supprocom.CSharp2CUDA;
 
 [CudaTranslationUnit]
 internal static unsafe class ExternalModule
@@ -169,7 +171,7 @@ Mark every pointer parameter on a pure external method with `CudaReadOnlyAttribu
 Run the test suite from the repository root.
 
 ```text
-dotnet test CSharp2CUDA.slnx -c Release
+dotnet test Supprocom.CSharp2CUDA.slnx -c Release
 ```
 
 The compatibility suite translates complete C# catalog files and compares the output with exact CUDA golden files.
@@ -183,7 +185,7 @@ Create a package after setting the repository provenance properties.
 ```powershell
 $commit = git rev-parse HEAD
 $branch = git branch --show-current
-dotnet pack CSharp2CUDA/CSharp2CUDA.csproj -c Release `
+dotnet pack Supprocom.CSharp2CUDA/Supprocom.CSharp2CUDA.csproj -c Release `
     -p:RepositoryCommit=$commit `
     -p:RepositoryBranch=$branch
 ```
