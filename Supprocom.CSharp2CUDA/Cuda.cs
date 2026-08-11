@@ -146,6 +146,8 @@ public static unsafe class Cuda
 
     public static double Log1p(double value) => double.LogP1(value);
 
+    public static double Log(double value) => Math.Log(value);
+
     public static double Sqrt(double value) => Math.Sqrt(value);
 
     public static double Exp(double value) => Math.Exp(value);

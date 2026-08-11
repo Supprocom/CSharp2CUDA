@@ -119,7 +119,10 @@ Use `Cuda.FloatingRemainder` for floating-point remainder. Use `Cuda.NearbyInteg
 
 These calls keep explicit operation boundaries. CUDA compilation cannot contract them into a multiply-add instruction.
 
-`Cuda.Log1p`, `Cuda.Sqrt`, `Cuda.Exp`, `Cuda.Pow`, and `Cuda.NaN` emit package-owned named CUDA math calls.
+`Cuda.Log`, `Cuda.Log1p`, `Cuda.Sqrt`, `Cuda.Exp`, `Cuda.Pow`, and `Cuda.NaN` emit package-owned
+named CUDA math calls.
+
+`Cuda.Log` has `Math.Log` behavior during managed execution and emits direct CUDA `log`.
 
 Use `Cuda.ReadOnly` for a local pointer value that must be read-only through the expression tree. Use `CudaReadOnlyAttribute` on a pointer parameter when the external contract guarantees deep read-only access.
 

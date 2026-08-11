@@ -91,6 +91,7 @@ internal sealed class CudaEmissionPlan
 
     private readonly CSharpCompilation compilation;
     private readonly ImmutableArray<Diagnostic>.Builder diagnostics;
+    private readonly IMethodSymbol? cudaLogMethod;
     private readonly Dictionary<ISymbol, string> identifierNames =
         new(SymbolEqualityComparer.Default);
     private readonly Dictionary<IMethodSymbol, CudaFunctionPlan> functionPlans =
@@ -123,6 +124,7 @@ internal sealed class CudaEmissionPlan
     {
         this.compilation = compilation;
         this.diagnostics = diagnostics;
+        cudaLogMethod = ResolveCudaLogMethod(compilation);
         Units = units.Select(unit => new CudaUnitPlan(
             unit,
             compilation.GetSemanticModel(unit.SyntaxTree, ignoreAccessibility: true)))
@@ -257,6 +259,13 @@ internal sealed class CudaEmissionPlan
         if (functionPlans.TryGetValue(method, out var function))
             return new CudaCallPlan(CudaCallKind.PlannedFunction, function.EmittedName);
 
+        if (cudaLogMethod is not null && SymbolEqualityComparer.Default.Equals(
+                method.OriginalDefinition,
+                cudaLogMethod))
+        {
+            return new CudaCallPlan(CudaCallKind.Direct, "log");
+        }
+
         if (method.ContainingType.ToDisplayString() == "Supprocom.CSharp2CUDA.Cuda")
         {
             return method.Name switch
@@ -345,6 +354,24 @@ internal sealed class CudaEmissionPlan
     private static bool IsImpureIntrinsic(string name) => name is
         "__syncthreads" or "__threadfence" or "__threadfence_system" or
         "__syncwarp" or "__shfl_down_sync" or "__nanosleep";
+
+    private static IMethodSymbol? ResolveCudaLogMethod(CSharpCompilation compilation)
+    {
+        var cudaType = compilation.GetTypeByMetadataName("Supprocom.CSharp2CUDA.Cuda");
+        return cudaType?.GetMembers(nameof(Cuda.Log))
+            .OfType<IMethodSymbol>()
+            .SingleOrDefault(method =>
+                method.IsStatic &&
+                method.Arity == 0 &&
+                method.ReturnType.SpecialType == SpecialType.System_Double &&
+                method.Parameters is
+                [
+                    {
+                        RefKind: RefKind.None,
+                        Type.SpecialType: SpecialType.System_Double
+                    }
+                ]);
+    }
 
     public bool TryGetDimensionReplacement(
         MemberAccessExpressionSyntax expression,

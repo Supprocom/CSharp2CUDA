@@ -145,7 +145,10 @@ double result = Cuda.DoubleAddRoundNearest(product, bias);
 
 The generated source calls `__dmul_rn` and `__dadd_rn`. CUDA compilation cannot contract these calls into one multiply-add operation.
 
-Use `Cuda.Log1p`, `Cuda.Sqrt`, `Cuda.Exp`, `Cuda.Pow`, and `Cuda.NaN` for named CUDA math calls.
+Use `Cuda.Log`, `Cuda.Log1p`, `Cuda.Sqrt`, `Cuda.Exp`, `Cuda.Pow`, and `Cuda.NaN` for named
+CUDA math calls.
+
+`Cuda.Log` has `Math.Log` behavior during managed execution and emits direct CUDA `log`.
 
 Use `Cuda.Bool`, `Cuda.Int`, and `Cuda.Unsigned` when the generated expression needs an explicit C++ conversion.
 

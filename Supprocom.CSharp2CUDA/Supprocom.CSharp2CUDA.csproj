@@ -16,7 +16,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>cuda;csharp;roslyn;transpiler;source-translation;gpu</PackageTags>
-    <PackageReleaseNotes>Add the Supprocom.CSharp2CUDA identity, typed CUDA contracts, and read-only validation for device constant arrays.</PackageReleaseNotes>
+    <PackageReleaseNotes>Add the Roslyn-authorized Cuda.Log(double) contract and direct CUDA log emission.</PackageReleaseNotes>
     <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
