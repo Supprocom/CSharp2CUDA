@@ -2,7 +2,9 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $PackageDirectory,
 
-    [string] $ExpectedCommit
+    [string] $ExpectedCommit,
+
+    [string] $ExpectedBranch
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,6 +20,12 @@ if ([string]::IsNullOrWhiteSpace($ExpectedCommit)) {
 }
 if ($ExpectedCommit -notmatch '^[0-9a-fA-F]{40}$') {
     throw 'The expected repository commit is invalid.'
+}
+if ([string]::IsNullOrWhiteSpace($ExpectedBranch)) {
+    $ExpectedBranch = (& git -C $repositoryRoot branch --show-current).Trim()
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($ExpectedBranch)) {
+        throw 'Cannot read the repository branch.'
+    }
 }
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $package.FullName).Hash
 $runRoot = Join-Path $repositoryRoot (
@@ -219,7 +227,8 @@ Invoke-DotNet -Name 'Audit-run' -ExpectedExitCode 0 -Arguments @(
     '--',
     $packageRoot,
     $repositoryRoot,
-    $ExpectedCommit
+    $ExpectedCommit,
+    $ExpectedBranch
 ) | Out-Null
 
 $generatorProject = Join-Path $repositoryRoot (

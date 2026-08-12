@@ -54,6 +54,7 @@ jobs:
           ./Supprocom.CSharp2CUDA.PackageTests/Verify.ps1
           -PackageDirectory artifacts/package
           -ExpectedCommit $env:GITHUB_SHA
+          -ExpectedBranch $env:GITHUB_REF_NAME
 
       - name: Verify exact-package source suite
         shell: pwsh

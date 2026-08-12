@@ -5,18 +5,22 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Linq;
 
-if (args.Length != 3)
+if (args.Length != 4)
 {
     throw new ArgumentException(
-        "Specify the package directory, repository directory, and repository commit.");
+        "Specify the package directory, repository directory, commit, and branch.");
 }
 
 var packageDirectory = Path.GetFullPath(args[0]);
 var repositoryDirectory = Path.GetFullPath(args[1]);
 var expectedCommit = args[2];
+var expectedBranch = args[3];
 Require(
     expectedCommit.Length == 40 && expectedCommit.All(Uri.IsHexDigit),
     "The expected repository commit is invalid.");
+Require(
+    !string.IsNullOrWhiteSpace(expectedBranch),
+    "The expected repository branch is invalid.");
 
 var nupkgPath = Path.Combine(
     packageDirectory,
@@ -69,7 +73,7 @@ Require(
     repository.Attribute("url")?.Value == "https://github.com/Supprocom/CSharp2CUDA",
     "The repository URL is incorrect.");
 Require(
-    repository.Attribute("branch")?.Value == "codex/0.2.1-mts-deblocker",
+    repository.Attribute("branch")?.Value == expectedBranch,
     "The repository branch is incorrect.");
 Require(
     repository.Attribute("commit")?.Value == expectedCommit,
