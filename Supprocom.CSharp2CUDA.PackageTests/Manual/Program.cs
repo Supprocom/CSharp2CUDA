@@ -76,6 +76,18 @@ Require(
 var fixtureRoot = Path.Combine(AppContext.BaseDirectory, "Fixtures");
 var boundaryPath = Path.Combine(fixtureRoot, "MtsRemainingBoundary.cs");
 var sourceMapPath = Path.Combine(fixtureRoot, "MtsBoundarySourceMap.json");
+var invalidVoidInlineArrayPath = Path.Combine(fixtureRoot, "InvalidVoidInlineArray.cs");
+var invalidVoidInlineArray = CudaTranspiler.TranspileFile(invalidVoidInlineArrayPath);
+Require(!invalidVoidInlineArray.Succeeded, "The void inline array transpiled successfully.");
+Require(
+    invalidVoidInlineArray.Source.Length == 0,
+    "The rejected void inline array returned CUDA source.");
+Require(
+    invalidVoidInlineArray.Diagnostics.Count(diagnostic =>
+        diagnostic.Severity == DiagnosticSeverity.Error) == 1 &&
+    invalidVoidInlineArray.Diagnostics.Single(diagnostic =>
+        diagnostic.Severity == DiagnosticSeverity.Error).Id == "CS2CUDA024",
+    "The void inline array did not return only CS2CUDA024.");
 var boundaryInput = File.ReadAllText(boundaryPath);
 var sourceMap = File.ReadAllText(sourceMapPath);
 var boundaryInputSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(boundaryPath)));
@@ -201,6 +213,7 @@ Console.WriteLine("strict-source-map=pass");
 Console.WriteLine("raw-cuda-input=absent");
 Console.WriteLine("fallback-emitter=absent");
 Console.WriteLine("exact-package-boundary=pass");
+Console.WriteLine("void-inline-array-rejection=pass");
 
 static CSharpCompilation CreateCompilation(IEnumerable<string> paths)
 {

@@ -945,6 +945,7 @@ internal sealed class CudaEmissionPlan
             if (inlineArray is not null &&
                 !structure.IsExternal &&
                 symbol.Type is IPointerTypeSymbol pointer &&
+                IsSupportedInlineArrayElement(pointer.PointedAtType) &&
                 inlineArray.ConstructorArguments is
                 [
                     {
@@ -959,8 +960,11 @@ internal sealed class CudaEmissionPlan
             }
             else
             {
-                FormatType(symbol.Type, false, field.Declaration.Type.GetLocation());
-                if (inlineArray is not null)
+                if (inlineArray is null)
+                {
+                    FormatType(symbol.Type, false, field.Declaration.Type.GetLocation());
+                }
+                else
                 {
                     diagnostics.Add(Diagnostic.Create(
                         CudaDiagnostics.InvalidInlineArray,
@@ -983,6 +987,29 @@ internal sealed class CudaEmissionPlan
                 ReportUnsupportedSyntax(field);
             }
         }
+    }
+
+    private bool IsSupportedInlineArrayElement(ITypeSymbol elementType)
+    {
+        if (elementType.SpecialType is
+            SpecialType.System_Boolean or
+            SpecialType.System_SByte or
+            SpecialType.System_Byte or
+            SpecialType.System_Int16 or
+            SpecialType.System_UInt16 or
+            SpecialType.System_Int32 or
+            SpecialType.System_UInt32 or
+            SpecialType.System_Int64 or
+            SpecialType.System_UInt64 or
+            SpecialType.System_Single or
+            SpecialType.System_Double)
+        {
+            return true;
+        }
+
+        return elementType is INamedTypeSymbol named &&
+            structPlans.TryGetValue(named, out var elementPlan) &&
+            !elementPlan.IsExternal;
     }
 
     private void ValidateFunction(CudaFunctionPlan function)

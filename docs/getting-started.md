@@ -262,6 +262,9 @@ public struct EvolutionNode
 The generated CUDA field is `int operands[3]`. Primitive and user-structure element types
 support indexed reads, indexed writes, and pointer access.
 
+The user structure must be in the emitted module. The element cannot be `void`, another
+pointer, an enum, an external structure, or an unsupported managed type.
+
 ## Use exact and named math
 
 Use the round-to-nearest double methods when each operation boundary must remain exact.

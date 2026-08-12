@@ -185,6 +185,9 @@ public struct EvolutionEntry
 The field remains a pointer in compile-checked C# source. CUDA emission changes it to
 `int operands[3]`, which supports indexing and pointer access.
 
+The element must be a supported scalar or an emitted user structure. The element cannot be
+`void`, another pointer, an enum, an external structure, or an unsupported managed type.
+
 A method with `CudaDeviceAttribute` becomes a `__device__` function. A method with `CudaGlobalAttribute` becomes a `__global__` function. Both attributes support a custom CUDA `Name`.
 
 Global functions use `extern "C"` by default. Set `ExternC = false` when the generated function must not use C linkage.

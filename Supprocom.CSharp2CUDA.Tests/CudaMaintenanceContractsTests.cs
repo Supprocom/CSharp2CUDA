@@ -139,6 +139,10 @@ public sealed class CudaMaintenanceContractsTests
     [Theory]
     [InlineData("[CudaInlineArray(0)] public int* values;")]
     [InlineData("[CudaInlineArray(3)] public int value;")]
+    [InlineData("[CudaInlineArray(3)] public void* values;")]
+    [InlineData("[CudaInlineArray(3)] public int** values;")]
+    [InlineData("[CudaInlineArray(3)] public decimal* values;")]
+    [InlineData("[CudaInlineArray(3)] public char* values;")]
     public void Transpile_RejectsInvalidInlineArrays(string field)
     {
         var source = $$"""
@@ -161,8 +165,98 @@ public sealed class CudaMaintenanceContractsTests
 
         var result = CudaTestCompiler.Transpile(source);
 
-        Assert.False(result.Succeeded);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA024");
+        AssertOnlyInlineArrayDiagnostic(result);
+    }
+
+    [Fact]
+    public void Transpile_RejectsAnExternalStructureInlineArray()
+    {
+        const string source = """
+            using Supprocom.CSharp2CUDA;
+
+            [TranspileToCUDA]
+            internal static unsafe class InvalidInlineArrayModule
+            {
+                [CudaExternal]
+                public struct NativeValue
+                {
+                }
+
+                public struct InvalidStorage
+                {
+                    [CudaInlineArray(3)]
+                    public NativeValue* values;
+                }
+
+                [CudaGlobal]
+                private static void Run()
+                {
+                }
+            }
+            """;
+
+        var result = CudaTestCompiler.Transpile(source);
+
+        AssertOnlyInlineArrayDiagnostic(result);
+    }
+
+    [Fact]
+    public void Transpile_AcceptsSupportedInlineArrayElementTypes()
+    {
+        const string source = """
+            using Supprocom.CSharp2CUDA;
+
+            [TranspileToCUDA]
+            internal static unsafe class InlineArrayBoundaryModule
+            {
+                public struct Element
+                {
+                    public int value;
+                }
+
+                public struct SupportedStorage
+                {
+                    [CudaInlineArray(2)] public bool* booleans;
+                    [CudaInlineArray(2)] public sbyte* signedBytes;
+                    [CudaInlineArray(2)] public byte* bytes;
+                    [CudaInlineArray(2)] public short* int16Values;
+                    [CudaInlineArray(2)] public ushort* uint16Values;
+                    [CudaInlineArray(2)] public int* int32Values;
+                    [CudaInlineArray(2)] public uint* uint32Values;
+                    [CudaInlineArray(2)] public long* int64Values;
+                    [CudaInlineArray(2)] public ulong* uint64Values;
+                    [CudaInlineArray(2)] public float* singleValues;
+                    [CudaInlineArray(2)] public double* doubleValues;
+                    [CudaInlineArray(2)] public Element* structureValues;
+                }
+
+                [CudaGlobal]
+                private static void Run(SupportedStorage* storage)
+                {
+                }
+            }
+            """;
+
+        var result = CudaTestCompiler.Transpile(source);
+
+        Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
+        string[] fields =
+        [
+            "bool booleans[2];",
+            "signed char signedBytes[2];",
+            "unsigned char bytes[2];",
+            "short int16Values[2];",
+            "unsigned short uint16Values[2];",
+            "int int32Values[2];",
+            "unsigned int uint32Values[2];",
+            "long long int64Values[2];",
+            "unsigned long long uint64Values[2];",
+            "float singleValues[2];",
+            "double doubleValues[2];",
+            "Element structureValues[2];"
+        ];
+        foreach (var field in fields)
+            Assert.Contains(field, result.Source, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -246,4 +340,13 @@ public sealed class CudaMaintenanceContractsTests
     private static string FormatDiagnostics(IEnumerable<Diagnostic> diagnostics) =>
         string.Join(Environment.NewLine, diagnostics.Select(static diagnostic =>
             diagnostic.ToString()));
+
+    private static void AssertOnlyInlineArrayDiagnostic(CudaTranspilationResult result)
+    {
+        Assert.False(result.Succeeded);
+        Assert.Empty(result.Source);
+        var diagnostic = Assert.Single(result.Diagnostics.Where(static diagnostic =>
+            diagnostic.Severity == DiagnosticSeverity.Error));
+        Assert.Equal("CS2CUDA024", diagnostic.Id);
+    }
 }

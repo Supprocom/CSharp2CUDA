@@ -194,7 +194,7 @@ internal static class CudaDiagnostics
     public static readonly DiagnosticDescriptor InvalidInlineArray = new(
         "CS2CUDA024",
         "CUDA inline array is invalid",
-        "Field '{0}' must use a supported pointer type and a positive inline-array length",
+        "Field '{0}' must use a pointer to a supported primitive or emitted structure and a positive inline-array length",
         Category,
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);

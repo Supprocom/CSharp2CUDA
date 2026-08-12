@@ -14,7 +14,10 @@
   <ItemGroup>
     <Compile Update="Inputs\*.cs" CopyToOutputDirectory="PreserveNewest" />
     <Compile Remove="Fixtures\MtsRemainingBoundary.cs" />
+    <Compile Remove="Fixtures\InvalidVoidInlineArray.cs" />
     <Content Include="Fixtures\MtsRemainingBoundary.cs"
+             CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Fixtures\InvalidVoidInlineArray.cs"
              CopyToOutputDirectory="PreserveNewest" />
     <None Remove="Fixtures\MtsBoundarySourceMap.json" />
     <Content Include="Fixtures\MtsBoundarySourceMap.json"
