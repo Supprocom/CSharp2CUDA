@@ -873,13 +873,16 @@ public sealed class CudaTranspilerTests
         Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA005");
     }
 
-    [Fact]
-    public void Transpile_RejectsReservedCudaRuntimeIdentifier()
+    [Theory]
+    [InlineData("threadIdx")]
+    [InlineData("CSHARP2CUDA_GLOBAL_TIMER_0_1")]
+    [InlineData("CSHARP2CUDA_VOLATILE_MAPPED_MEMORY_0_1")]
+    public void Transpile_RejectsReservedCudaRuntimeIdentifier(string identifier)
     {
         var result = TranspileDeviceMethod(
             "int",
-            "int threadIdx",
-            "return threadIdx;");
+            $"int {identifier}",
+            $"return {identifier};");
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);

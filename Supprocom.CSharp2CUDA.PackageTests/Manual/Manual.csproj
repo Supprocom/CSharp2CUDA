@@ -8,10 +8,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Supprocom.CSharp2CUDA" Version="[0.2.0]" />
+    <PackageReference Include="Supprocom.CSharp2CUDA" Version="[0.2.1]" />
   </ItemGroup>
 
   <ItemGroup>
     <Compile Update="Inputs\*.cs" CopyToOutputDirectory="PreserveNewest" />
+    <Compile Remove="Fixtures\MtsRemainingBoundary.cs" />
+    <Content Include="Fixtures\MtsRemainingBoundary.cs"
+             CopyToOutputDirectory="PreserveNewest" />
+    <None Remove="Fixtures\MtsBoundarySourceMap.json" />
+    <Content Include="Fixtures\MtsBoundarySourceMap.json"
+             CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

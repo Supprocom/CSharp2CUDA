@@ -191,6 +191,14 @@ internal static class CudaDiagnostics
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    public static readonly DiagnosticDescriptor InvalidInlineArray = new(
+        "CS2CUDA024",
+        "CUDA inline array is invalid",
+        "Field '{0}' must use a supported pointer type and a positive inline-array length",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public static ImmutableArray<DiagnosticDescriptor> All { get; } =
     [
         MissingTranslationUnit,
@@ -215,6 +223,7 @@ internal static class CudaDiagnostics
         ConstantWrite,
         InvalidOutputPath,
         ConflictingOutputPaths,
-        BuildFailure
+        BuildFailure,
+        InvalidInlineArray
     ];
 }

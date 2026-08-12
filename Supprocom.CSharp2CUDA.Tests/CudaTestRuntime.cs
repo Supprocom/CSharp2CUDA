@@ -15,6 +15,18 @@ public sealed class CudaFactAttribute : FactAttribute
     }
 }
 
+public sealed class ExactPackageCudaFactAttribute : FactAttribute
+{
+    public ExactPackageCudaFactAttribute()
+    {
+        if (!CudaTestRuntime.IsAvailable(out var reason))
+            Skip = reason;
+        else if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(
+                     "CSHARP2CUDA_EXACT_PACKAGE_CUDA")))
+            Skip = "The exact-package CUDA source is not available.";
+    }
+}
+
 internal sealed unsafe class CudaTestRuntime : IDisposable
 {
     private const int ComputeCapabilityMajorAttribute = 75;
@@ -30,13 +42,14 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
     private readonly nint module;
     private bool disposed;
 
-    private CudaTestRuntime(byte[] ptx)
+    private CudaTestRuntime(params byte[][] ptxUnits)
     {
         Require(cuDeviceGet(out var device, 0), "cuDeviceGet");
         Require(cuCtxCreate(out context, ContextMapHost, device), "cuCtxCreate");
         try
         {
-            Require(cuModuleLoadData(out module, ptx), "cuModuleLoadData");
+            var image = ptxUnits.Length == 1 ? ptxUnits[0] : LinkPtx(ptxUnits);
+            Require(cuModuleLoadData(out module, image), "cuModuleLoadData");
         }
         catch
         {
@@ -58,6 +71,17 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
         if (!IsAvailable(out var reason))
             throw new InvalidOperationException(reason);
         return new CudaTestRuntime(CompilePtx(cudaSource));
+    }
+
+    public static CudaTestRuntime CreateLinked(params string[] cudaSources)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(cudaSources.Length, 2);
+        EnsureInitialized();
+        if (!IsAvailable(out var reason))
+            throw new InvalidOperationException(reason);
+        var units = cudaSources.Select((source, index) =>
+            CompilePtx(source, $"csharp2cuda-linked-{index}.cu", true)).ToArray();
+        return new CudaTestRuntime(units);
     }
 
     public ulong Allocate<T>(ReadOnlySpan<T> values) where T : unmanaged
@@ -111,6 +135,31 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
                 cuMemHostGetDevicePointer(out var devicePointer, hostPointer, 0),
                 "cuMemHostGetDevicePointer");
             return new MappedInt32Memory(hostPointer, devicePointer, length);
+        }
+        catch
+        {
+            _ = cuMemFreeHost(hostPointer);
+            throw;
+        }
+    }
+
+    public MappedMemory AllocateMappedMemory(int byteLength)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(byteLength);
+        SetCurrent();
+        Require(
+            cuMemHostAlloc(
+                out var hostPointer,
+                (nuint)byteLength,
+                HostAllocatePortable | HostAllocateDeviceMap),
+            "cuMemHostAlloc");
+        try
+        {
+            new Span<byte>((void*)hostPointer, byteLength).Clear();
+            Require(
+                cuMemHostGetDevicePointer(out var devicePointer, hostPointer, 0),
+                "cuMemHostGetDevicePointer");
+            return new MappedMemory(hostPointer, devicePointer, byteLength);
         }
         catch
         {
@@ -318,10 +367,13 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
         return libraryName == "nvrtc64_120_0.dll" ? nvrtcHandle : 0;
     }
 
-    private static byte[] CompilePtx(string source)
+    private static byte[] CompilePtx(
+        string source,
+        string programName = "csharp2cuda-tests.cu",
+        bool relocatable = false)
     {
         Require(
-            nvrtcCreateProgram(out var program, source, "csharp2cuda-tests.cu", 0, null, null),
+            nvrtcCreateProgram(out var program, source, programName, 0, null, null),
             "nvrtcCreateProgram");
         try
         {
@@ -338,15 +390,17 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
                     ComputeCapabilityMinorAttribute,
                     device),
                 "cuDeviceGetAttribute");
-            string[] options =
-            [
+            var options = new List<string>
+            {
                 $"--gpu-architecture=compute_{major}{minor}",
                 "--std=c++17",
                 "--fmad=false",
                 "--prec-div=true",
                 "--prec-sqrt=true"
-            ];
-            var result = nvrtcCompileProgram(program, options.Length, options);
+            };
+            if (relocatable)
+                options.Add("--relocatable-device-code=true");
+            var result = nvrtcCompileProgram(program, options.Count, [.. options]);
             if (result != 0)
             {
                 throw new InvalidOperationException(
@@ -360,6 +414,37 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
         finally
         {
             _ = nvrtcDestroyProgram(ref program);
+        }
+    }
+
+    private static byte[] LinkPtx(IReadOnlyList<byte[]> units)
+    {
+        Require(cuLinkCreate(0, 0, 0, out var state), "cuLinkCreate");
+        try
+        {
+            for (var index = 0; index < units.Count; index++)
+            {
+                fixed (byte* data = units[index])
+                {
+                    Require(
+                        cuLinkAddData(
+                            state,
+                            1,
+                            (nint)data,
+                            (nuint)units[index].Length,
+                            $"csharp2cuda-linked-{index}.ptx",
+                            0,
+                            0,
+                            0),
+                        "cuLinkAddData");
+                }
+            }
+            Require(cuLinkComplete(state, out var image, out var size), "cuLinkComplete");
+            return new ReadOnlySpan<byte>((void*)image, checked((int)size)).ToArray();
+        }
+        finally
+        {
+            _ = cuLinkDestroy(state);
         }
     }
 
@@ -439,6 +524,30 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
     [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuModuleUnload(nint module);
 
+    [DllImport("nvcuda.dll", EntryPoint = "cuLinkCreate_v2", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int cuLinkCreate(
+        uint optionCount,
+        nint options,
+        nint optionValues,
+        out nint state);
+
+    [DllImport("nvcuda.dll", EntryPoint = "cuLinkAddData_v2", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+    private static extern int cuLinkAddData(
+        nint state,
+        int inputType,
+        nint data,
+        nuint size,
+        string name,
+        uint optionCount,
+        nint options,
+        nint optionValues);
+
+    [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int cuLinkComplete(nint state, out nint image, out nuint size);
+
+    [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int cuLinkDestroy(nint state);
+
     [DllImport("nvcuda.dll", EntryPoint = "cuMemAlloc_v2", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuMemAlloc(out ulong devicePointer, nuint bytes);
 
@@ -509,6 +618,68 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
                 return;
             disposed = true;
             _ = cuMemFreeHost(hostPointer);
+        }
+    }
+
+    internal sealed class MappedMemory(nint hostPointer, ulong devicePointer, int byteLength) :
+        IDisposable
+    {
+        private bool disposed;
+
+        public ulong DevicePointer { get; } = devicePointer;
+
+        public int ReadInt32(int byteOffset)
+        {
+            ValidateAccess(byteOffset, sizeof(int));
+            return Volatile.Read(ref Unsafe.AsRef<int>((void*)(hostPointer + byteOffset)));
+        }
+
+        public ulong ReadUInt64(int byteOffset)
+        {
+            ValidateAccess(byteOffset, sizeof(ulong));
+            return unchecked((ulong)Volatile.Read(
+                ref Unsafe.AsRef<long>((void*)(hostPointer + byteOffset))));
+        }
+
+        public void WriteInt32(int byteOffset, int value)
+        {
+            ValidateAccess(byteOffset, sizeof(int));
+            Volatile.Write(ref Unsafe.AsRef<int>((void*)(hostPointer + byteOffset)), value);
+        }
+
+        public void WriteUInt64(int byteOffset, ulong value)
+        {
+            ValidateAccess(byteOffset, sizeof(ulong));
+            Volatile.Write(
+                ref Unsafe.AsRef<long>((void*)(hostPointer + byteOffset)),
+                unchecked((long)value));
+        }
+
+        public bool WaitForInt32(int byteOffset, int expected, TimeSpan timeout)
+        {
+            var stopwatch = Stopwatch.StartNew();
+            while (stopwatch.Elapsed < timeout)
+            {
+                if (ReadInt32(byteOffset) == expected)
+                    return true;
+                Thread.SpinWait(64);
+            }
+            return false;
+        }
+
+        public void Dispose()
+        {
+            if (disposed)
+                return;
+            disposed = true;
+            _ = cuMemFreeHost(hostPointer);
+        }
+
+        private void ValidateAccess(int byteOffset, int size)
+        {
+            ArgumentOutOfRangeException.ThrowIfNegative(byteOffset);
+            if (byteOffset > byteLength - size || byteOffset % size != 0)
+                throw new ArgumentOutOfRangeException(nameof(byteOffset));
         }
     }
 }

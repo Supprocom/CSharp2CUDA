@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $packageRoot = [System.IO.Path]::GetFullPath($PackageDirectory)
 $package = Get-Item -LiteralPath (
-    Join-Path $packageRoot 'Supprocom.CSharp2CUDA.0.2.0.nupkg')
+    Join-Path $packageRoot 'Supprocom.CSharp2CUDA.0.2.1.nupkg')
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($ExpectedCommit)) {
     $ExpectedCommit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
@@ -334,18 +334,39 @@ if (-not (Test-Path -LiteralPath $attributedDefaultCuda)) {
     throw 'The repeated default-path build did not create CUDA source.'
 }
 
+$maintenanceContracts = Invoke-Case -Name 'MaintenanceContracts' -ExpectSuccess $true
+Assert-NoCompilerPayload -Case $maintenanceContracts
+$maintenanceContractsCuda = Join-Path (
+    $maintenanceContracts.Root) 'cuda/MaintenanceContracts.cu'
+if (-not (Test-Path -LiteralPath $maintenanceContractsCuda)) {
+    throw 'The maintenance-contract project did not create CUDA source.'
+}
+$maintenanceContractsSource = Get-Content -Raw -LiteralPath $maintenanceContractsCuda
+if ($maintenanceContractsSource -notmatch 'int values\[3\];' -or
+    $maintenanceContractsSource -notmatch 'const volatile int' -or
+    $maintenanceContractsSource -notmatch 'volatile int\*' -or
+    $maintenanceContractsSource -notmatch 'mov\.u64 %0, %%globaltimer;' -or
+    $maintenanceContractsSource -notmatch 'csharp2cuda_global_timer\(\)') {
+    throw 'The automatic compiler payload omitted a 0.2.1 maintenance contract.'
+}
+Invoke-RepeatCase -Name 'MaintenanceContracts' -Case $maintenanceContracts
+if (-not (Test-Path -LiteralPath $maintenanceContractsCuda)) {
+    throw 'The repeated maintenance-contract build did not create CUDA source.'
+}
+
 $manual = Invoke-Case -Name 'Manual' -ExpectSuccess $true
 Assert-NoCompilerPayload -Case $manual
 $manualAssembly = Join-Path $manual.Root 'Manual.dll'
 $taskAssembly = Join-Path $packagesRoot (
-    'supprocom.csharp2cuda/0.2.0/build/task/Supprocom.CSharp2CUDA.Build.dll')
+    'supprocom.csharp2cuda/0.2.1/build/task/Supprocom.CSharp2CUDA.Build.dll')
 $compilerAssembly = Join-Path $packagesRoot (
-    'supprocom.csharp2cuda/0.2.0/build/compiler/' +
+    'supprocom.csharp2cuda/0.2.1/build/compiler/' +
     'Supprocom.CSharp2CUDA.Compiler.dll')
 Invoke-DotNet -Name 'Manual-run' -ExpectedExitCode 0 -Arguments @(
     $manualAssembly,
     $taskAssembly,
-    $compilerAssembly
+    $compilerAssembly,
+    $evidenceRoot
 ) | Out-Null
 if (Get-ChildItem -LiteralPath $manual.Root -Recurse -File -Filter '*.cu') {
     throw 'The manual API project created automatic CUDA source.'
@@ -370,7 +391,8 @@ Assert-NoCompilerPayload -Case $manual
 Invoke-DotNet -Name 'Manual-analyzers-disabled-run' -ExpectedExitCode 0 -Arguments @(
     $manualAssembly,
     $taskAssembly,
-    $compilerAssembly
+    $compilerAssembly,
+    $evidenceRoot
 ) | Out-Null
 if (Get-ChildItem -LiteralPath $manual.Root -Recurse -File -Filter '*.cu') {
     throw 'The manual project created CUDA source when analyzers were disabled.'

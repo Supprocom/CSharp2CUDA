@@ -10,7 +10,7 @@ Install the .NET 10 SDK. Use Visual Studio 2026 or the `dotnet` command when you
 You do not need the CUDA toolkit to translate C# source. You need a CUDA toolchain later when you compile and run the generated `.cu` file.
 
 Add the `Supprocom.CSharp2CUDA` package to a .NET 10 project.
-Version 0.2.0 supplies the file APIs and build integration in this guide.
+Version 0.2.1 supplies the file APIs and build integration in this guide.
 
 Add the package directly to each project that uses automatic build transpilation.
 
@@ -31,7 +31,7 @@ Set `TranspileToCUDA` to select the complete project for CUDA emission.
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Supprocom.CSharp2CUDA" Version="0.2.0" />
+    <PackageReference Include="Supprocom.CSharp2CUDA" Version="0.2.1" />
   </ItemGroup>
 </Project>
 ```
@@ -200,6 +200,24 @@ Atomic add, exchange, compare-exchange, XOR, and minimum operations support `int
 
 Use `Cuda.ThreadFence` for device publication. Use `Cuda.ThreadFenceSystem` before a mapped host checkpoint becomes ready.
 
+Use volatile mapped-memory operations when a kernel polls host writes or publishes host-visible
+fields. The typed methods accept `int*` and `ulong*` addresses.
+
+```csharp
+while (Cuda.VolatileLoad((int*)mapped) == 0)
+    Cuda.NanoSleep(128u);
+
+Cuda.VolatileStoreUInt64(mapped, 8UL, sequence);
+Cuda.ThreadFenceSystem();
+Cuda.VolatileStoreInt32(mapped, 0UL, 1);
+```
+
+The byte-view offset counts bytes. These methods emit volatile accesses and do not replace
+polling loads with atomic reads.
+
+Use `Cuda.GlobalTimer()` when the device needs the CUDA global timer. It returns `ulong` and
+emits a direct `mov.u64` read from `%globaltimer`.
+
 Use `Cuda.SyncWarp` for warp synchronization. A supplied mask must be a nonzero compile-time `uint` value.
 
 `Cuda.ShuffleDownSync` accepts an `int` value, an unsigned delta, and an explicit width. The width must be a valid compile-time warp width.
@@ -230,6 +248,19 @@ private static readonly int[] Thresholds = [2, 4, 8, 16];
 Each constant array needs a nonempty compile-time initializer. CSharp2CUDA emits `__device__ __constant__` storage with the exact values.
 
 Do not write to a device constant array. The transpiler reports `CS2CUDA020` and returns empty CUDA source.
+
+Use `CudaInlineArrayAttribute` on a structure pointer field for exact fixed CUDA storage.
+
+```csharp
+public struct EvolutionNode
+{
+    [CudaInlineArray(3)]
+    public int* operands;
+}
+```
+
+The generated CUDA field is `int operands[3]`. Primitive and user-structure element types
+support indexed reads, indexed writes, and pointer access.
 
 ## Use exact and named math
 
@@ -300,6 +331,19 @@ internal static unsafe class ExternalModule
 Set `IsPure = true` only when the external method has no observable effects. Its result must depend only on argument values and reachable read-only memory.
 
 Mark every pointer parameter on a pure external method with `CudaReadOnlyAttribute`. Do not use a pure contract for a method that writes memory, changes external state, throws, or traps.
+
+Use `CudaExternalDeviceAttribute` for a device function that a different relocatable CUDA unit
+defines. CSharp2CUDA emits a prototype and does not emit a body.
+
+```csharp
+[CudaExternalDevice(Name = "external_device_operation")]
+private static void Dispatch(
+    [CudaReadOnly] DeviceSlot** inputs,
+    DeviceSlot* output) => throw new NotSupportedException();
+```
+
+The read-only pointer-to-pointer emits as `const DeviceSlot* const*`. The CUDA link must
+include the producer unit that defines `external_device_operation`.
 
 ## Follow the source rules
 

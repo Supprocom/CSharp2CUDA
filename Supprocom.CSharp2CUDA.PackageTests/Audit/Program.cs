@@ -20,10 +20,10 @@ Require(
 
 var nupkgPath = Path.Combine(
     packageDirectory,
-    "Supprocom.CSharp2CUDA.0.2.0.nupkg");
+    "Supprocom.CSharp2CUDA.0.2.1.nupkg");
 var snupkgPath = Path.Combine(
     packageDirectory,
-    "Supprocom.CSharp2CUDA.0.2.0.snupkg");
+    "Supprocom.CSharp2CUDA.0.2.1.snupkg");
 Require(File.Exists(nupkgPath), "The nupkg is missing.");
 Require(File.Exists(snupkgPath), "The snupkg is missing.");
 
@@ -59,7 +59,7 @@ var metadata = nuspec.Root!.Elements().Single().Elements().ToDictionary(
     element => element.Name.LocalName,
     element => element);
 Require(metadata["id"].Value == "Supprocom.CSharp2CUDA", "The package ID is incorrect.");
-Require(metadata["version"].Value == "0.2.0", "The package version is incorrect.");
+Require(metadata["version"].Value == "0.2.1", "The package version is incorrect.");
 Require(
     metadata["license"].Value == "AGPL-3.0-only" &&
     metadata["license"].Attribute("type")?.Value == "expression",
@@ -69,7 +69,7 @@ Require(
     repository.Attribute("url")?.Value == "https://github.com/Supprocom/CSharp2CUDA",
     "The repository URL is incorrect.");
 Require(
-    repository.Attribute("branch")?.Value == "main",
+    repository.Attribute("branch")?.Value == "codex/0.2.1-mts-deblocker",
     "The repository branch is incorrect.");
 Require(
     repository.Attribute("commit")?.Value == expectedCommit,

@@ -15,17 +15,23 @@ internal sealed class CudaModuleEmitter(
         var sections = new List<string>();
         var structures = plan.Structs.Where(static structure => !structure.IsExternal).ToArray();
         var functions = plan.Functions.Where(static function => !function.IsExternal).ToArray();
+        var prototypes = plan.Functions.Where(static function =>
+            !function.IsExternal || function.EmitsDeclaration).ToArray();
 
         if (functions.Length > 0)
             sections.Add(NormalizeNewLines(IntegerSemantics));
+        if (plan.UsesVolatileMappedMemory)
+            sections.Add(NormalizeNewLines(VolatileMappedMemoryIntrinsics));
+        if (plan.UsesGlobalTimer)
+            sections.Add(NormalizeNewLines(GlobalTimerIntrinsic));
         foreach (var constant in plan.ConstantArrays)
             sections.Add(EmitConstantArray(constant));
         if (structures.Length > 0)
             sections.Add(EmitStructForwardDeclarations(structures));
         foreach (var structure in structures)
             sections.Add(EmitStruct(structure));
-        if (functions.Length > 0)
-            sections.Add(EmitFunctionPrototypes(functions));
+        if (prototypes.Length > 0)
+            sections.Add(EmitFunctionPrototypes(prototypes));
         foreach (var function in functions)
             sections.Add(EmitFunction(function));
 
@@ -79,12 +85,21 @@ internal sealed class CudaModuleEmitter(
         foreach (var field in structure.Fields)
         {
             output.Write("    ");
+            var fieldType = field.InlineArrayLength > 0
+                ? ((IPointerTypeSymbol)field.Symbol.Type).PointedAtType
+                : field.Symbol.Type;
             output.Write(plan.FormatType(
-                field.Symbol.Type,
+                fieldType,
                 false,
                 field.Declaration.Declaration.Type.GetLocation()));
             output.Write(' ');
             output.Write(plan.GetIdentifier(field.Symbol));
+            if (field.InlineArrayLength > 0)
+            {
+                output.Write('[');
+                output.Write(field.InlineArrayLength.ToString(CultureInfo.InvariantCulture));
+                output.Write(']');
+            }
             output.WriteLine(";");
         }
         output.Write("};");
@@ -185,6 +200,79 @@ internal sealed class CudaModuleEmitter(
         text.Replace("\r\n", "\n", StringComparison.Ordinal)
             .Replace('\r', '\n')
             .Replace("\n", options.NewLine, StringComparison.Ordinal);
+
+    private const string VolatileMappedMemoryIntrinsics = """
+        #ifndef CSHARP2CUDA_VOLATILE_MAPPED_MEMORY_0_1
+        #define CSHARP2CUDA_VOLATILE_MAPPED_MEMORY_0_1
+        static __device__ __forceinline__ int csharp2cuda_volatile_load_i32(
+            const int* address)
+        {
+            return *((const volatile int*)address);
+        }
+
+        static __device__ __forceinline__ unsigned long long csharp2cuda_volatile_load_u64(
+            const unsigned long long* address)
+        {
+            return *((const volatile unsigned long long*)address);
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_volatile_load_i32_bytes(
+            const unsigned char* address,
+            unsigned long long byte_offset)
+        {
+            return *((const volatile int*)(address + byte_offset));
+        }
+
+        static __device__ __forceinline__ unsigned long long csharp2cuda_volatile_load_u64_bytes(
+            const unsigned char* address,
+            unsigned long long byte_offset)
+        {
+            return *((const volatile unsigned long long*)(address + byte_offset));
+        }
+
+        static __device__ __forceinline__ void csharp2cuda_volatile_store_i32(
+            int* address,
+            int value)
+        {
+            *((volatile int*)address) = value;
+        }
+
+        static __device__ __forceinline__ void csharp2cuda_volatile_store_u64(
+            unsigned long long* address,
+            unsigned long long value)
+        {
+            *((volatile unsigned long long*)address) = value;
+        }
+
+        static __device__ __forceinline__ void csharp2cuda_volatile_store_i32_bytes(
+            unsigned char* address,
+            unsigned long long byte_offset,
+            int value)
+        {
+            *((volatile int*)(address + byte_offset)) = value;
+        }
+
+        static __device__ __forceinline__ void csharp2cuda_volatile_store_u64_bytes(
+            unsigned char* address,
+            unsigned long long byte_offset,
+            unsigned long long value)
+        {
+            *((volatile unsigned long long*)(address + byte_offset)) = value;
+        }
+        #endif
+        """;
+
+    private const string GlobalTimerIntrinsic = """
+        #ifndef CSHARP2CUDA_GLOBAL_TIMER_0_1
+        #define CSHARP2CUDA_GLOBAL_TIMER_0_1
+        static __device__ __forceinline__ unsigned long long csharp2cuda_global_timer()
+        {
+            unsigned long long value;
+            asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(value));
+            return value;
+        }
+        #endif
+        """;
 
     private const string IntegerSemantics = """
         #ifndef CSHARP2CUDA_INTEGER_SEMANTICS_0_1

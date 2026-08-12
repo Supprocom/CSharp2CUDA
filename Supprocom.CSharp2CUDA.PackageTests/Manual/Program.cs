@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -72,9 +73,70 @@ Require(
     generated.Source.Contains("return Increment(value);", StringComparison.Ordinal),
     "Transpile(CSharpCompilation) did not emit the generated dependency.");
 
+var fixtureRoot = Path.Combine(AppContext.BaseDirectory, "Fixtures");
+var boundaryPath = Path.Combine(fixtureRoot, "MtsRemainingBoundary.cs");
+var sourceMapPath = Path.Combine(fixtureRoot, "MtsBoundarySourceMap.json");
+var boundaryInput = File.ReadAllText(boundaryPath);
+var sourceMap = File.ReadAllText(sourceMapPath);
+var boundaryInputSha256 = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(boundaryPath)));
+var boundary = CudaTranspiler.TranspileFile(boundaryPath);
+Require(boundary.Succeeded, FormatDiagnostics(boundary.Diagnostics));
+
+string[] requiredBoundarySource =
+[
+    "int input_kinds[3];",
+    "int operands[3];",
+    "int operand_kinds[3];",
+    "ResearchEvolutionNode nodes[32];",
+    "unsigned long long runtime_invalid_by_operation[7];",
+    "struct MathBlockSlot",
+    "__device__ void mathblocks_operation_dispatch(",
+    "const MathBlockSlot* const* inputs",
+    "csharp2cuda_global_timer()",
+    "mov.u64 %0, %%globaltimer;",
+    "csharp2cuda_volatile_load_i32_bytes(mapped, 12ull)",
+    "csharp2cuda_volatile_load_u64_bytes(mapped, 16ull)",
+    "csharp2cuda_volatile_store_i32_bytes(mapped, 8ull",
+    "csharp2cuda_volatile_store_i32((int*)(csharp2cuda_pointer_add(mapped, 4)), 1)",
+    "extern \"C\" __global__ void mts_research_owned_evolution("
+];
+foreach (var required in requiredBoundarySource)
+{
+    Require(
+        boundary.Source.Contains(required, StringComparison.Ordinal),
+        $"The exact-package boundary does not contain '{required}'.");
+}
+
+string[] rejectedBoundaryInput =
+[
+    "__device__",
+    "__global__",
+    "asm volatile",
+    "#include",
+    "Source ="
+];
+foreach (var rejected in rejectedBoundaryInput)
+{
+    Require(
+        !boundaryInput.Contains(rejected, StringComparison.Ordinal),
+        $"The exact-package boundary contains raw CUDA input '{rejected}'.");
+}
+
+Require(
+    boundary.Source.Split(
+        "__device__ void mathblocks_operation_dispatch(",
+        StringSplitOptions.None).Length - 1 == 1,
+    "The external device declaration count is incorrect.");
+Require(
+    sourceMap.Contains("5f27dfb49c81c14f7189c9e084aaaf1745b8b3f9", StringComparison.Ordinal),
+    "The strict source map has a different MTS commit.");
+Require(
+    sourceMap.Contains(boundaryInputSha256, StringComparison.Ordinal),
+    "The strict source map has a different candidate input hash.");
+
 var productAssembly = typeof(CudaTranspiler).Assembly;
 Require(
-    productAssembly.GetName().Version?.ToString() == "0.2.0.0",
+    productAssembly.GetName().Version?.ToString() == "0.2.1.0",
     "The package assembly version is incorrect.");
 var repositoryCommit = productAssembly.GetCustomAttributes<AssemblyMetadataAttribute>()
     .Single(attribute => attribute.Key == "RepositoryCommit")
@@ -84,16 +146,16 @@ var informationalVersion = productAssembly
     .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
     .InformationalVersion;
 Require(
-    informationalVersion == $"0.2.0+{repositoryCommit}",
+    informationalVersion == $"0.2.1+{repositoryCommit}",
     "The informational version does not match the repository commit.");
 
-Require(args.Length == 2, "The package tool assembly paths are missing.");
+Require(args.Length == 3, "The package tool assembly paths or evidence path are missing.");
 var taskAssemblyPath = Path.GetFullPath(args[0]);
 Require(File.Exists(taskAssemblyPath), "The build task assembly is missing.");
 var taskAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(taskAssemblyPath);
 Require(
     taskAssembly.GetName().Name == "Supprocom.CSharp2CUDA.Build" &&
-    taskAssembly.GetName().Version?.ToString() == "0.2.0.0",
+    taskAssembly.GetName().Version?.ToString() == "0.2.1.0",
     "The build task assembly identity is incorrect.");
 var taskRepositoryCommit = taskAssembly.GetCustomAttributes<AssemblyMetadataAttribute>()
     .Single(attribute => attribute.Key == "RepositoryCommit")
@@ -103,7 +165,7 @@ var taskInformationalVersion = taskAssembly
     .InformationalVersion;
 Require(
     taskRepositoryCommit == repositoryCommit &&
-    taskInformationalVersion == $"0.2.0+{repositoryCommit}",
+    taskInformationalVersion == $"0.2.1+{repositoryCommit}",
     "The build task provenance is incorrect.");
 
 var compilerAssemblyPath = Path.GetFullPath(args[1]);
@@ -111,7 +173,7 @@ Require(File.Exists(compilerAssemblyPath), "The compiler assembly is missing.");
 var compilerAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(compilerAssemblyPath);
 Require(
     compilerAssembly.GetName().Name == "Supprocom.CSharp2CUDA.Compiler" &&
-    compilerAssembly.GetName().Version?.ToString() == "0.2.0.0",
+    compilerAssembly.GetName().Version?.ToString() == "0.2.1.0",
     "The compiler assembly identity is incorrect.");
 var compilerRepositoryCommit = compilerAssembly
     .GetCustomAttributes<AssemblyMetadataAttribute>()
@@ -122,8 +184,23 @@ var compilerInformationalVersion = compilerAssembly
     .InformationalVersion;
 Require(
     compilerRepositoryCommit == repositoryCommit &&
-    compilerInformationalVersion == $"0.2.0+{repositoryCommit}",
+    compilerInformationalVersion == $"0.2.1+{repositoryCommit}",
     "The compiler provenance is incorrect.");
+
+var evidenceDirectory = Path.GetFullPath(args[2]);
+Directory.CreateDirectory(evidenceDirectory);
+File.WriteAllText(
+    Path.Combine(evidenceDirectory, "mts-remaining-boundary.generated.cu"),
+    boundary.Source);
+File.WriteAllText(
+    Path.Combine(evidenceDirectory, "mts-boundary-source-map.json"),
+    sourceMap);
+
+Console.WriteLine($"candidate-input-sha256={boundaryInputSha256}");
+Console.WriteLine("strict-source-map=pass");
+Console.WriteLine("raw-cuda-input=absent");
+Console.WriteLine("fallback-emitter=absent");
+Console.WriteLine("exact-package-boundary=pass");
 
 static CSharpCompilation CreateCompilation(IEnumerable<string> paths)
 {

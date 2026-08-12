@@ -66,7 +66,7 @@ Add the package directly to each project that uses automatic build transpilation
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Supprocom.CSharp2CUDA" Version="0.2.0" />
+    <PackageReference Include="Supprocom.CSharp2CUDA" Version="0.2.1" />
   </ItemGroup>
 </Project>
 ```
@@ -168,7 +168,22 @@ Mark a static read-only `int` array with `CudaConstantAttribute`. Each element m
 
 Device constant arrays are read-only in translated functions. A write attempt produces `CS2CUDA020` and no CUDA source.
 
-A struct becomes a CUDA `struct`. Its fields must have supported types and must not be static, constant, read-only, volatile, initialized, or decorated with extra attributes.
+A struct becomes a CUDA `struct`. Its fields must have supported types and must not be
+static, constant, read-only, volatile, or initialized.
+
+Mark a pointer field with `CudaInlineArrayAttribute` to emit fixed storage inside the CUDA
+structure. The attribute length must be a positive constant.
+
+```csharp
+public struct EvolutionEntry
+{
+    [CudaInlineArray(3)]
+    public int* operands;
+}
+```
+
+The field remains a pointer in compile-checked C# source. CUDA emission changes it to
+`int operands[3]`, which supports indexing and pointer access.
 
 A method with `CudaDeviceAttribute` becomes a `__device__` function. A method with `CudaGlobalAttribute` becomes a `__global__` function. Both attributes support a custom CUDA `Name`.
 
@@ -199,6 +214,15 @@ Shared storage supports `int`, `uint`, `long`, `ulong`, and `double`. Shared dec
 `Cuda.AtomicAdd`, `Cuda.AtomicExchange`, `Cuda.AtomicCompareExchange`, `Cuda.AtomicXor`, and `Cuda.AtomicMin` support `int`, `uint`, `long`, and `ulong` locations.
 
 Use the atomic add operation with zero for an atomic read. Unsupported atomic types produce `CS2CUDA019`.
+
+Use `Cuda.VolatileLoad` and `Cuda.VolatileStore` for typed mapped-memory `int*` and `ulong*`
+addresses. Use the `Int32` and `UInt64` byte-view methods with a `byte*` base and byte offset.
+
+These operations emit volatile CUDA loads and stores. They do not use device-scope atomic
+reads. Call `Cuda.ThreadFenceSystem` before the device publishes completion to the host.
+
+Use `Cuda.GlobalTimer()` for a direct `ulong` read from CUDA `%globaltimer`. The package emits
+the required `mov.u64` instruction, so the C# source does not contain inline assembly.
 
 `Cuda.Bool` converts an integer to a nonzero test. `Cuda.Int` converts a Boolean value to `0` or `1`. `Cuda.Unsigned` converts a signed `long` value to `unsigned long long` before an unsigned operation.
 
@@ -257,6 +281,19 @@ internal static unsafe class ExternalModule
 ```
 
 Mark every pointer parameter on a pure external method with `CudaReadOnlyAttribute`. An incorrect pure contract can change program behavior.
+
+Use `CudaExternalDeviceAttribute` when this module needs a prototype for a separately linked
+device function. CSharp2CUDA emits the prototype once and does not emit a function body.
+
+```csharp
+[CudaExternalDevice(Name = "external_device_operation")]
+private static void Dispatch(
+    [CudaReadOnly] DeviceSlot** inputs,
+    DeviceSlot* output) => throw new NotSupportedException();
+```
+
+The deep read-only pointer emits as `const DeviceSlot* const*`. A different relocatable
+CUDA unit must define the device function before the final link.
 
 ## Build and test
 

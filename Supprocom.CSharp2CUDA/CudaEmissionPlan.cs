@@ -8,6 +8,10 @@ namespace Supprocom.CSharp2CUDA;
 internal sealed class CudaEmissionPlan
 {
     internal const string ExternalAttributeName = "Supprocom.CSharp2CUDA.CudaExternalAttribute";
+    internal const string ExternalDeviceAttributeName =
+        "Supprocom.CSharp2CUDA.CudaExternalDeviceAttribute";
+    internal const string InlineArrayAttributeName =
+        "Supprocom.CSharp2CUDA.CudaInlineArrayAttribute";
     internal const string ConstantAttributeName = "Supprocom.CSharp2CUDA.CudaConstantAttribute";
     internal const string DeviceAttributeName = "Supprocom.CSharp2CUDA.CudaDeviceAttribute";
     internal const string GlobalAttributeName = "Supprocom.CSharp2CUDA.CudaGlobalAttribute";
@@ -95,6 +99,8 @@ internal sealed class CudaEmissionPlan
         new(SymbolEqualityComparer.Default);
     private readonly Dictionary<INamedTypeSymbol, CudaStructPlan> structPlans =
         new(SymbolEqualityComparer.Default);
+    private readonly Dictionary<IFieldSymbol, CudaFieldPlan> fieldPlans =
+        new(SymbolEqualityComparer.Default);
     private readonly HashSet<LocalDeclarationStatementSyntax> fixedLocalArrays = [];
     private readonly HashSet<LocalDeclarationStatementSyntax> recognizedStorageDeclarations = [];
     private readonly Dictionary<LocalDeclarationStatementSyntax, CudaStoragePlan>
@@ -136,6 +142,10 @@ internal sealed class CudaEmissionPlan
 
     public ImmutableArray<CudaConstantArrayPlan> ConstantArrays { get; private set; } = [];
 
+    public bool UsesVolatileMappedMemory { get; private set; }
+
+    public bool UsesGlobalTimer { get; private set; }
+
     public static CudaEmissionPlan Create(
         CSharpCompilation compilation,
         IReadOnlyList<ClassDeclarationSyntax> units,
@@ -165,6 +175,9 @@ internal sealed class CudaEmissionPlan
 
     public bool TryGetStruct(INamedTypeSymbol type, out CudaStructPlan structure) =>
         structPlans.TryGetValue(type, out structure!);
+
+    public bool TryGetField(IFieldSymbol field, out CudaFieldPlan fieldPlan) =>
+        fieldPlans.TryGetValue(field, out fieldPlan!);
 
     public bool IsFixedLocalArray(LocalDeclarationStatementSyntax declaration) =>
         fixedLocalArrays.Contains(declaration);
@@ -271,6 +284,17 @@ internal sealed class CudaEmissionPlan
                 nameof(Cuda.ThreadFence) => new(CudaCallKind.Direct, "__threadfence"),
                 nameof(Cuda.ThreadFenceSystem) =>
                     new(CudaCallKind.Direct, "__threadfence_system"),
+                nameof(Cuda.VolatileLoad) => GetVolatilePointerCallPlan(method, false),
+                nameof(Cuda.VolatileLoadInt32) =>
+                    GetVolatileMappedCallPlan("csharp2cuda_volatile_load_i32_bytes"),
+                nameof(Cuda.VolatileLoadUInt64) =>
+                    GetVolatileMappedCallPlan("csharp2cuda_volatile_load_u64_bytes"),
+                nameof(Cuda.VolatileStore) => GetVolatilePointerCallPlan(method, true),
+                nameof(Cuda.VolatileStoreInt32) =>
+                    GetVolatileMappedCallPlan("csharp2cuda_volatile_store_i32_bytes"),
+                nameof(Cuda.VolatileStoreUInt64) =>
+                    GetVolatileMappedCallPlan("csharp2cuda_volatile_store_u64_bytes"),
+                nameof(Cuda.GlobalTimer) => GetGlobalTimerCallPlan(),
                 nameof(Cuda.SyncWarp) => new(CudaCallKind.Direct, "__syncwarp"),
                 nameof(Cuda.ShuffleDownSync) =>
                     new(CudaCallKind.Direct, "__shfl_down_sync"),
@@ -348,9 +372,39 @@ internal sealed class CudaEmissionPlan
             : new(CudaCallKind.Atomic, name);
     }
 
+    private CudaCallPlan GetVolatilePointerCallPlan(IMethodSymbol method, bool store)
+    {
+        UsesVolatileMappedMemory = true;
+        var pointer = (IPointerTypeSymbol)method.Parameters[0].Type;
+        var suffix = pointer.PointedAtType.SpecialType == SpecialType.System_Int32
+            ? "i32"
+            : "u64";
+        return new CudaCallPlan(
+            CudaCallKind.Direct,
+            $"csharp2cuda_volatile_{(store ? "store" : "load")}_{suffix}");
+    }
+
+    private CudaCallPlan GetVolatileMappedCallPlan(string name)
+    {
+        UsesVolatileMappedMemory = true;
+        return new CudaCallPlan(CudaCallKind.Direct, name);
+    }
+
+    private CudaCallPlan GetGlobalTimerCallPlan()
+    {
+        UsesGlobalTimer = true;
+        return new CudaCallPlan(CudaCallKind.Direct, "csharp2cuda_global_timer");
+    }
+
     private static bool IsImpureIntrinsic(string name) => name is
         "__syncthreads" or "__threadfence" or "__threadfence_system" or
-        "__syncwarp" or "__shfl_down_sync" or "__nanosleep";
+        "__syncwarp" or "__shfl_down_sync" or "__nanosleep" or
+        "csharp2cuda_volatile_load_i32" or "csharp2cuda_volatile_load_u64" or
+        "csharp2cuda_volatile_load_i32_bytes" or
+        "csharp2cuda_volatile_load_u64_bytes" or
+        "csharp2cuda_volatile_store_i32" or "csharp2cuda_volatile_store_u64" or
+        "csharp2cuda_volatile_store_i32_bytes" or
+        "csharp2cuda_volatile_store_u64_bytes" or "csharp2cuda_global_timer";
 
     private static IMethodSymbol? ResolveCudaLogMethod(CSharpCompilation compilation)
     {
@@ -513,12 +567,13 @@ internal sealed class CudaEmissionPlan
             }
         }
 
+        foreach (var structure in structures)
+            ValidateStruct(structure);
+
         Structs = OrderStructs(structures).ToImmutableArray();
         Functions = functions.ToImmutableArray();
         ConstantArrays = constants.ToImmutableArray();
 
-        foreach (var structure in structures)
-            ValidateStruct(structure);
         foreach (var function in functions)
             ValidateFunction(function);
 
@@ -648,15 +703,16 @@ internal sealed class CudaEmissionPlan
             return;
 
         var externalAttribute = GetAttribute(symbol, ExternalAttributeName);
-        var external = externalAttribute is not null;
+        var externalDevice = GetAttribute(symbol, ExternalDeviceAttributeName);
+        var external = externalAttribute is not null || externalDevice is not null;
         var device = GetAttribute(symbol, DeviceAttributeName);
         var global = GetAttribute(symbol, GlobalAttributeName);
-        var kind = device is not null
+        var kind = device is not null || externalDevice is not null
             ? CudaFunctionKind.Device
             : global is not null
                 ? CudaFunctionKind.Global
                 : CudaFunctionKind.External;
-        var namingAttribute = device ?? global;
+        var namingAttribute = device ?? global ?? externalDevice;
         var name = namingAttribute is null
             ? symbol.Name
             : GetNamedString(namingAttribute, nameof(CudaDeviceAttribute.Name)) ?? symbol.Name;
@@ -674,12 +730,14 @@ internal sealed class CudaEmissionPlan
             kind,
             externC,
             external,
-            externalAttribute is not null && GetNamedBoolean(
-                externalAttribute,
+            (externalAttribute ?? externalDevice) is { } purityAttribute && GetNamedBoolean(
+                purityAttribute,
                 nameof(CudaExternalAttribute.IsPure),
                 false),
+            externalDevice is not null,
             device is not null,
-            global is not null);
+            global is not null,
+            externalDevice is not null);
         functions.Add(function);
         functionPlans[symbol] = function;
 
@@ -873,7 +931,7 @@ internal sealed class CudaEmissionPlan
             }
 
             if (field.Modifiers.Any(modifier => !FieldModifiers.Contains(modifier.Kind())) ||
-                field.AttributeLists.Count != 0)
+                !HasOnlyAttributes(field.AttributeLists, InlineArrayAttributeName))
             {
                 ReportUnsupportedSyntax(field);
             }
@@ -882,8 +940,42 @@ internal sealed class CudaEmissionPlan
             if (structure.Model.GetDeclaredSymbol(variable) is not IFieldSymbol symbol)
                 continue;
             RegisterIdentifier(symbol, variable.Identifier.ValueText, variable.Identifier.GetLocation());
-            structure.Fields.Add(new CudaFieldPlan(field, variable, symbol));
-            FormatType(symbol.Type, false, field.Declaration.Type.GetLocation());
+            var inlineArray = GetAttribute(symbol, InlineArrayAttributeName);
+            var inlineArrayLength = 0;
+            if (inlineArray is not null &&
+                !structure.IsExternal &&
+                symbol.Type is IPointerTypeSymbol pointer &&
+                inlineArray.ConstructorArguments is
+                [
+                    {
+                        Kind: TypedConstantKind.Primitive,
+                        Value: int length
+                    }
+                ] &&
+                length > 0)
+            {
+                inlineArrayLength = length;
+                FormatType(pointer.PointedAtType, false, field.Declaration.Type.GetLocation());
+            }
+            else
+            {
+                FormatType(symbol.Type, false, field.Declaration.Type.GetLocation());
+                if (inlineArray is not null)
+                {
+                    diagnostics.Add(Diagnostic.Create(
+                        CudaDiagnostics.InvalidInlineArray,
+                        field.GetLocation(),
+                        symbol.Name));
+                }
+            }
+
+            var fieldPlan = new CudaFieldPlan(
+                field,
+                variable,
+                symbol,
+                inlineArrayLength);
+            structure.Fields.Add(fieldPlan);
+            fieldPlans[symbol] = fieldPlan;
 
             if (symbol.IsStatic || symbol.IsConst || symbol.IsReadOnly || symbol.IsVolatile ||
                 variable.Initializer is not null)
@@ -904,6 +996,7 @@ internal sealed class CudaEmissionPlan
             !HasOnlyAttributes(
                 syntax.AttributeLists,
                 ExternalAttributeName,
+                ExternalDeviceAttributeName,
                 DeviceAttributeName,
                 GlobalAttributeName))
         {
@@ -917,6 +1010,13 @@ internal sealed class CudaEmissionPlan
                 syntax.Identifier.GetLocation(),
                 function.Symbol.Name));
         }
+        else if (function.HasExternalDeviceAttribute &&
+            (function.HasDeviceAttribute ||
+             function.HasGlobalAttribute ||
+             HasAttribute(function.Symbol, ExternalAttributeName)))
+        {
+            ReportUnsupportedSyntax(syntax);
+        }
         else if (!function.IsExternal &&
             !function.HasDeviceAttribute &&
             !function.HasGlobalAttribute)
@@ -926,7 +1026,7 @@ internal sealed class CudaEmissionPlan
                 syntax.Identifier.GetLocation(),
                 function.Symbol.Name));
         }
-        else if (function.IsExternal &&
+        else if (function.IsExternal && !function.HasExternalDeviceAttribute &&
             (function.HasDeviceAttribute || function.HasGlobalAttribute))
         {
             ReportUnsupportedSyntax(syntax);
@@ -1149,10 +1249,14 @@ internal sealed class CudaEmissionPlan
             if (!visited.Add(structure.Symbol))
                 return;
             visiting.Add(structure.Symbol);
-            foreach (var field in structure.Symbol.GetMembers().OfType<IFieldSymbol>())
+            foreach (var field in structure.Fields)
             {
-                if (field.IsStatic || field.Type is IPointerTypeSymbol ||
-                    field.Type is not INamedTypeSymbol named ||
+                var fieldType = field.InlineArrayLength > 0
+                    ? ((IPointerTypeSymbol)field.Symbol.Type).PointedAtType
+                    : field.Symbol.Type;
+                if (field.Symbol.IsStatic ||
+                    fieldType is IPointerTypeSymbol ||
+                    fieldType is not INamedTypeSymbol named ||
                     !structPlans.TryGetValue(named, out var dependency) ||
                     dependency.IsExternal)
                 {
@@ -1396,7 +1500,8 @@ internal sealed class CudaStructPlan(
 internal sealed record CudaFieldPlan(
     FieldDeclarationSyntax Declaration,
     VariableDeclaratorSyntax Variable,
-    IFieldSymbol Symbol);
+    IFieldSymbol Symbol,
+    int InlineArrayLength);
 
 internal sealed record CudaConstantArrayPlan(
     FieldDeclarationSyntax Declaration,
@@ -1429,8 +1534,10 @@ internal sealed record CudaFunctionPlan(
     bool ExternC,
     bool IsExternal,
     bool IsPureExternal,
+    bool EmitsDeclaration,
     bool HasDeviceAttribute,
-    bool HasGlobalAttribute);
+    bool HasGlobalAttribute,
+    bool HasExternalDeviceAttribute);
 
 internal enum CudaFunctionKind
 {
@@ -1483,7 +1590,9 @@ internal static class CudaIdentifier
 
     private static readonly HashSet<string> RuntimeIdentifiers = new(StringComparer.Ordinal)
     {
+        "CSHARP2CUDA_GLOBAL_TIMER_0_1",
         "CSHARP2CUDA_INTEGER_SEMANTICS_0_1",
+        "CSHARP2CUDA_VOLATILE_MAPPED_MEMORY_0_1",
         "asin",
         "atomicAdd",
         "atomicCAS",

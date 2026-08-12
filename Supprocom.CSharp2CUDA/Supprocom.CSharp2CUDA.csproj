@@ -16,7 +16,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>cuda;csharp;roslyn;transpiler;source-translation;gpu</PackageTags>
-    <PackageReleaseNotes>Replace raw source-text input with compile-checked file APIs and generator-complete automatic project transpilation.</PackageReleaseNotes>
+    <PackageReleaseNotes>Add volatile mapped-memory access, a global timer, inline-array structure fields, and external device declarations.</PackageReleaseNotes>
     <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>

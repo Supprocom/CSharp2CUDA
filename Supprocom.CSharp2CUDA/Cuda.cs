@@ -15,6 +15,32 @@ public static unsafe class Cuda
 
     public static void ThreadFenceSystem() => throw ManagedExecutionException();
 
+    public static int VolatileLoad(int* address) =>
+        throw ManagedExecutionException();
+
+    public static ulong VolatileLoad(ulong* address) =>
+        throw ManagedExecutionException();
+
+    public static int VolatileLoadInt32(byte* address, ulong byteOffset) =>
+        throw ManagedExecutionException();
+
+    public static ulong VolatileLoadUInt64(byte* address, ulong byteOffset) =>
+        throw ManagedExecutionException();
+
+    public static void VolatileStore(int* address, int value) =>
+        throw ManagedExecutionException();
+
+    public static void VolatileStore(ulong* address, ulong value) =>
+        throw ManagedExecutionException();
+
+    public static void VolatileStoreInt32(byte* address, ulong byteOffset, int value) =>
+        throw ManagedExecutionException();
+
+    public static void VolatileStoreUInt64(byte* address, ulong byteOffset, ulong value) =>
+        throw ManagedExecutionException();
+
+    public static ulong GlobalTimer() => throw ManagedExecutionException();
+
     public static void SyncWarp() => throw ManagedExecutionException();
 
     public static void SyncWarp(uint mask) => throw ManagedExecutionException();

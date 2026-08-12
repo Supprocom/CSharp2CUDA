@@ -367,6 +367,12 @@ internal sealed class CudaSyntaxValidator(
 
     private void ValidateAssignment(AssignmentExpressionSyntax node)
     {
+        if (IsInlineArrayFieldReference(node.Left))
+        {
+            ReportUnsupportedSyntax(node.Left);
+            return;
+        }
+
         if (TryGetConstantArrayWriteLocation(node.Left, out var constant))
         {
             ReportConstantWrite(node.Left, constant);
@@ -411,6 +417,11 @@ internal sealed class CudaSyntaxValidator(
         if (helper is not null)
             plan.PlanAssignmentHelper(node, helper);
     }
+
+    private bool IsInlineArrayFieldReference(ExpressionSyntax expression) =>
+        semanticModel.GetSymbolInfo(expression).Symbol is IFieldSymbol field &&
+        plan.TryGetField(field, out var fieldPlan) &&
+        fieldPlan.InlineArrayLength > 0;
 
     private void ValidatePrefix(PrefixUnaryExpressionSyntax node)
     {

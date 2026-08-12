@@ -32,6 +32,12 @@ public sealed class CudaGlobalAttribute : Attribute
 public sealed class CudaReadOnlyAttribute : Attribute;
 
 [AttributeUsage(AttributeTargets.Field, AllowMultiple = false, Inherited = false)]
+public sealed class CudaInlineArrayAttribute(int length) : Attribute
+{
+    public int Length { get; } = length;
+}
+
+[AttributeUsage(AttributeTargets.Field, AllowMultiple = false, Inherited = false)]
 public sealed class CudaConstantAttribute : Attribute;
 
 [AttributeUsage(
@@ -40,5 +46,12 @@ public sealed class CudaConstantAttribute : Attribute;
     Inherited = false)]
 public sealed class CudaExternalAttribute : Attribute
 {
+    public bool IsPure { get; set; }
+}
+
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = false)]
+public sealed class CudaExternalDeviceAttribute : Attribute
+{
+    public string? Name { get; set; }
     public bool IsPure { get; set; }
 }

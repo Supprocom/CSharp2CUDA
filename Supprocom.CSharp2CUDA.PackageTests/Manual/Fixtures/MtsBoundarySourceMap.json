@@ -1,0 +1,15 @@
+{
+  "sourceCommit": "5f27dfb49c81c14f7189c9e084aaaf1745b8b3f9",
+  "sourceFiles": [
+    {
+      "path": "MarkosTradingSystem.Researcher.GpuSearch/Cuda/ResearchGpuEvolutionDeviceSource.cs",
+      "sha256": "8F15260311A4F082BDA68AE789AC94581E2754276FC86F64DE64A3F1DCDB0B7B"
+    },
+    {
+      "path": "MarkosTradingSystem.Researcher.GpuSearch/Cuda/ResearchMathBlocksCudaSourceComposer.cs",
+      "sha256": "5DF8673154BFA3A6312BD13BD9319E22120172F7E776E5F53678C4DC77FD2A6F"
+    }
+  ],
+  "candidateInput": "MtsRemainingBoundary.cs",
+  "candidateInputSha256": "60D114FE2A13A23E3A6EC70806444937624B839F8EF60109C71835AC76C5285C"
+}

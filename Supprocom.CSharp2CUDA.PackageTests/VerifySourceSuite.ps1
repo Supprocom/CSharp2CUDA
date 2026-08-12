@@ -8,7 +8,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $packageRoot = [System.IO.Path]::GetFullPath($PackageDirectory)
 $package = Get-Item -LiteralPath (
-    Join-Path $packageRoot 'Supprocom.CSharp2CUDA.0.2.0.nupkg')
+    Join-Path $packageRoot 'Supprocom.CSharp2CUDA.0.2.1.nupkg')
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $package.FullName).Hash
 $runRoot = Join-Path $repositoryRoot (
@@ -17,6 +17,13 @@ $evidenceRoot = Join-Path $runRoot 'evidence'
 $packagesRoot = Join-Path $runRoot 'packages'
 $sourceRoot = Join-Path $runRoot 'source'
 $testSourceRoot = Join-Path $sourceRoot 'Supprocom.CSharp2CUDA.Tests'
+$packageBuildEvidenceRoot = Join-Path $repositoryRoot (
+    'artifacts/package-tests/' + $hash.Substring(0, 16) + '/evidence')
+$exactPackageCuda = Join-Path $packageBuildEvidenceRoot (
+    'mts-remaining-boundary.generated.cu')
+if (-not (Test-Path -LiteralPath $exactPackageCuda)) {
+    throw 'The package build matrix did not retain the MTS boundary CUDA source.'
+}
 if ([string]::IsNullOrWhiteSpace($ResultsDirectory)) {
     $ResultsDirectory = Join-Path $evidenceRoot 'trx'
 }
@@ -131,8 +138,10 @@ $testProject = Join-Path $sourceRoot (
     'Supprocom.CSharp2CUDA.Tests/Supprocom.CSharp2CUDA.Tests.csproj')
 $common = @(
     "-p:CSharp2CUDAPackageDirectory=$packageRoot",
-    '-p:CSharp2CUDAPackageVersion=0.2.0'
+    '-p:CSharp2CUDAPackageVersion=0.2.1'
 )
+$env:CSHARP2CUDA_EXACT_PACKAGE_CUDA = $exactPackageCuda
+$env:CSHARP2CUDA_EVIDENCE_DIRECTORY = Join-Path $evidenceRoot 'generated'
 Invoke-DotNet -Name 'restore' -Arguments (@(
     'restore',
     $testProject,
@@ -158,7 +167,7 @@ Invoke-DotNet -Name 'test' -Arguments (@(
 ) + $common)
 
 $packageAssembly = Join-Path $packagesRoot (
-    'supprocom.csharp2cuda/0.2.0/lib/net10.0/Supprocom.CSharp2CUDA.dll')
+    'supprocom.csharp2cuda/0.2.1/lib/net10.0/Supprocom.CSharp2CUDA.dll')
 $testAssembly = Join-Path $testSourceRoot (
     'bin/Release/net10.0/Supprocom.CSharp2CUDA.dll')
 if ((Get-FileHash -Algorithm SHA256 -LiteralPath $packageAssembly).Hash -ne
