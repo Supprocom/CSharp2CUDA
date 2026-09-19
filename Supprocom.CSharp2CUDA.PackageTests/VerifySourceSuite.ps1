@@ -2,27 +2,40 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $PackageDirectory,
 
+    [Parameter(Mandatory = $true)]
+    [string] $RunDirectory,
+
+    [Parameter(Mandatory = $true)]
+    [string] $PackageVersion,
+
     [string] $ResultsDirectory
 )
 
 $ErrorActionPreference = 'Stop'
 $packageRoot = [System.IO.Path]::GetFullPath($PackageDirectory)
 $package = Get-Item -LiteralPath (
-    Join-Path $packageRoot 'Supprocom.CSharp2CUDA.0.2.1.nupkg')
+    Join-Path $packageRoot "Supprocom.CSharp2CUDA.$PackageVersion.nupkg")
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $package.FullName).Hash
-$runRoot = Join-Path $repositoryRoot (
-    'artifacts/package-source-tests/' + $hash.Substring(0, 16))
+$runBase = [System.IO.Path]::GetFullPath($RunDirectory)
+$repositoryPrefix = [System.IO.Path]::GetFullPath($repositoryRoot) +
+    [System.IO.Path]::DirectorySeparatorChar
+if ($runBase.StartsWith(
+        $repositoryPrefix,
+        [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The source-suite directory must be outside the source checkout.'
+}
+$runRoot = Join-Path $runBase ('package-source-tests/' + $hash.Substring(0, 16))
 $evidenceRoot = Join-Path $runRoot 'evidence'
 $packagesRoot = Join-Path $runRoot 'packages'
 $sourceRoot = Join-Path $runRoot 'source'
 $testSourceRoot = Join-Path $sourceRoot 'Supprocom.CSharp2CUDA.Tests'
-$packageBuildEvidenceRoot = Join-Path $repositoryRoot (
-    'artifacts/package-tests/' + $hash.Substring(0, 16) + '/evidence')
+$packageBuildEvidenceRoot = Join-Path $runBase (
+    'package-tests/' + $hash.Substring(0, 16) + '/evidence')
 $exactPackageCuda = Join-Path $packageBuildEvidenceRoot (
-    'mts-remaining-boundary.generated.cu')
+    'external-dispatch-boundary.generated.cu')
 if (-not (Test-Path -LiteralPath $exactPackageCuda)) {
-    throw 'The package build matrix did not retain the MTS boundary CUDA source.'
+    throw 'The package build matrix did not retain the external dispatch CUDA source.'
 }
 if ([string]::IsNullOrWhiteSpace($ResultsDirectory)) {
     $ResultsDirectory = Join-Path $evidenceRoot 'trx'
@@ -32,6 +45,14 @@ else {
 }
 New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $ResultsDirectory | Out-Null
+$env:DOTNET_CLI_HOME = Join-Path $runRoot 'dotnet-home'
+$env:NUGET_PACKAGES = $packagesRoot
+$env:NUGET_HTTP_CACHE_PATH = Join-Path $runRoot 'nuget-http-cache'
+$env:TEMP = Join-Path $runRoot 'temp'
+$env:TMP = $env:TEMP
+New-Item -ItemType Directory -Force -Path $env:DOTNET_CLI_HOME | Out-Null
+New-Item -ItemType Directory -Force -Path $env:NUGET_HTTP_CACHE_PATH | Out-Null
+New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
 $sourcePath = [System.IO.Path]::GetFullPath($sourceRoot)
 $runPrefix = [System.IO.Path]::GetFullPath($runRoot) +
     [System.IO.Path]::DirectorySeparatorChar
@@ -119,8 +140,8 @@ function Invoke-DotNet {
 
     $standardOutputTask = $process.StandardOutput.ReadToEndAsync()
     $standardErrorTask = $process.StandardError.ReadToEndAsync()
-    if (-not $process.WaitForExit(180000)) {
-        $process.Kill()
+    if (-not $process.WaitForExit(300000)) {
+        $process.Kill($true)
         throw "dotnet timed out for $Name."
     }
 
@@ -138,7 +159,9 @@ $testProject = Join-Path $sourceRoot (
     'Supprocom.CSharp2CUDA.Tests/Supprocom.CSharp2CUDA.Tests.csproj')
 $common = @(
     "-p:CSharp2CUDAPackageDirectory=$packageRoot",
-    '-p:CSharp2CUDAPackageVersion=0.2.1'
+    "-p:CSharp2CUDAPackageVersion=$PackageVersion",
+    "-p:BaseOutputPath=$(Join-Path $runRoot 'test-bin/')",
+    "-p:BaseIntermediateOutputPath=$(Join-Path $runRoot 'test-obj/')"
 )
 $env:CSHARP2CUDA_EXACT_PACKAGE_CUDA = $exactPackageCuda
 $env:CSHARP2CUDA_EVIDENCE_DIRECTORY = Join-Path $evidenceRoot 'generated'
@@ -167,9 +190,9 @@ Invoke-DotNet -Name 'test' -Arguments (@(
 ) + $common)
 
 $packageAssembly = Join-Path $packagesRoot (
-    'supprocom.csharp2cuda/0.2.1/lib/net10.0/Supprocom.CSharp2CUDA.dll')
-$testAssembly = Join-Path $testSourceRoot (
-    'bin/Release/net10.0/Supprocom.CSharp2CUDA.dll')
+    "supprocom.csharp2cuda/$PackageVersion/lib/net10.0/Supprocom.CSharp2CUDA.dll")
+$testAssembly = Join-Path $runRoot (
+    'test-bin/Release/net10.0/Supprocom.CSharp2CUDA.dll')
 if ((Get-FileHash -Algorithm SHA256 -LiteralPath $packageAssembly).Hash -ne
     (Get-FileHash -Algorithm SHA256 -LiteralPath $testAssembly).Hash) {
     throw 'The test output does not contain the exact package assembly.'

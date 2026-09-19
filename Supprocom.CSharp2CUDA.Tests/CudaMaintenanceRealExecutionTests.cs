@@ -103,13 +103,13 @@ public sealed class CudaMaintenanceRealExecutionTests
             path: "ExternalDeviceConsumerModule.cs");
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Contains(
-            "const MathBlockSlot* const* inputs",
+            "const DispatchSlot* const* inputs",
             result.Source,
             StringComparison.Ordinal);
         Assert.Equal(
             1,
             result.Source.Split(
-                "__device__ void mathblocks_operation_dispatch(",
+                "__device__ void external_operation_dispatch(",
                 StringSplitOptions.None).Length - 1);
         var producer = ReadNativeSource("ExternalDeviceProducer.cu");
         RetainSource("external-device-consumer.generated.cu", result.Source);
@@ -137,7 +137,7 @@ public sealed class CudaMaintenanceRealExecutionTests
     }
 
     [ExactPackageCudaFact]
-    public void Cuda_ExactPackageMtsBoundaryCompilesAndLinks()
+    public void Cuda_ExactPackageExternalDispatchBoundaryCompilesAndLinks()
     {
         var generatedPath = Environment.GetEnvironmentVariable(
             "CSHARP2CUDA_EXACT_PACKAGE_CUDA");
@@ -325,7 +325,7 @@ public sealed class CudaMaintenanceRealExecutionTests
         [TranspileToCUDA]
         internal static unsafe class ExternalDeviceConsumerModule
         {
-            public struct MathBlockSlot
+            public struct DispatchSlot
             {
                 public double scalar_value;
                 public ulong data_pointer;
@@ -338,21 +338,21 @@ public sealed class CudaMaintenanceRealExecutionTests
                 public int capacity;
             }
 
-            [CudaExternalDevice(Name = "mathblocks_operation_dispatch")]
+            [CudaExternalDevice(Name = "external_operation_dispatch")]
             private static void Dispatch(
                 int family,
                 int opcode,
-                [CudaReadOnly] MathBlockSlot** inputs,
+                [CudaReadOnly] DispatchSlot** inputs,
                 int input_count,
-                MathBlockSlot* output) => throw new NotSupportedException();
+                DispatchSlot* output) => throw new NotSupportedException();
 
             [CudaGlobal(Name = "external_device_consumer")]
             private static void Run(double* output)
             {
-                MathBlockSlot* slots = stackalloc MathBlockSlot[3];
+                DispatchSlot* slots = stackalloc DispatchSlot[3];
                 slots[0].scalar_value = 1.5;
                 slots[1].scalar_value = 2.25;
-                MathBlockSlot** inputs = stackalloc MathBlockSlot*[2];
+                DispatchSlot** inputs = stackalloc DispatchSlot*[2];
                 inputs[0] = &slots[0];
                 inputs[1] = &slots[1];
                 Dispatch(3, 5, inputs, 2, &slots[2]);

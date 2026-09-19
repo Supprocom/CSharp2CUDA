@@ -8,19 +8,20 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Supprocom.CSharp2CUDA" Version="[0.2.1]" />
+    <PackageReference Include="Supprocom.CSharp2CUDA"
+                      Version="[$(CSharp2CUDAPackageVersion)]" />
   </ItemGroup>
 
   <ItemGroup>
     <Compile Update="Inputs\*.cs" CopyToOutputDirectory="PreserveNewest" />
-    <Compile Remove="Fixtures\MtsRemainingBoundary.cs" />
+    <Compile Remove="Fixtures\ExternalDispatchBoundary.cs" />
     <Compile Remove="Fixtures\InvalidVoidInlineArray.cs" />
-    <Content Include="Fixtures\MtsRemainingBoundary.cs"
+    <Content Include="Fixtures\ExternalDispatchBoundary.cs"
              CopyToOutputDirectory="PreserveNewest" />
     <Content Include="Fixtures\InvalidVoidInlineArray.cs"
              CopyToOutputDirectory="PreserveNewest" />
-    <None Remove="Fixtures\MtsBoundarySourceMap.json" />
-    <Content Include="Fixtures\MtsBoundarySourceMap.json"
+    <None Remove="Fixtures\ExternalDispatchSourceMap.json" />
+    <Content Include="Fixtures\ExternalDispatchSourceMap.json"
              CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

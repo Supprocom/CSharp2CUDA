@@ -7,7 +7,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Supprocom.CSharp2CUDA" Version="[0.2.1]" />
-    <Analyzer Include="..\..\Supprocom.CSharp2CUDA.PackageTests.Generator\bin\Release\net10.0\Supprocom.CSharp2CUDA.PackageTests.Generator.dll" />
+    <PackageReference Include="Supprocom.CSharp2CUDA"
+                      Version="[$(CSharp2CUDAPackageVersion)]" />
+    <Analyzer Include="$(CSharp2CUDAGeneratorAssembly)" />
   </ItemGroup>
 </Project>

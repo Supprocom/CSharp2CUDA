@@ -2,6 +2,12 @@ param(
     [Parameter(Mandatory = $true)]
     [string] $PackageDirectory,
 
+    [Parameter(Mandatory = $true)]
+    [string] $RunDirectory,
+
+    [Parameter(Mandatory = $true)]
+    [string] $PackageVersion,
+
     [string] $ExpectedCommit,
 
     [string] $ExpectedBranch
@@ -10,7 +16,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $packageRoot = [System.IO.Path]::GetFullPath($PackageDirectory)
 $package = Get-Item -LiteralPath (
-    Join-Path $packageRoot 'Supprocom.CSharp2CUDA.0.2.1.nupkg')
+    Join-Path $packageRoot "Supprocom.CSharp2CUDA.$PackageVersion.nupkg")
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 if ([string]::IsNullOrWhiteSpace($ExpectedCommit)) {
     $ExpectedCommit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
@@ -28,11 +34,26 @@ if ([string]::IsNullOrWhiteSpace($ExpectedBranch)) {
     }
 }
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $package.FullName).Hash
-$runRoot = Join-Path $repositoryRoot (
-    'artifacts/package-tests/' + $hash.Substring(0, 16))
+$runBase = [System.IO.Path]::GetFullPath($RunDirectory)
+$repositoryPrefix = [System.IO.Path]::GetFullPath($repositoryRoot) +
+    [System.IO.Path]::DirectorySeparatorChar
+if ($runBase.StartsWith(
+        $repositoryPrefix,
+        [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw 'The package test directory must be outside the source checkout.'
+}
+$runRoot = Join-Path $runBase ('package-tests/' + $hash.Substring(0, 16))
 $evidenceRoot = Join-Path $runRoot 'evidence'
 $packagesRoot = Join-Path $runRoot 'packages'
 New-Item -ItemType Directory -Force -Path $evidenceRoot | Out-Null
+$env:DOTNET_CLI_HOME = Join-Path $runRoot 'dotnet-home'
+$env:NUGET_PACKAGES = $packagesRoot
+$env:NUGET_HTTP_CACHE_PATH = Join-Path $runRoot 'nuget-http-cache'
+$env:TEMP = Join-Path $runRoot 'temp'
+$env:TMP = $env:TEMP
+New-Item -ItemType Directory -Force -Path $env:DOTNET_CLI_HOME | Out-Null
+New-Item -ItemType Directory -Force -Path $env:NUGET_HTTP_CACHE_PATH | Out-Null
+New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
 
 $escapedPackageRoot = [System.Security.SecurityElement]::Escape($packageRoot)
 $nugetConfiguration = @"
@@ -97,8 +118,8 @@ function Invoke-DotNet {
 
     $standardOutputTask = $process.StandardOutput.ReadToEndAsync()
     $standardErrorTask = $process.StandardError.ReadToEndAsync()
-    if (-not $process.WaitForExit(120000)) {
-        $process.Kill()
+    if (-not $process.WaitForExit(300000)) {
+        $process.Kill($true)
         throw "dotnet timed out for $Name."
     }
 
@@ -142,7 +163,9 @@ function Invoke-Case {
     $baseIntermediate = Join-Path $caseRoot 'obj/'
     $common = @(
         "-p:BaseOutputPath=$baseOutput",
-        "-p:BaseIntermediateOutputPath=$baseIntermediate"
+        "-p:BaseIntermediateOutputPath=$baseIntermediate",
+        "-p:CSharp2CUDAPackageVersion=$PackageVersion",
+        "-p:CSharp2CUDAGeneratorAssembly=$generatorAssembly"
     )
     Invoke-DotNet -Name "$Name-restore" -ExpectedExitCode 0 -Arguments (@(
         'restore',
@@ -207,7 +230,13 @@ function Invoke-RepeatCase {
 }
 
 $auditProject = Join-Path $PSScriptRoot 'Audit/Audit.csproj'
-Invoke-DotNet -Name 'Audit-restore' -ExpectedExitCode 0 -Arguments @(
+$auditOutput = Join-Path $runRoot 'Audit/bin/'
+$auditIntermediate = Join-Path $runRoot 'Audit/obj/'
+$auditCommon = @(
+    "-p:BaseOutputPath=$auditOutput",
+    "-p:BaseIntermediateOutputPath=$auditIntermediate"
+)
+Invoke-DotNet -Name 'Audit-restore' -ExpectedExitCode 0 -Arguments (@(
     'restore',
     $auditProject,
     '--configfile',
@@ -216,25 +245,33 @@ Invoke-DotNet -Name 'Audit-restore' -ExpectedExitCode 0 -Arguments @(
     $packagesRoot,
     '--force',
     '--no-cache'
-) | Out-Null
-Invoke-DotNet -Name 'Audit-run' -ExpectedExitCode 0 -Arguments @(
+) + $auditCommon) | Out-Null
+Invoke-DotNet -Name 'Audit-run' -ExpectedExitCode 0 -Arguments (@(
     'run',
     '--project',
     $auditProject,
     '--configuration',
     'Release',
-    '--no-restore',
+    '--no-restore'
+) + $auditCommon + @(
     '--',
     $packageRoot,
     $repositoryRoot,
     $ExpectedCommit,
-    $ExpectedBranch
-) | Out-Null
+    $ExpectedBranch,
+    $PackageVersion
+)) | Out-Null
 
 $generatorProject = Join-Path $repositoryRoot (
     'Supprocom.CSharp2CUDA.PackageTests.Generator/' +
     'Supprocom.CSharp2CUDA.PackageTests.Generator.csproj')
-Invoke-DotNet -Name 'Generator-restore' -ExpectedExitCode 0 -Arguments @(
+$generatorOutput = Join-Path $runRoot 'Generator/bin/'
+$generatorIntermediate = Join-Path $runRoot 'Generator/obj/'
+$generatorCommon = @(
+    "-p:BaseOutputPath=$generatorOutput",
+    "-p:BaseIntermediateOutputPath=$generatorIntermediate"
+)
+Invoke-DotNet -Name 'Generator-restore' -ExpectedExitCode 0 -Arguments (@(
     'restore',
     $generatorProject,
     '--configfile',
@@ -243,19 +280,30 @@ Invoke-DotNet -Name 'Generator-restore' -ExpectedExitCode 0 -Arguments @(
     $packagesRoot,
     '--force',
     '--no-cache'
-) | Out-Null
-Invoke-DotNet -Name 'Generator-build' -ExpectedExitCode 0 -Arguments @(
+) + $generatorCommon) | Out-Null
+Invoke-DotNet -Name 'Generator-build' -ExpectedExitCode 0 -Arguments (@(
     'build',
     $generatorProject,
     '--configuration',
     'Release',
     '--no-restore'
-) | Out-Null
+) + $generatorCommon) | Out-Null
+$generatorAssembly = Join-Path $generatorOutput (
+    'Release/net10.0/Supprocom.CSharp2CUDA.PackageTests.Generator.dll')
+if (-not (Test-Path -LiteralPath $generatorAssembly)) {
+    throw 'The package-test source generator is missing.'
+}
 
 $lookalikeProject = Join-Path $repositoryRoot (
     'Supprocom.CSharp2CUDA.PackageTests.Lookalike/' +
     'Supprocom.CSharp2CUDA.PackageTests.Lookalike.csproj')
-Invoke-DotNet -Name 'Lookalike-restore' -ExpectedExitCode 0 -Arguments @(
+$lookalikeOutput = Join-Path $runRoot 'Lookalike/bin/'
+$lookalikeIntermediate = Join-Path $runRoot 'Lookalike/obj/'
+$lookalikeCommon = @(
+    "-p:BaseOutputPath=$lookalikeOutput",
+    "-p:BaseIntermediateOutputPath=$lookalikeIntermediate"
+)
+Invoke-DotNet -Name 'Lookalike-restore' -ExpectedExitCode 0 -Arguments (@(
     'restore',
     $lookalikeProject,
     '--configfile',
@@ -264,14 +312,14 @@ Invoke-DotNet -Name 'Lookalike-restore' -ExpectedExitCode 0 -Arguments @(
     $packagesRoot,
     '--force',
     '--no-cache'
-) | Out-Null
-Invoke-DotNet -Name 'Lookalike-build' -ExpectedExitCode 0 -Arguments @(
+) + $lookalikeCommon) | Out-Null
+Invoke-DotNet -Name 'Lookalike-build' -ExpectedExitCode 0 -Arguments (@(
     'build',
     $lookalikeProject,
     '--configuration',
     'Release',
     '--no-restore'
-) | Out-Null
+) + $lookalikeCommon) | Out-Null
 
 $lookalikeAttributed = Invoke-Case `
     -Name 'LookalikeAttributed' `
@@ -356,7 +404,7 @@ if ($maintenanceContractsSource -notmatch 'int values\[3\];' -or
     $maintenanceContractsSource -notmatch 'volatile int\*' -or
     $maintenanceContractsSource -notmatch 'mov\.u64 %0, %%globaltimer;' -or
     $maintenanceContractsSource -notmatch 'csharp2cuda_global_timer\(\)') {
-    throw 'The automatic compiler payload omitted a 0.2.1 maintenance contract.'
+    throw 'The automatic compiler payload omitted a maintenance contract.'
 }
 Invoke-RepeatCase -Name 'MaintenanceContracts' -Case $maintenanceContracts
 if (-not (Test-Path -LiteralPath $maintenanceContractsCuda)) {
@@ -367,15 +415,16 @@ $manual = Invoke-Case -Name 'Manual' -ExpectSuccess $true
 Assert-NoCompilerPayload -Case $manual
 $manualAssembly = Join-Path $manual.Root 'Manual.dll'
 $taskAssembly = Join-Path $packagesRoot (
-    'supprocom.csharp2cuda/0.2.1/build/task/Supprocom.CSharp2CUDA.Build.dll')
+    "supprocom.csharp2cuda/$PackageVersion/build/task/Supprocom.CSharp2CUDA.Build.dll")
 $compilerAssembly = Join-Path $packagesRoot (
-    'supprocom.csharp2cuda/0.2.1/build/compiler/' +
+    "supprocom.csharp2cuda/$PackageVersion/build/compiler/" +
     'Supprocom.CSharp2CUDA.Compiler.dll')
 Invoke-DotNet -Name 'Manual-run' -ExpectedExitCode 0 -Arguments @(
     $manualAssembly,
     $taskAssembly,
     $compilerAssembly,
-    $evidenceRoot
+    $evidenceRoot,
+    $PackageVersion
 ) | Out-Null
 if (Get-ChildItem -LiteralPath $manual.Root -Recurse -File -Filter '*.cu') {
     throw 'The manual API project created automatic CUDA source.'
@@ -401,7 +450,8 @@ Invoke-DotNet -Name 'Manual-analyzers-disabled-run' -ExpectedExitCode 0 -Argumen
     $manualAssembly,
     $taskAssembly,
     $compilerAssembly,
-    $evidenceRoot
+    $evidenceRoot,
+    $PackageVersion
 ) | Out-Null
 if (Get-ChildItem -LiteralPath $manual.Root -Recurse -File -Filter '*.cu') {
     throw 'The manual project created CUDA source when analyzers were disabled.'

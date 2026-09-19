@@ -266,22 +266,22 @@ public sealed class CudaMaintenanceContractsTests
             [TranspileToCUDA]
             internal static unsafe class DispatchModule
             {
-                public struct MathBlockSlot
+                public struct DispatchSlot
                 {
                     public double scalar_value;
                     public int valid;
                 }
 
-                [CudaExternalDevice(Name = "mathblocks_operation_dispatch")]
+                [CudaExternalDevice(Name = "external_operation_dispatch")]
                 private static void Dispatch(
                     int family,
                     int opcode,
-                    [CudaReadOnly] MathBlockSlot** inputs,
+                    [CudaReadOnly] DispatchSlot** inputs,
                     int inputCount,
-                    MathBlockSlot* output) => throw new NotSupportedException();
+                    DispatchSlot* output) => throw new NotSupportedException();
 
                 [CudaGlobal(Name = "dispatch_consumer")]
-                private static void Run(MathBlockSlot** inputs, MathBlockSlot* output)
+                private static void Run(DispatchSlot** inputs, DispatchSlot* output)
                 {
                     Dispatch(1, 2, inputs, 1, output);
                 }
@@ -292,19 +292,19 @@ public sealed class CudaMaintenanceContractsTests
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Contains(
-            "__device__ void mathblocks_operation_dispatch(\n" +
+            "__device__ void external_operation_dispatch(\n" +
             "    int family,\n" +
             "    int opcode,\n" +
-            "    const MathBlockSlot* const* inputs,\n" +
+            "    const DispatchSlot* const* inputs,\n" +
             "    int inputCount,\n" +
-            "    MathBlockSlot* output);",
+            "    DispatchSlot* output);",
             result.Source,
             StringComparison.Ordinal);
         Assert.DoesNotContain("NotSupportedException", result.Source, StringComparison.Ordinal);
         Assert.Equal(
             1,
             result.Source.Split(
-                "__device__ void mathblocks_operation_dispatch(",
+                "__device__ void external_operation_dispatch(",
                 StringSplitOptions.None).Length - 1);
     }
 

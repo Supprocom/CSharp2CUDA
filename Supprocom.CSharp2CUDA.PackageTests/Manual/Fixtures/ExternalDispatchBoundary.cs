@@ -1,31 +1,31 @@
 using System;
 using Supprocom.CSharp2CUDA;
 
-internal static unsafe class MtsRemainingBoundaryCudaModule
+internal static unsafe class ExternalDispatchBoundaryCudaModule
 {
-    public struct ResearchGpuType
+    public struct GpuValueType
     {
         public int kind;
         public int rows;
         public int columns;
     }
 
-    public struct ResearchHash128
+    public struct Hash128
     {
         public ulong first;
         public ulong second;
     }
 
-    public struct ResearchEvolutionTerminal
+    public struct Terminal
     {
-        public ResearchGpuType type;
+        public GpuValueType type;
         public int maximum_lookback;
         public int flags;
         public int reserved;
-        public ResearchHash128 structural;
+        public Hash128 structural;
     }
 
-    public struct ResearchEvolutionOperation
+    public struct Operation
     {
         public int family;
         public int opcode;
@@ -41,10 +41,10 @@ internal static unsafe class MtsRemainingBoundaryCudaModule
         public int* input_kinds;
 
         public ulong cost;
-        public ResearchHash128 structural;
+        public Hash128 structural;
     }
 
-    public struct ResearchEvolutionNode
+    public struct OperationNode
     {
         public int operation;
         public int arity;
@@ -60,7 +60,7 @@ internal static unsafe class MtsRemainingBoundaryCudaModule
 
         public int temporal;
         public int maximum_lookback;
-        public ResearchGpuType type;
+        public GpuValueType type;
         public int alias_of;
         public int payload_slot;
         public int reserved;
@@ -69,7 +69,7 @@ internal static unsafe class MtsRemainingBoundaryCudaModule
         public int wave_flags;
     }
 
-    public struct ResearchEvolutionEntry
+    public struct OperationEntry
     {
         public int status;
         public int reserved;
@@ -85,8 +85,8 @@ internal static unsafe class MtsRemainingBoundaryCudaModule
         public double confidence_interval_upper;
         public ulong deterministic_cost;
         public ulong proposal_cursor;
-        public ResearchHash128 structural;
-        public ResearchHash128 semantic;
+        public Hash128 structural;
+        public Hash128 semantic;
         public int eligible_count;
         public int active_count;
         public int inactive_count;
@@ -99,10 +99,10 @@ internal static unsafe class MtsRemainingBoundaryCudaModule
         public int avoided_operation_count;
 
         [CudaInlineArray(32)]
-        public ResearchEvolutionNode* nodes;
+        public OperationNode* nodes;
     }
 
-    public struct ResearchEvolutionState
+    public struct SearchState
     {
         public ulong schedule_cell_cursor;
         public ulong evaluated_trial_count;
@@ -125,7 +125,7 @@ internal static unsafe class MtsRemainingBoundaryCudaModule
         public ulong runtime_invalid_without_operation;
     }
 
-    public struct ResearchEvolutionControl
+    public struct SearchControl
     {
         public int active_bank;
         public int failure_code;
@@ -135,7 +135,7 @@ internal static unsafe class MtsRemainingBoundaryCudaModule
         public ulong schedule_clocks;
     }
 
-    public struct ResearchMappedCheckpointHeader
+    public struct MappedCheckpointHeader
     {
         public int ready;
         public int byte_count;
@@ -144,7 +144,7 @@ internal static unsafe class MtsRemainingBoundaryCudaModule
         public ulong checkpoint_interval_nanoseconds;
     }
 
-    public struct MathBlockSlot
+    public struct DispatchSlot
     {
         public double scalar_value;
         public ulong data_pointer;
@@ -157,21 +157,21 @@ internal static unsafe class MtsRemainingBoundaryCudaModule
         public int capacity;
     }
 
-    [CudaExternalDevice(Name = "mathblocks_operation_dispatch")]
+    [CudaExternalDevice(Name = "external_operation_dispatch")]
     private static void Dispatch(
         int family,
         int opcode,
-        [CudaReadOnly] MathBlockSlot** inputs,
+        [CudaReadOnly] DispatchSlot** inputs,
         int input_count,
-        MathBlockSlot* output) => throw new NotSupportedException();
+        DispatchSlot* output) => throw new NotSupportedException();
 
-    [CudaDevice(Name = "research_evolution_timestamp_nanoseconds")]
+    [CudaDevice(Name = "read_global_timestamp")]
     private static ulong TimestampNanoseconds()
     {
         return Cuda.GlobalTimer();
     }
 
-    [CudaGlobal(Name = "mts_research_owned_evolution")]
+    [CudaGlobal(Name = "external_dispatch_boundary")]
     private static void Run(
         byte* arena,
         byte* layered_arena,
@@ -185,16 +185,15 @@ internal static unsafe class MtsRemainingBoundaryCudaModule
         int checkpoint_payload_bytes,
         int checkpoint_slot_stride)
     {
-        ResearchEvolutionOperation* operations =
-            (ResearchEvolutionOperation*)(arena + 128);
-        ResearchEvolutionEntry* entries = (ResearchEvolutionEntry*)(arena + 512);
-        ResearchEvolutionState* state = (ResearchEvolutionState*)(arena + 4096);
-        ResearchEvolutionControl* control = (ResearchEvolutionControl*)(arena + 8192);
+        Operation* operations = (Operation*)(arena + 128);
+        OperationEntry* entries = (OperationEntry*)(arena + 512);
+        SearchState* state = (SearchState*)(arena + 4096);
+        SearchControl* control = (SearchControl*)(arena + 8192);
         int sharedStatus = Cuda.Shared<int>();
         int* sharedValues = Cuda.SharedArray<int>(3);
         byte* dynamicStorage = Cuda.DynamicSharedBytes(8);
-        MathBlockSlot* slots = stackalloc MathBlockSlot[3];
-        MathBlockSlot** dispatchInputs = stackalloc MathBlockSlot*[2];
+        DispatchSlot* slots = stackalloc DispatchSlot[3];
+        DispatchSlot** dispatchInputs = stackalloc DispatchSlot*[2];
         sharedValues[0] = operations[0].input_kinds[0];
         entries[0].nodes[0].operands[0] = sharedValues[0];
         state->runtime_invalid_by_operation[0] = 0UL;

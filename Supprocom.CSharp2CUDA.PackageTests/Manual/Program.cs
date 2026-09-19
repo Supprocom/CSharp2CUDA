@@ -11,6 +11,13 @@ using Supprocom.CSharp2CUDA.PackageTests.Manual.Inputs;
 
 Require(SingleKernel.Double(4) == 8, "The managed source result is incorrect.");
 Require(GeneratedPattern.Matches("cuda"), "The generated managed source is incorrect.");
+Require(args.Length == 4, "The package tool assembly paths, evidence path, or version are missing.");
+var expectedVersion = args[3];
+Require(
+    Version.TryParse(expectedVersion, out var parsedVersion) &&
+    parsedVersion.ToString(3) == expectedVersion,
+    "The expected package version is invalid.");
+var expectedAssemblyVersion = $"{expectedVersion}.0";
 
 var inputRoot = Path.Combine(AppContext.BaseDirectory, "Inputs");
 var singlePath = Path.Combine(inputRoot, "SingleKernel.cs");
@@ -74,8 +81,8 @@ Require(
     "Transpile(CSharpCompilation) did not emit the generated dependency.");
 
 var fixtureRoot = Path.Combine(AppContext.BaseDirectory, "Fixtures");
-var boundaryPath = Path.Combine(fixtureRoot, "MtsRemainingBoundary.cs");
-var sourceMapPath = Path.Combine(fixtureRoot, "MtsBoundarySourceMap.json");
+var boundaryPath = Path.Combine(fixtureRoot, "ExternalDispatchBoundary.cs");
+var sourceMapPath = Path.Combine(fixtureRoot, "ExternalDispatchSourceMap.json");
 var invalidVoidInlineArrayPath = Path.Combine(fixtureRoot, "InvalidVoidInlineArray.cs");
 var invalidVoidInlineArray = CudaTranspiler.TranspileFile(invalidVoidInlineArrayPath);
 Require(!invalidVoidInlineArray.Succeeded, "The void inline array transpiled successfully.");
@@ -99,18 +106,18 @@ string[] requiredBoundarySource =
     "int input_kinds[3];",
     "int operands[3];",
     "int operand_kinds[3];",
-    "ResearchEvolutionNode nodes[32];",
+    "OperationNode nodes[32];",
     "unsigned long long runtime_invalid_by_operation[7];",
-    "struct MathBlockSlot",
-    "__device__ void mathblocks_operation_dispatch(",
-    "const MathBlockSlot* const* inputs",
+    "struct DispatchSlot",
+    "__device__ void external_operation_dispatch(",
+    "const DispatchSlot* const* inputs",
     "csharp2cuda_global_timer()",
     "mov.u64 %0, %%globaltimer;",
     "csharp2cuda_volatile_load_i32_bytes(mapped, 12ull)",
     "csharp2cuda_volatile_load_u64_bytes(mapped, 16ull)",
     "csharp2cuda_volatile_store_i32_bytes(mapped, 8ull",
     "csharp2cuda_volatile_store_i32((int*)(csharp2cuda_pointer_add(mapped, 4)), 1)",
-    "extern \"C\" __global__ void mts_research_owned_evolution("
+    "extern \"C\" __global__ void external_dispatch_boundary("
 ];
 foreach (var required in requiredBoundarySource)
 {
@@ -136,19 +143,16 @@ foreach (var rejected in rejectedBoundaryInput)
 
 Require(
     boundary.Source.Split(
-        "__device__ void mathblocks_operation_dispatch(",
+        "__device__ void external_operation_dispatch(",
         StringSplitOptions.None).Length - 1 == 1,
     "The external device declaration count is incorrect.");
 Require(
-    sourceMap.Contains("5f27dfb49c81c14f7189c9e084aaaf1745b8b3f9", StringComparison.Ordinal),
-    "The strict source map has a different MTS commit.");
-Require(
     sourceMap.Contains(boundaryInputSha256, StringComparison.Ordinal),
-    "The strict source map has a different candidate input hash.");
+    "The strict source map has a different fixture hash.");
 
 var productAssembly = typeof(CudaTranspiler).Assembly;
 Require(
-    productAssembly.GetName().Version?.ToString() == "0.2.1.0",
+    productAssembly.GetName().Version?.ToString() == expectedAssemblyVersion,
     "The package assembly version is incorrect.");
 var repositoryCommit = productAssembly.GetCustomAttributes<AssemblyMetadataAttribute>()
     .Single(attribute => attribute.Key == "RepositoryCommit")
@@ -158,16 +162,15 @@ var informationalVersion = productAssembly
     .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
     .InformationalVersion;
 Require(
-    informationalVersion == $"0.2.1+{repositoryCommit}",
+    informationalVersion == $"{expectedVersion}+{repositoryCommit}",
     "The informational version does not match the repository commit.");
 
-Require(args.Length == 3, "The package tool assembly paths or evidence path are missing.");
 var taskAssemblyPath = Path.GetFullPath(args[0]);
 Require(File.Exists(taskAssemblyPath), "The build task assembly is missing.");
 var taskAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(taskAssemblyPath);
 Require(
     taskAssembly.GetName().Name == "Supprocom.CSharp2CUDA.Build" &&
-    taskAssembly.GetName().Version?.ToString() == "0.2.1.0",
+    taskAssembly.GetName().Version?.ToString() == expectedAssemblyVersion,
     "The build task assembly identity is incorrect.");
 var taskRepositoryCommit = taskAssembly.GetCustomAttributes<AssemblyMetadataAttribute>()
     .Single(attribute => attribute.Key == "RepositoryCommit")
@@ -177,7 +180,7 @@ var taskInformationalVersion = taskAssembly
     .InformationalVersion;
 Require(
     taskRepositoryCommit == repositoryCommit &&
-    taskInformationalVersion == $"0.2.1+{repositoryCommit}",
+    taskInformationalVersion == $"{expectedVersion}+{repositoryCommit}",
     "The build task provenance is incorrect.");
 
 var compilerAssemblyPath = Path.GetFullPath(args[1]);
@@ -185,7 +188,7 @@ Require(File.Exists(compilerAssemblyPath), "The compiler assembly is missing.");
 var compilerAssembly = AssemblyLoadContext.Default.LoadFromAssemblyPath(compilerAssemblyPath);
 Require(
     compilerAssembly.GetName().Name == "Supprocom.CSharp2CUDA.Compiler" &&
-    compilerAssembly.GetName().Version?.ToString() == "0.2.1.0",
+    compilerAssembly.GetName().Version?.ToString() == expectedAssemblyVersion,
     "The compiler assembly identity is incorrect.");
 var compilerRepositoryCommit = compilerAssembly
     .GetCustomAttributes<AssemblyMetadataAttribute>()
@@ -196,16 +199,16 @@ var compilerInformationalVersion = compilerAssembly
     .InformationalVersion;
 Require(
     compilerRepositoryCommit == repositoryCommit &&
-    compilerInformationalVersion == $"0.2.1+{repositoryCommit}",
+    compilerInformationalVersion == $"{expectedVersion}+{repositoryCommit}",
     "The compiler provenance is incorrect.");
 
 var evidenceDirectory = Path.GetFullPath(args[2]);
 Directory.CreateDirectory(evidenceDirectory);
 File.WriteAllText(
-    Path.Combine(evidenceDirectory, "mts-remaining-boundary.generated.cu"),
+    Path.Combine(evidenceDirectory, "external-dispatch-boundary.generated.cu"),
     boundary.Source);
 File.WriteAllText(
-    Path.Combine(evidenceDirectory, "mts-boundary-source-map.json"),
+    Path.Combine(evidenceDirectory, "external-dispatch-source-map.json"),
     sourceMap);
 
 Console.WriteLine($"candidate-input-sha256={boundaryInputSha256}");

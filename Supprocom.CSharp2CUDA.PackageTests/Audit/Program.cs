@@ -5,29 +5,34 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Xml.Linq;
 
-if (args.Length != 4)
+if (args.Length != 5)
 {
     throw new ArgumentException(
-        "Specify the package directory, repository directory, commit, and branch.");
+        "Specify the package directory, repository directory, commit, branch, and version.");
 }
 
 var packageDirectory = Path.GetFullPath(args[0]);
 var repositoryDirectory = Path.GetFullPath(args[1]);
 var expectedCommit = args[2];
 var expectedBranch = args[3];
+var expectedVersion = args[4];
 Require(
     expectedCommit.Length == 40 && expectedCommit.All(Uri.IsHexDigit),
     "The expected repository commit is invalid.");
 Require(
     !string.IsNullOrWhiteSpace(expectedBranch),
     "The expected repository branch is invalid.");
+Require(
+    Version.TryParse(expectedVersion, out var parsedVersion) &&
+    parsedVersion.ToString(3) == expectedVersion,
+    "The expected package version is invalid.");
 
 var nupkgPath = Path.Combine(
     packageDirectory,
-    "Supprocom.CSharp2CUDA.0.2.1.nupkg");
+    $"Supprocom.CSharp2CUDA.{expectedVersion}.nupkg");
 var snupkgPath = Path.Combine(
     packageDirectory,
-    "Supprocom.CSharp2CUDA.0.2.1.snupkg");
+    $"Supprocom.CSharp2CUDA.{expectedVersion}.snupkg");
 Require(File.Exists(nupkgPath), "The nupkg is missing.");
 Require(File.Exists(snupkgPath), "The snupkg is missing.");
 
@@ -63,7 +68,7 @@ var metadata = nuspec.Root!.Elements().Single().Elements().ToDictionary(
     element => element.Name.LocalName,
     element => element);
 Require(metadata["id"].Value == "Supprocom.CSharp2CUDA", "The package ID is incorrect.");
-Require(metadata["version"].Value == "0.2.1", "The package version is incorrect.");
+Require(metadata["version"].Value == expectedVersion, "The package version is incorrect.");
 Require(
     metadata["license"].Value == "AGPL-3.0-only" &&
     metadata["license"].Attribute("type")?.Value == "expression",

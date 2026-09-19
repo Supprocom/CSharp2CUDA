@@ -1,4 +1,4 @@
-struct MathBlockSlot
+struct DispatchSlot
 {
     double scalar_value;
     unsigned long long data_pointer;
@@ -11,12 +11,12 @@ struct MathBlockSlot
     int capacity;
 };
 
-__device__ void mathblocks_operation_dispatch(
+__device__ void external_operation_dispatch(
     int family,
     int opcode,
-    const MathBlockSlot* const* inputs,
+    const DispatchSlot* const* inputs,
     int input_count,
-    MathBlockSlot* output)
+    DispatchSlot* output)
 {
     output->scalar_value = inputs[0]->scalar_value + inputs[1]->scalar_value +
         (double)(family + opcode + input_count);
