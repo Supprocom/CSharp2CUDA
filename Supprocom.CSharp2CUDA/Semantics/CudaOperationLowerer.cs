@@ -597,11 +597,22 @@ internal sealed class CudaOperationLowerer(
 
         var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
         string code;
-        if (IsPointerIndirection(fieldInstance))
+        if (IsPointerMemberAccess(field))
+        {
+            var instance = Materialize(LowerOperation(fieldInstance), prefix);
+            code = $"({instance.Code})->{name}";
+        }
+        else if (IsPointerIndirection(fieldInstance))
         {
             var instance = LowerOperation(fieldInstance.ChildOperations.Single());
             var saved = Materialize(instance, prefix);
             code = $"({saved.Code})->{name}";
+        }
+        else if (IsAddressable(fieldInstance))
+        {
+            var instance = LowerPlace(fieldInstance);
+            prefix.AddRange(instance.Prefix);
+            code = $"({instance.AccessCode}).{name}";
         }
         else
         {
@@ -2042,12 +2053,23 @@ internal sealed class CudaOperationLowerer(
         }
         var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
         string access;
-        if (IsPointerIndirection(fieldInstance))
+        if (IsPointerMemberAccess(field))
+        {
+            var instance = Materialize(LowerOperation(fieldInstance), prefix);
+            access = $"({instance.Code})->{name}";
+        }
+        else if (IsPointerIndirection(fieldInstance))
         {
             var instance = Materialize(
                 LowerOperation(fieldInstance.ChildOperations.Single()),
                 prefix);
             access = $"({instance.Code})->{name}";
+        }
+        else if (IsAddressable(fieldInstance))
+        {
+            var instance = LowerPlace(fieldInstance);
+            prefix.AddRange(instance.Prefix);
+            access = $"({instance.AccessCode}).{name}";
         }
         else
         {
@@ -2912,6 +2934,9 @@ internal sealed class CudaOperationLowerer(
     private static bool IsPointerElement(IOperation operation) =>
         operation.Kind == OperationKind.None &&
         operation.Syntax.IsKind(SyntaxKind.ElementAccessExpression);
+
+    private static bool IsPointerMemberAccess(IFieldReferenceOperation field) =>
+        field.Syntax.IsKind(SyntaxKind.PointerMemberAccessExpression);
 
     private static bool IsAddressable(IOperation operation)
     {

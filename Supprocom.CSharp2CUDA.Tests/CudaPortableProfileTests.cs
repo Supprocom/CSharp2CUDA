@@ -286,6 +286,33 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
+    public void Transpile_BlocksOrderedPrefixesInsideEmbeddedStatements()
+    {
+        const string source = """
+            using Supprocom.CSharp2CUDA;
+
+            [TranspileToCUDA]
+            internal static unsafe class ConditionalAdapter
+            {
+                [CudaGlobal]
+                private static void Run(int value, int* output)
+                {
+                    if (value >= 0)
+                        output[0] = value + 1;
+                    else
+                        output[0] = value - 1;
+                }
+            }
+            """;
+
+        var result = CudaTestCompiler.Transpile(source);
+
+        Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
+        Assert.Contains(")\n    {\n", result.Source, StringComparison.Ordinal);
+        Assert.Contains("    else\n    {\n", result.Source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Transpile_LowersArrayForeach()
     {
         const string source = """

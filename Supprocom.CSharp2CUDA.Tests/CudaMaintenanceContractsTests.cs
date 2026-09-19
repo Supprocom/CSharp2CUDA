@@ -128,6 +128,8 @@ public sealed class CudaMaintenanceContractsTests
             StringComparison.Ordinal);
         Assert.Contains("int* operands", result.Source, StringComparison.Ordinal);
         Assert.Contains("ResearchEvolutionNode* nodes", result.Source, StringComparison.Ordinal);
+        Assert.Contains("(entry)->operands", result.Source, StringComparison.Ordinal);
+        Assert.DoesNotContain("(entry).operands", result.Source, StringComparison.Ordinal);
     }
 
     [Theory]

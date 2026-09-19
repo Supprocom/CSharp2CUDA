@@ -326,9 +326,12 @@ internal sealed class CudaCppBodyEmitter(
             EmitStatement(statement);
             return;
         }
+
+        WriteIndentedLine("{");
         indentation++;
         EmitStatement(statement);
         indentation--;
+        WriteIndentedLine("}");
     }
 
     private void WriteIndentedLine(string text)
