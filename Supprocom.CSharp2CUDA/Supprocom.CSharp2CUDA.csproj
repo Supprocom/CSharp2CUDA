@@ -16,7 +16,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>cuda;csharp;roslyn;transpiler;source-translation;gpu</PackageTags>
-    <PackageReleaseNotes>Add volatile mapped-memory access, a global timer, inline-array structure fields, and external device declarations.</PackageReleaseNotes>
+    <PackageReleaseNotes>Add reachable ordinary C# translation, typed semantic lowering, deterministic source maps, and compile-checked CUDA scaffolding.</PackageReleaseNotes>
     <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>

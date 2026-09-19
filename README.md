@@ -21,7 +21,7 @@ its C# code but produces CUDA instead of a managed assembly.
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Supprocom.CSharp2CUDA" Version="0.2.1" />
+    <PackageReference Include="Supprocom.CSharp2CUDA" Version="0.3.0" />
   </ItemGroup>
 </Project>
 ```

@@ -10,7 +10,7 @@ Install the .NET 10 SDK. Use Visual Studio 2026 or the `dotnet` command when you
 You do not need the CUDA toolkit to translate C# source. You need a CUDA toolchain later when you compile and run the generated `.cu` file.
 
 Add the `Supprocom.CSharp2CUDA` package to a .NET 10 project.
-Version 0.2.1 supplies the file APIs and build integration in this guide.
+Version 0.3.0 supplies the file APIs and build integration in this guide.
 
 Add the package directly to each project that uses automatic build transpilation.
 
@@ -31,7 +31,7 @@ Set `TranspileToCUDA` to select the complete project for CUDA emission.
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Supprocom.CSharp2CUDA" Version="0.2.1" />
+    <PackageReference Include="Supprocom.CSharp2CUDA" Version="0.3.0" />
   </ItemGroup>
 </Project>
 ```
