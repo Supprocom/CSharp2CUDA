@@ -8,7 +8,7 @@
     <PackageReference Include="Supprocom.CSharp2CUDA"
                       Version="[$(CSharp2CUDAPackageVersion)]" />
     <Reference Include="Supprocom.CSharp2CUDA.PackageTests.Lookalike"
-               HintPath="..\..\Supprocom.CSharp2CUDA.PackageTests.Lookalike\bin\Release\net10.0\Supprocom.CSharp2CUDA.PackageTests.Lookalike.dll"
+               HintPath="$(CSharp2CUDALookalikeAssembly)"
                Aliases="Lookalike"
                Private="false" />
   </ItemGroup>

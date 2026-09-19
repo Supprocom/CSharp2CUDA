@@ -165,7 +165,8 @@ function Invoke-Case {
         "-p:BaseOutputPath=$baseOutput",
         "-p:BaseIntermediateOutputPath=$baseIntermediate",
         "-p:CSharp2CUDAPackageVersion=$PackageVersion",
-        "-p:CSharp2CUDAGeneratorAssembly=$generatorAssembly"
+        "-p:CSharp2CUDAGeneratorAssembly=$generatorAssembly",
+        "-p:CSharp2CUDALookalikeAssembly=$lookalikeAssembly"
     )
     Invoke-DotNet -Name "$Name-restore" -ExpectedExitCode 0 -Arguments (@(
         'restore',
@@ -320,6 +321,11 @@ Invoke-DotNet -Name 'Lookalike-build' -ExpectedExitCode 0 -Arguments (@(
     'Release',
     '--no-restore'
 ) + $lookalikeCommon) | Out-Null
+$lookalikeAssembly = Join-Path $lookalikeOutput (
+    'Release/net10.0/Supprocom.CSharp2CUDA.PackageTests.Lookalike.dll')
+if (-not (Test-Path -LiteralPath $lookalikeAssembly)) {
+    throw 'The package-test lookalike assembly is missing.'
+}
 
 $lookalikeAttributed = Invoke-Case `
     -Name 'LookalikeAttributed' `
