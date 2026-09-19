@@ -11,6 +11,9 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      CSHARP2CUDA_PACKAGE_VERSION: 0.3.0
+      CSHARP2CUDA_RUN_DIRECTORY: ${{ runner.temp }}/CSharp2CUDA
 
     steps:
       - name: Check out source
@@ -41,24 +44,44 @@ jobs:
           --logger "console;verbosity=minimal"
 
       - name: Pack exact source
-        run: >-
-          dotnet pack Supprocom.CSharp2CUDA/Supprocom.CSharp2CUDA.csproj
-          --configuration Release --no-restore
-          --output artifacts/package
-          -p:RepositoryCommit=$GITHUB_SHA
-          -p:RepositoryBranch=$GITHUB_REF_NAME
+        run: |
+          dotnet pack Supprocom.CSharp2CUDA/Supprocom.CSharp2CUDA.csproj \
+            --configuration Release --no-restore \
+            --output artifacts/package \
+            -p:RepositoryCommit=$GITHUB_SHA \
+            -p:RepositoryBranch=$GITHUB_REF_NAME \
+            -p:ContinuousIntegrationBuild=true
+          dotnet pack Supprocom.CSharp2CUDA.Tool/Supprocom.CSharp2CUDA.Tool.csproj \
+            --configuration Release --no-restore \
+            --output artifacts/package \
+            -p:RepositoryCommit=$GITHUB_SHA \
+            -p:RepositoryBranch=$GITHUB_REF_NAME \
+            -p:ContinuousIntegrationBuild=true
 
       - name: Verify package build integration
         shell: pwsh
         run: >-
           ./Supprocom.CSharp2CUDA.PackageTests/Verify.ps1
           -PackageDirectory artifacts/package
+          -RunDirectory $env:CSHARP2CUDA_RUN_DIRECTORY
+          -PackageVersion $env:CSHARP2CUDA_PACKAGE_VERSION
           -ExpectedCommit $env:GITHUB_SHA
           -ExpectedBranch $env:GITHUB_REF_NAME
+
+      - name: Verify installed tool
+        shell: pwsh
+        run: >-
+          ./Supprocom.CSharp2CUDA.PackageTests/VerifyTool.ps1
+          -PackageDirectory artifacts/package
+          -RunDirectory $env:CSHARP2CUDA_RUN_DIRECTORY
+          -PackageVersion $env:CSHARP2CUDA_PACKAGE_VERSION
 
       - name: Verify exact-package source suite
         shell: pwsh
         run: >-
           ./Supprocom.CSharp2CUDA.PackageTests/VerifySourceSuite.ps1
           -PackageDirectory artifacts/package
-          -ResultsDirectory artifacts/package-source-tests/trx
+          -RunDirectory $env:CSHARP2CUDA_RUN_DIRECTORY
+          -PackageVersion $env:CSHARP2CUDA_PACKAGE_VERSION
+          -ResultsDirectory (Join-Path
+          $env:CSHARP2CUDA_RUN_DIRECTORY 'package-source-tests/trx')
