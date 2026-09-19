@@ -1,6 +1,6 @@
+using System.Text;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Text;
-using System.Text;
 using Xunit;
 
 namespace Supprocom.CSharp2CUDA.Tests;
@@ -244,7 +244,7 @@ public sealed class CudaReachabilityTests
             {
                 public static double Calculate(double value)
                 {
-                    return Math.Sin(value);
+                    return Math.Log(value, 2.0);
                 }
             }
 
@@ -266,7 +266,7 @@ public sealed class CudaReachabilityTests
         var diagnostic = Assert.Single(result.Diagnostics, item => item.Id == "CS2CUDA026");
         Assert.Contains("run", diagnostic.GetMessage(), StringComparison.Ordinal);
         Assert.Contains("ExistingAlgorithm.Calculate", diagnostic.GetMessage(), StringComparison.Ordinal);
-        Assert.Contains("System.Math.Sin", diagnostic.GetMessage(), StringComparison.Ordinal);
+        Assert.Contains("System.Math.Log", diagnostic.GetMessage(), StringComparison.Ordinal);
     }
 
     private static string FormatDiagnostics(CudaTranspilationResult result) =>

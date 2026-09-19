@@ -151,6 +151,12 @@ public static unsafe class Cuda
 
     public static T* ReadOnly<T>(T* pointer) where T : unmanaged => pointer;
 
+    public static T[] Array<T>(T* address, int length) where T : unmanaged =>
+        throw ManagedExecutionException();
+
+    public static T[] ReadOnlyArray<T>(T* address, int length) where T : unmanaged =>
+        throw ManagedExecutionException();
+
     public static double FloatingRemainder(double left, double right) => left % right;
 
     public static double NearbyInteger(double value) => Math.Round(value, MidpointRounding.ToEven);

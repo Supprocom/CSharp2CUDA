@@ -143,7 +143,7 @@ public static class CudaTranspiler
         if (diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
             return new CudaTranspilationResult(string.Empty, diagnostics.ToImmutable());
 
-        var emitter = new CudaModuleEmitter(plan, diagnostics, options);
+        var emitter = new CudaModuleEmitter(plan, options);
         var source = emitter.Emit();
 
         var completedDiagnostics = diagnostics.ToImmutable();

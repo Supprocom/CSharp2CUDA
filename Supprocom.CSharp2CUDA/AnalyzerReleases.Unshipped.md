@@ -31,3 +31,8 @@ CS2CUDA024 | Supprocom.CSharp2CUDA | Error | Reports an invalid CUDA inline arra
 CS2CUDA025 | Supprocom.CSharp2CUDA | Error | Reports a reachable method that is not GPU-portable.
 CS2CUDA026 | Supprocom.CSharp2CUDA | Error | Reports a reachable method without a source body or supported mapping.
 CS2CUDA027 | Supprocom.CSharp2CUDA | Error | Reports a recursive CUDA call path.
+CS2CUDA028 | Supprocom.CSharp2CUDA | Error | Reports a kernel parameter that cannot use the CUDA launch ABI.
+CS2CUDA029 | Supprocom.CSharp2CUDA | Error | Reports an open or unsupported generic construction.
+CS2CUDA030 | Supprocom.CSharp2CUDA | Error | Reports managed allocation or object storage in reachable code.
+CS2CUDA031 | Supprocom.CSharp2CUDA | Error | Reports an invalid writable use of a read-only CUDA view.
+CS2CUDA032 | Supprocom.CSharp2CUDA | Error | Reports a structure layout that cannot preserve its CUDA ABI.

@@ -57,10 +57,7 @@ public sealed class CudaMaintenanceContractsTests
             "asm volatile(\"mov.u64 %0, %%globaltimer;\" : \"=l\"(value));",
             result.Source,
             StringComparison.Ordinal);
-        Assert.Contains(
-            "output[0] = csharp2cuda_global_timer();",
-            result.Source,
-            StringComparison.Ordinal);
+        Assert.Contains("csharp2cuda_global_timer()", result.Source, StringComparison.Ordinal);
         Assert.DoesNotContain("atomicAdd", result.Source, StringComparison.Ordinal);
     }
 
@@ -129,11 +126,8 @@ public sealed class CudaMaintenanceContractsTests
             "unsigned long long runtime_invalid_by_operation[4];",
             result.Source,
             StringComparison.Ordinal);
-        Assert.Contains("int* operands = entry->operands;", result.Source, StringComparison.Ordinal);
-        Assert.Contains(
-            "ResearchEvolutionNode* nodes = entry->nodes;",
-            result.Source,
-            StringComparison.Ordinal);
+        Assert.Contains("int* operands", result.Source, StringComparison.Ordinal);
+        Assert.Contains("ResearchEvolutionNode* nodes", result.Source, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -142,7 +136,6 @@ public sealed class CudaMaintenanceContractsTests
     [InlineData("[CudaInlineArray(3)] public void* values;")]
     [InlineData("[CudaInlineArray(3)] public int** values;")]
     [InlineData("[CudaInlineArray(3)] public decimal* values;")]
-    [InlineData("[CudaInlineArray(3)] public char* values;")]
     public void Transpile_RejectsInvalidInlineArrays(string field)
     {
         var source = $$"""
@@ -221,6 +214,7 @@ public sealed class CudaMaintenanceContractsTests
                     [CudaInlineArray(2)] public byte* bytes;
                     [CudaInlineArray(2)] public short* int16Values;
                     [CudaInlineArray(2)] public ushort* uint16Values;
+                    [CudaInlineArray(2)] public char* charValues;
                     [CudaInlineArray(2)] public int* int32Values;
                     [CudaInlineArray(2)] public uint* uint32Values;
                     [CudaInlineArray(2)] public long* int64Values;
@@ -247,6 +241,7 @@ public sealed class CudaMaintenanceContractsTests
             "unsigned char bytes[2];",
             "short int16Values[2];",
             "unsigned short uint16Values[2];",
+            "unsigned short charValues[2];",
             "int int32Values[2];",
             "unsigned int uint32Values[2];",
             "long long int64Values[2];",

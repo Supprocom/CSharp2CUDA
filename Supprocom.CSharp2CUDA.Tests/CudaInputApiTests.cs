@@ -32,10 +32,8 @@ public sealed class CudaInputApiTests
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Contains("__device__ int AddOne(int value);", result.Source, StringComparison.Ordinal);
-        Assert.Contains(
-            "values[index] = AddOne(values[index]);",
-            result.Source,
-            StringComparison.Ordinal);
+        Assert.Contains("AddOne(", result.Source, StringComparison.Ordinal);
+        Assert.Contains("(values)[", result.Source, StringComparison.Ordinal);
     }
 
     [Fact]

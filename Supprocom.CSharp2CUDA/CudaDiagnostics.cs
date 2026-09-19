@@ -223,6 +223,46 @@ internal static class CudaDiagnostics
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    public static readonly DiagnosticDescriptor InvalidKernelParameter = new(
+        "CS2CUDA028",
+        "Kernel parameter cannot use the CUDA launch ABI",
+        "Kernel parameter '{0}' has type '{1}', which cannot use the CUDA launch ABI",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InvalidGenericConstruction = new(
+        "CS2CUDA029",
+        "Generic construction is not supported",
+        "Generic symbol '{0}' must be a closed construction with supported unmanaged type arguments",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor ManagedAllocation = new(
+        "CS2CUDA030",
+        "Managed allocation is not supported",
+        "Reachable operation '{0}' requires managed allocation or object storage",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor ViewEscape = new(
+        "CS2CUDA031",
+        "CUDA view access is invalid",
+        "Read-only CUDA view '{0}' cannot flow to writable storage",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InvalidStructureLayout = new(
+        "CS2CUDA032",
+        "Structure layout cannot be preserved",
+        "Structure '{0}' cannot preserve its declared CUDA ABI layout: {1}",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public static ImmutableArray<DiagnosticDescriptor> All { get; } =
     [
         MissingTranslationUnit,
@@ -251,6 +291,11 @@ internal static class CudaDiagnostics
         InvalidInlineArray,
         UnsupportedReachableMethod,
         MissingReachableBody,
-        RecursiveCall
+        RecursiveCall,
+        InvalidKernelParameter,
+        InvalidGenericConstruction,
+        ManagedAllocation,
+        ViewEscape,
+        InvalidStructureLayout
     ];
 }

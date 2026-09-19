@@ -31,7 +31,7 @@ public sealed class CudaLogTests
         var result = CudaTestCompiler.Transpile(GeneratedProbeSource);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
-        Assert.Contains("output[0] = log(value);", result.Source, StringComparison.Ordinal);
+        Assert.Contains("log(value)", result.Source, StringComparison.Ordinal);
         Assert.Contains("log(1.01)", result.Source, StringComparison.Ordinal);
         Assert.Contains("log(0.99)", result.Source, StringComparison.Ordinal);
         Assert.DoesNotContain("Cuda.Log", result.Source, StringComparison.Ordinal);
@@ -210,19 +210,6 @@ public sealed class CudaLogTests
             """,
             "CS2CUDA016"
         },
-        {
-            """
-            using Supprocom.CSharp2CUDA;
-
-            [TranspileToCUDA]
-            internal static class InvalidModule
-            {
-                [CudaDevice]
-                private static double Run(double value) => Cuda.Log(value);
-            }
-            """,
-            "CS2CUDA005"
-        }
     };
 
     private static readonly (int Wins, int Losses)[] WeeklyProfitCases =

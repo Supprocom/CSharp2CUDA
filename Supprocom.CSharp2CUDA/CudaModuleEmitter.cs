@@ -1,13 +1,11 @@
-using System.Collections.Immutable;
 using System.Globalization;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Supprocom.CSharp2CUDA.Emission;
 
 namespace Supprocom.CSharp2CUDA;
 
 internal sealed class CudaModuleEmitter(
     CudaEmissionPlan plan,
-    ImmutableArray<Diagnostic>.Builder diagnostics,
     CudaTranspilationOptions options)
 {
     public string Emit()
@@ -20,10 +18,14 @@ internal sealed class CudaModuleEmitter(
 
         if (functions.Length > 0)
             sections.Add(NormalizeNewLines(IntegerSemantics));
+        if (plan.UsesArrayViews)
+            sections.Add(NormalizeNewLines(ArrayViewTypes));
         if (plan.UsesVolatileMappedMemory)
             sections.Add(NormalizeNewLines(VolatileMappedMemoryIntrinsics));
         if (plan.UsesGlobalTimer)
             sections.Add(NormalizeNewLines(GlobalTimerIntrinsic));
+        if (structures.Any(plan.RequiresAbiLayout))
+            sections.Add("#include <stddef.h>");
         foreach (var constant in plan.ConstantArrays)
             sections.Add(EmitConstantArray(constant));
         if (structures.Length > 0)
@@ -78,31 +80,95 @@ internal sealed class CudaModuleEmitter(
     private string EmitStruct(CudaStructPlan structure)
     {
         using var output = CreateWriter();
+        if (structure.Layout is { Pack: not 8 } packedLayout)
+        {
+            output.Write("#pragma pack(push, ");
+            output.Write(packedLayout.Pack.ToString(CultureInfo.InvariantCulture));
+            output.WriteLine(")");
+        }
         output.Write("struct ");
+        if (structure.Layout is { IsExplicit: true } explicitLayout)
+        {
+            output.Write("alignas(");
+            output.Write(explicitLayout.Alignment.ToString(CultureInfo.InvariantCulture));
+            output.Write(") ");
+        }
         output.Write(structure.EmittedName);
         output.WriteLine();
         output.WriteLine("{");
-        foreach (var field in structure.Fields)
+        if (structure.Layout is { IsExplicit: true } rawLayout)
+        {
+            output.Write("    unsigned char csharp2cuda_storage[");
+            output.Write(rawLayout.Size.ToString(CultureInfo.InvariantCulture));
+            output.WriteLine("];");
+        }
+        else
+        {
+            foreach (var field in structure.Fields)
+            {
+                output.Write("    ");
+                var fieldType = field.InlineArrayLength > 0
+                    ? ((IPointerTypeSymbol)field.Symbol.Type).PointedAtType
+                    : field.Symbol.Type;
+                output.Write(plan.FormatType(
+                    fieldType,
+                    false,
+                    field.Declaration.Declaration.Type.GetLocation()));
+                output.Write(' ');
+                output.Write(plan.GetIdentifier(field.Symbol));
+                if (field.InlineArrayLength > 0)
+                {
+                    output.Write('[');
+                    output.Write(field.InlineArrayLength.ToString(CultureInfo.InvariantCulture));
+                    output.Write(']');
+                }
+                output.WriteLine(";");
+            }
+        }
+        foreach (var property in structure.Properties)
         {
             output.Write("    ");
-            var fieldType = field.InlineArrayLength > 0
-                ? ((IPointerTypeSymbol)field.Symbol.Type).PointedAtType
-                : field.Symbol.Type;
             output.Write(plan.FormatType(
-                fieldType,
+                property.Symbol.Type,
                 false,
-                field.Declaration.Declaration.Type.GetLocation()));
+                property.Declaration.Type.GetLocation()));
             output.Write(' ');
-            output.Write(plan.GetIdentifier(field.Symbol));
-            if (field.InlineArrayLength > 0)
-            {
-                output.Write('[');
-                output.Write(field.InlineArrayLength.ToString(CultureInfo.InvariantCulture));
-                output.Write(']');
-            }
+            output.Write(plan.GetIdentifier(property.Symbol));
             output.WriteLine(";");
         }
         output.Write("};");
+        if (structure.Layout is { Pack: not 8 })
+        {
+            output.WriteLine();
+            output.Write("#pragma pack(pop)");
+        }
+        if (structure.Layout is { } layout && plan.RequiresAbiLayout(structure))
+        {
+            output.WriteLine();
+            output.Write("static_assert(sizeof(");
+            output.Write(structure.EmittedName);
+            output.Write(") == ");
+            output.Write(layout.Size.ToString(CultureInfo.InvariantCulture));
+            output.WriteLine(", \"CUDA structure size mismatch\");");
+            output.Write("static_assert(alignof(");
+            output.Write(structure.EmittedName);
+            output.Write(") == ");
+            output.Write(layout.Alignment.ToString(CultureInfo.InvariantCulture));
+            output.WriteLine(", \"CUDA structure alignment mismatch\");");
+            foreach (var field in layout.Fields)
+            {
+                if (!layout.IsExplicit)
+                {
+                    output.Write("static_assert(offsetof(");
+                    output.Write(structure.EmittedName);
+                    output.Write(", ");
+                    output.Write(plan.GetIdentifier(field.Field.Symbol));
+                    output.Write(") == ");
+                    output.Write(field.Offset.ToString(CultureInfo.InvariantCulture));
+                    output.WriteLine(", \"CUDA structure field offset mismatch\");");
+                }
+            }
+        }
         return output.ToString();
     }
 
@@ -144,9 +210,12 @@ internal sealed class CudaModuleEmitter(
         }
 
         output.Write(plan.FormatType(
-            function.Symbol.ReturnType,
+            function.IsConstructor
+                ? function.Symbol.ContainingType
+                : function.Symbol.ReturnType,
             false,
-            function.Syntax.ReturnType.GetLocation()));
+            function.Syntax.ReturnType?.GetLocation() ??
+                function.Syntax.Identifier.GetLocation()));
         output.Write(' ');
         output.Write(function.EmittedName);
         EmitParameters(output, function);
@@ -158,8 +227,31 @@ internal sealed class CudaModuleEmitter(
         var parameterText = parameters.SyntaxTree.GetText().ToString(parameters.Span);
         var multiline = parameterText.Contains('\n') || parameterText.Contains('\r');
         output.Write('(');
+        var wroteParameter = false;
+        if (function.HasInstance)
+        {
+            if (multiline)
+            {
+                output.WriteLine();
+                output.Write("    ");
+            }
+            if (function.IsReadOnlyInstance)
+                output.Write("const ");
+            output.Write(plan.FormatType(
+                function.Symbol.ContainingType,
+                false,
+                function.Syntax.Identifier.GetLocation()));
+            output.Write("* csharp2cuda_this");
+            wroteParameter = true;
+        }
         for (var index = 0; index < parameters.Parameters.Count; index++)
         {
+            if (wroteParameter)
+            {
+                output.Write(',');
+                if (!multiline)
+                    output.Write(' ');
+            }
             if (multiline)
             {
                 output.WriteLine();
@@ -168,30 +260,16 @@ internal sealed class CudaModuleEmitter(
             output.Write(plan.FormatParameterType(function, index));
             output.Write(' ');
             output.Write(plan.GetIdentifier(function.Symbol.Parameters[index]));
-            if (index + 1 < parameters.Parameters.Count)
-            {
-                output.Write(',');
-                if (!multiline)
-                    output.Write(' ');
-            }
+            wroteParameter = true;
         }
         output.Write(')');
     }
 
     private string TranslateBody(CudaFunctionPlan function)
     {
-        var translator = new CudaSyntaxTranslator(plan, function.Model, diagnostics);
-        var rewritten = (BlockSyntax)translator.Visit(function.Syntax.Body)!;
-        var text = rewritten.WithoutLeadingTrivia().WithoutTrailingTrivia().ToFullString();
-        text = translator.ExpandFixedLocalArrays(text);
-        text = text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n');
-        var lines = text.Split('\n');
-        for (var index = 0; index < lines.Length; index++)
-        {
-            if (lines[index].StartsWith("    ", StringComparison.Ordinal))
-                lines[index] = lines[index][4..];
-        }
-        return string.Join(options.NewLine, lines);
+        if (function.Body is null)
+            return string.Empty;
+        return new CudaCppBodyEmitter(options.NewLine).Emit(function.Body);
     }
 
     private StringWriter CreateWriter() => new() { NewLine = options.NewLine };
@@ -262,6 +340,139 @@ internal sealed class CudaModuleEmitter(
         #endif
         """;
 
+    private const string ArrayViewTypes = """
+        #ifndef CSHARP2CUDA_ARRAY_VIEWS_0_3
+        #define CSHARP2CUDA_ARRAY_VIEWS_0_3
+        template <typename T>
+        struct csharp2cuda_readonly_array_view
+        {
+            const T* data;
+            int length;
+            bool is_null;
+
+            __device__ csharp2cuda_readonly_array_view()
+                : data(nullptr), length(0), is_null(false)
+            {
+            }
+
+            __device__ csharp2cuda_readonly_array_view(const T* address, int count)
+                : data(address), length(count), is_null(false)
+            {
+                if (count < 0 || (address == nullptr && count != 0))
+                    asm volatile("trap;");
+            }
+
+            __device__ csharp2cuda_readonly_array_view(
+                const T* address,
+                int count,
+                bool null_state)
+                : data(address), length(count), is_null(null_state)
+            {
+                if (count < 0) asm volatile("trap;");
+            }
+
+            __device__ int get_length() const
+            {
+                if (is_null) asm volatile("trap;");
+                return length;
+            }
+
+            __device__ bool is_empty() const
+            {
+                return get_length() == 0;
+            }
+
+            __device__ const T& operator[](int index) const
+            {
+                if (is_null || (unsigned int)index >= (unsigned int)length)
+                    asm volatile("trap;");
+                return data[index];
+            }
+
+            __device__ csharp2cuda_readonly_array_view<T> slice(int start) const
+            {
+                if (is_null || (unsigned int)start > (unsigned int)length)
+                    asm volatile("trap;");
+                return csharp2cuda_readonly_array_view<T>(data + start, length - start);
+            }
+
+            __device__ csharp2cuda_readonly_array_view<T> slice(int start, int count) const
+            {
+                if (is_null ||
+                    (unsigned int)start > (unsigned int)length ||
+                    (unsigned int)count > (unsigned int)(length - start))
+                    asm volatile("trap;");
+                return csharp2cuda_readonly_array_view<T>(data + start, count);
+            }
+        };
+
+        template <typename T>
+        struct csharp2cuda_array_view
+        {
+            T* data;
+            int length;
+            bool is_null;
+
+            __device__ csharp2cuda_array_view()
+                : data(nullptr), length(0), is_null(false)
+            {
+            }
+
+            __device__ csharp2cuda_array_view(T* address, int count)
+                : data(address), length(count), is_null(false)
+            {
+                if (count < 0 || (address == nullptr && count != 0))
+                    asm volatile("trap;");
+            }
+
+            __device__ csharp2cuda_array_view(T* address, int count, bool null_state)
+                : data(address), length(count), is_null(null_state)
+            {
+                if (count < 0) asm volatile("trap;");
+            }
+
+            __device__ int get_length() const
+            {
+                if (is_null) asm volatile("trap;");
+                return length;
+            }
+
+            __device__ bool is_empty() const
+            {
+                return get_length() == 0;
+            }
+
+            __device__ T& operator[](int index) const
+            {
+                if (is_null || (unsigned int)index >= (unsigned int)length)
+                    asm volatile("trap;");
+                return data[index];
+            }
+
+            __device__ csharp2cuda_array_view<T> slice(int start) const
+            {
+                if (is_null || (unsigned int)start > (unsigned int)length)
+                    asm volatile("trap;");
+                return csharp2cuda_array_view<T>(data + start, length - start);
+            }
+
+            __device__ csharp2cuda_array_view<T> slice(int start, int count) const
+            {
+                if (is_null ||
+                    (unsigned int)start > (unsigned int)length ||
+                    (unsigned int)count > (unsigned int)(length - start))
+                    asm volatile("trap;");
+                return csharp2cuda_array_view<T>(data + start, count);
+            }
+
+            __device__ operator csharp2cuda_readonly_array_view<T>() const
+            {
+                return csharp2cuda_readonly_array_view<T>(data, length, is_null);
+            }
+        };
+        #endif
+        """;
+
     private const string GlobalTimerIntrinsic = """
         #ifndef CSHARP2CUDA_GLOBAL_TIMER_0_1
         #define CSHARP2CUDA_GLOBAL_TIMER_0_1
@@ -277,6 +488,7 @@ internal sealed class CudaModuleEmitter(
     private const string IntegerSemantics = """
         #ifndef CSHARP2CUDA_INTEGER_SEMANTICS_0_1
         #define CSHARP2CUDA_INTEGER_SEMANTICS_0_1
+        static_assert(sizeof(unsigned short) == 2, "C# char requires 16 bits");
         static_assert(sizeof(int) == 4, "CSharp2CUDA requires a 32-bit CUDA int.");
         static_assert(sizeof(long long) == 8, "CSharp2CUDA requires a 64-bit CUDA long long.");
 
@@ -285,9 +497,78 @@ internal sealed class CudaModuleEmitter(
             return bits <= 0x7fffffffu ? (int)bits : -1 - (int)(~bits);
         }
 
+        static __device__ __forceinline__ signed char csharp2cuda_i8_from_bits(
+            unsigned int bits)
+        {
+            unsigned int value = bits & 0xffu;
+            return value <= 0x7fu
+                ? (signed char)value
+                : (signed char)(-1 - (int)((~value) & 0xffu));
+        }
+
+        static __device__ __forceinline__ short csharp2cuda_i16_from_bits(
+            unsigned int bits)
+        {
+            unsigned int value = bits & 0xffffu;
+            return value <= 0x7fffu
+                ? (short)value
+                : (short)(-1 - (int)((~value) & 0xffffu));
+        }
+
         static __device__ __forceinline__ long long csharp2cuda_i64_from_bits(unsigned long long bits)
         {
             return bits <= 0x7fffffffffffffffull ? (long long)bits : -1LL - (long long)(~bits);
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_f64_to_i32(double value)
+        {
+            if (isnan(value)) return 0;
+            if (value >= 2147483648.0) return 2147483647;
+            if (value <= -2147483648.0) return (-2147483647 - 1);
+            return (int)value;
+        }
+
+        static __device__ __forceinline__ unsigned int csharp2cuda_f64_to_u32(double value)
+        {
+            if (isnan(value) || value <= 0.0) return 0u;
+            if (value >= 4294967296.0) return 0xffffffffu;
+            return (unsigned int)value;
+        }
+
+        static __device__ __forceinline__ long long csharp2cuda_f64_to_i64(double value)
+        {
+            if (isnan(value)) return 0LL;
+            if (value >= 9223372036854775808.0) return 9223372036854775807LL;
+            if (value <= -9223372036854775808.0) return (-9223372036854775807LL - 1LL);
+            return (long long)value;
+        }
+
+        static __device__ __forceinline__ unsigned long long csharp2cuda_f64_to_u64(
+            double value)
+        {
+            if (isnan(value) || value <= 0.0) return 0ull;
+            if (value >= 18446744073709551616.0) return 0xffffffffffffffffull;
+            return (unsigned long long)value;
+        }
+
+        static __device__ __forceinline__ signed char csharp2cuda_f64_to_i8(double value)
+        {
+            return csharp2cuda_i8_from_bits((unsigned int)csharp2cuda_f64_to_i32(value));
+        }
+
+        static __device__ __forceinline__ unsigned char csharp2cuda_f64_to_u8(double value)
+        {
+            return (unsigned char)csharp2cuda_f64_to_i32(value);
+        }
+
+        static __device__ __forceinline__ short csharp2cuda_f64_to_i16(double value)
+        {
+            return csharp2cuda_i16_from_bits((unsigned int)csharp2cuda_f64_to_i32(value));
+        }
+
+        static __device__ __forceinline__ unsigned short csharp2cuda_f64_to_u16(double value)
+        {
+            return (unsigned short)csharp2cuda_f64_to_i32(value);
         }
 
         template <typename T>
@@ -325,6 +606,128 @@ internal sealed class CudaModuleEmitter(
                 return left;
             }
             return signbit(left) ? left : right;
+        }
+
+        static __device__ __forceinline__ float csharp2cuda_f32_maximum(float left, float right)
+        {
+            if (left != right)
+            {
+                if (!isnan(left))
+                    return right < left ? left : right;
+                return left;
+            }
+            return signbit(right) ? left : right;
+        }
+
+        static __device__ __forceinline__ float csharp2cuda_f32_minimum(float left, float right)
+        {
+            if (left != right)
+            {
+                if (!isnan(left))
+                    return left < right ? left : right;
+                return left;
+            }
+            return signbit(left) ? left : right;
+        }
+
+        static __device__ __forceinline__ double csharp2cuda_f64_clamp(
+            double value,
+            double minimum,
+            double maximum)
+        {
+            if (minimum > maximum)
+            {
+                __trap();
+                return 0.0;
+            }
+            return value < minimum ? minimum : value > maximum ? maximum : value;
+        }
+
+        static __device__ __forceinline__ float csharp2cuda_f32_clamp(
+            float value,
+            float minimum,
+            float maximum)
+        {
+            if (minimum > maximum)
+            {
+                __trap();
+                return 0.0f;
+            }
+            return value < minimum ? minimum : value > maximum ? maximum : value;
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_f64_sign(double value)
+        {
+            if (isnan(value))
+            {
+                __trap();
+                return 0;
+            }
+            return value > 0.0 ? 1 : value < 0.0 ? -1 : 0;
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_f32_sign(float value)
+        {
+            if (isnan(value))
+            {
+                __trap();
+                return 0;
+            }
+            return value > 0.0f ? 1 : value < 0.0f ? -1 : 0;
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_u32_trailing_zero_count(
+            unsigned int value)
+        {
+            return value == 0u ? 32 : __ffs(value) - 1;
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_u64_trailing_zero_count(
+            unsigned long long value)
+        {
+            return value == 0ull ? 64 : __ffsll(value) - 1;
+        }
+
+        static __device__ __forceinline__ unsigned int csharp2cuda_u32_rotate_left(
+            unsigned int value,
+            int count)
+        {
+            unsigned int shift = (unsigned int)count & 31u;
+            return shift == 0u ? value : (value << shift) | (value >> (32u - shift));
+        }
+
+        static __device__ __forceinline__ unsigned long long csharp2cuda_u64_rotate_left(
+            unsigned long long value,
+            int count)
+        {
+            unsigned int shift = (unsigned int)count & 63u;
+            return shift == 0u ? value : (value << shift) | (value >> (64u - shift));
+        }
+
+        static __device__ __forceinline__ unsigned int csharp2cuda_u32_rotate_right(
+            unsigned int value,
+            int count)
+        {
+            unsigned int shift = (unsigned int)count & 31u;
+            return shift == 0u ? value : (value >> shift) | (value << (32u - shift));
+        }
+
+        static __device__ __forceinline__ unsigned long long csharp2cuda_u64_rotate_right(
+            unsigned long long value,
+            int count)
+        {
+            unsigned int shift = (unsigned int)count & 63u;
+            return shift == 0u ? value : (value >> shift) | (value << (64u - shift));
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_u32_log2(unsigned int value)
+        {
+            return value == 0u ? 0 : 31 - __clz(value);
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_u64_log2(unsigned long long value)
+        {
+            return value == 0ull ? 0 : 63 - __clzll(value);
         }
 
         static __device__ __forceinline__ int csharp2cuda_i32_add(int left, int right)
@@ -404,6 +807,12 @@ internal sealed class CudaModuleEmitter(
             if (value < 0)
                 bits |= ~0u << (32u - shift);
             return csharp2cuda_i32_from_bits(bits);
+        }
+
+        static __device__ __forceinline__ int csharp2cuda_i32_ushr(int value, int count)
+        {
+            unsigned int shift = (unsigned int)count & 31u;
+            return csharp2cuda_i32_from_bits((unsigned int)value >> shift);
         }
 
         static __device__ __forceinline__ unsigned int csharp2cuda_u32_div(unsigned int left, unsigned int right)
@@ -516,6 +925,14 @@ internal sealed class CudaModuleEmitter(
             return csharp2cuda_i64_from_bits(bits);
         }
 
+        static __device__ __forceinline__ long long csharp2cuda_i64_ushr(
+            long long value,
+            int count)
+        {
+            unsigned int shift = (unsigned int)count & 63u;
+            return csharp2cuda_i64_from_bits((unsigned long long)value >> shift);
+        }
+
         static __device__ __forceinline__ unsigned long long csharp2cuda_u64_div(unsigned long long left, unsigned long long right)
         {
             if (right == 0ull)
@@ -586,6 +1003,14 @@ internal sealed class CudaModuleEmitter(
         static __device__ __forceinline__ long long csharp2cuda_i64_post_increment(long long& target) { long long result = target; target = csharp2cuda_i64_add(target, 1LL); return result; }
         static __device__ __forceinline__ long long csharp2cuda_i64_pre_decrement(long long& target) { return target = csharp2cuda_i64_sub(target, 1LL); }
         static __device__ __forceinline__ long long csharp2cuda_i64_post_decrement(long long& target) { long long result = target; target = csharp2cuda_i64_sub(target, 1LL); return result; }
+        static __device__ __forceinline__ signed char csharp2cuda_i8_pre_increment(signed char& target) { return target = csharp2cuda_i8_from_bits((unsigned int)(int)target + 1u); }
+        static __device__ __forceinline__ signed char csharp2cuda_i8_post_increment(signed char& target) { signed char result = target; target = csharp2cuda_i8_from_bits((unsigned int)(int)target + 1u); return result; }
+        static __device__ __forceinline__ signed char csharp2cuda_i8_pre_decrement(signed char& target) { return target = csharp2cuda_i8_from_bits((unsigned int)(int)target - 1u); }
+        static __device__ __forceinline__ signed char csharp2cuda_i8_post_decrement(signed char& target) { signed char result = target; target = csharp2cuda_i8_from_bits((unsigned int)(int)target - 1u); return result; }
+        static __device__ __forceinline__ short csharp2cuda_i16_pre_increment(short& target) { return target = csharp2cuda_i16_from_bits((unsigned int)(int)target + 1u); }
+        static __device__ __forceinline__ short csharp2cuda_i16_post_increment(short& target) { short result = target; target = csharp2cuda_i16_from_bits((unsigned int)(int)target + 1u); return result; }
+        static __device__ __forceinline__ short csharp2cuda_i16_pre_decrement(short& target) { return target = csharp2cuda_i16_from_bits((unsigned int)(int)target - 1u); }
+        static __device__ __forceinline__ short csharp2cuda_i16_post_decrement(short& target) { short result = target; target = csharp2cuda_i16_from_bits((unsigned int)(int)target - 1u); return result; }
         #endif
         """;
 }
