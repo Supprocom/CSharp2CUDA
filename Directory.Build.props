@@ -8,5 +8,6 @@
     <Deterministic>true</Deterministic>
     <Version>0.2.1</Version>
     <CSharp2CUDAPackageVersion Condition="'$(CSharp2CUDAPackageVersion)' == ''">$(Version)</CSharp2CUDAPackageVersion>
+    <DefaultItemExcludes>$(DefaultItemExcludes);$(MSBuildProjectDirectory)\bin\**;$(MSBuildProjectDirectory)\obj\**;$(MSBuildProjectDirectory)\artifacts\**</DefaultItemExcludes>
   </PropertyGroup>
 </Project>

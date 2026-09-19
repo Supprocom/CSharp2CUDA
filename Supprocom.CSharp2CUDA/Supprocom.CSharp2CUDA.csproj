@@ -55,35 +55,43 @@
              Targets="Build"
              BuildInParallel="false"
              Condition="'$(NoBuild)' != 'true'"
-             Properties="Configuration=$(Configuration);BuildProjectReferences=false;RepositoryCommit=$(RepositoryCommit);RepositoryBranch=$(RepositoryBranch);ContinuousIntegrationBuild=$(ContinuousIntegrationBuild)" />
+             Properties="Configuration=$(Configuration);BuildProjectReferences=false;Version=$(Version);PackageVersion=$(PackageVersion);RepositoryCommit=$(RepositoryCommit);RepositoryBranch=$(RepositoryBranch);ContinuousIntegrationBuild=$(ContinuousIntegrationBuild)">
+      <Output TaskParameter="TargetOutputs" ItemName="_CudaBuildAssembly" />
+    </MSBuild>
     <MSBuild Projects="..\Supprocom.CSharp2CUDA.Compiler\Supprocom.CSharp2CUDA.Compiler.csproj"
              Targets="Build"
              BuildInParallel="false"
              Condition="'$(NoBuild)' != 'true'"
-             Properties="Configuration=$(Configuration);BuildProjectReferences=false;RepositoryCommit=$(RepositoryCommit);RepositoryBranch=$(RepositoryBranch);ContinuousIntegrationBuild=$(ContinuousIntegrationBuild)" />
+             Properties="Configuration=$(Configuration);BuildProjectReferences=false;Version=$(Version);PackageVersion=$(PackageVersion);RepositoryCommit=$(RepositoryCommit);RepositoryBranch=$(RepositoryBranch);ContinuousIntegrationBuild=$(ContinuousIntegrationBuild)">
+      <Output TaskParameter="TargetOutputs" ItemName="_CudaCompilerAssembly" />
+    </MSBuild>
     <ItemGroup>
-      <None Include="..\Supprocom.CSharp2CUDA.Build\bin\$(Configuration)\net10.0\Supprocom.CSharp2CUDA.Build.dll"
+      <_CudaBuildPdb Include="@(_CudaBuildAssembly->'%(RootDir)%(Directory)%(Filename).pdb')" />
+      <_CudaCompilerPdb Include="@(_CudaCompilerAssembly->'%(RootDir)%(Directory)%(Filename).pdb')" />
+      <_CudaBuildCodeAnalysis Include="@(_CudaBuildAssembly->'%(RootDir)%(Directory)Microsoft.CodeAnalysis.dll')" />
+      <_CudaBuildCodeAnalysisCSharp Include="@(_CudaBuildAssembly->'%(RootDir)%(Directory)Microsoft.CodeAnalysis.CSharp.dll')" />
+      <None Include="@(_CudaBuildAssembly)"
             Pack="true"
             PackagePath="build\task\Supprocom.CSharp2CUDA.Build.dll" />
-      <None Include="..\Supprocom.CSharp2CUDA.Build\bin\$(Configuration)\net10.0\Supprocom.CSharp2CUDA.Build.pdb"
+      <None Include="@(_CudaBuildPdb)"
             Pack="true"
             PackagePath="build\task\Supprocom.CSharp2CUDA.Build.pdb" />
-      <None Include="bin\$(Configuration)\net10.0\Supprocom.CSharp2CUDA.dll"
+      <None Include="$(TargetPath)"
             Pack="true"
             PackagePath="build\task\Supprocom.CSharp2CUDA.dll" />
-      <None Include="..\Supprocom.CSharp2CUDA.Build\bin\$(Configuration)\net10.0\Microsoft.CodeAnalysis.dll"
+      <None Include="@(_CudaBuildCodeAnalysis)"
             Pack="true"
             PackagePath="build\task\Microsoft.CodeAnalysis.dll" />
-      <None Include="..\Supprocom.CSharp2CUDA.Build\bin\$(Configuration)\net10.0\Microsoft.CodeAnalysis.CSharp.dll"
+      <None Include="@(_CudaBuildCodeAnalysisCSharp)"
             Pack="true"
             PackagePath="build\task\Microsoft.CodeAnalysis.CSharp.dll" />
-      <None Include="bin\$(Configuration)\net10.0\Supprocom.CSharp2CUDA.dll"
+      <None Include="$(TargetPath)"
             Pack="true"
             PackagePath="build\compiler\Supprocom.CSharp2CUDA.dll" />
-      <None Include="..\Supprocom.CSharp2CUDA.Compiler\bin\$(Configuration)\net10.0\Supprocom.CSharp2CUDA.Compiler.dll"
+      <None Include="@(_CudaCompilerAssembly)"
             Pack="true"
             PackagePath="build\compiler\Supprocom.CSharp2CUDA.Compiler.dll" />
-      <None Include="..\Supprocom.CSharp2CUDA.Compiler\bin\$(Configuration)\net10.0\Supprocom.CSharp2CUDA.Compiler.pdb"
+      <None Include="@(_CudaCompilerPdb)"
             Pack="true"
             PackagePath="build\compiler\Supprocom.CSharp2CUDA.Compiler.pdb" />
     </ItemGroup>

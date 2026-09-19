@@ -9,6 +9,7 @@
     <Company>Supprocom</Company>
     <Copyright>Copyright (C) 2026 mkn8rn</Copyright>
     <PackageLicenseExpression>AGPL-3.0-only</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageProjectUrl>https://github.com/Supprocom/CSharp2CUDA</PackageProjectUrl>
     <RepositoryUrl>https://github.com/Supprocom/CSharp2CUDA</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
@@ -16,7 +17,10 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>csharp2cuda</ToolCommandName>
     <PackageTags>cuda;csharp;roslyn;transpiler;scaffold;dotnet-tool</PackageTags>
+    <PackageReleaseNotes>Add compatibility checks and compile-checked CUDA adapter scaffolding for ordinary C# algorithms.</PackageReleaseNotes>
     <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <DebugType>portable</DebugType>
     <SourceRevisionId Condition="'$(RepositoryCommit)' != ''">$(RepositoryCommit)</SourceRevisionId>
   </PropertyGroup>
@@ -37,6 +41,14 @@
                       Value="$(RepositoryCommit)"
                       Condition="'$(RepositoryCommit)' != ''" />
     <InternalsVisibleTo Include="Supprocom.CSharp2CUDA.Tool.Tests" />
+    <None Include="..\README.md" Pack="true" PackagePath="README.md" />
+    <None Include="..\docs\getting-started.md"
+          Pack="true"
+          PackagePath="docs\getting-started.md" />
+    <None Include="..\LICENSE.md" Pack="true" PackagePath="LICENSE.md" />
+    <None Include="..\THIRD-PARTY-NOTICES.md"
+          Pack="true"
+          PackagePath="THIRD-PARTY-NOTICES.md" />
   </ItemGroup>
 
   <Target Name="ValidatePackageProvenance" BeforeTargets="_IntermediatePack">

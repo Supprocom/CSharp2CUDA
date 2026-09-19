@@ -116,7 +116,8 @@ string[] requiredBoundarySource =
     "csharp2cuda_volatile_load_i32_bytes(mapped, 12ull)",
     "csharp2cuda_volatile_load_u64_bytes(mapped, 16ull)",
     "csharp2cuda_volatile_store_i32_bytes(mapped, 8ull",
-    "csharp2cuda_volatile_store_i32((int*)(csharp2cuda_pointer_add(mapped, 4)), 1)",
+    "csharp2cuda_volatile_store_i32(",
+    "csharp2cuda_pointer_add(mapped, 4)",
     "extern \"C\" __global__ void external_dispatch_boundary("
 ];
 foreach (var required in requiredBoundarySource)

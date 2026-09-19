@@ -33,15 +33,29 @@ var nupkgPath = Path.Combine(
 var snupkgPath = Path.Combine(
     packageDirectory,
     $"Supprocom.CSharp2CUDA.{expectedVersion}.snupkg");
+var toolNupkgPath = Path.Combine(
+    packageDirectory,
+    $"Supprocom.CSharp2CUDA.Tool.{expectedVersion}.nupkg");
+var toolSnupkgPath = Path.Combine(
+    packageDirectory,
+    $"Supprocom.CSharp2CUDA.Tool.{expectedVersion}.snupkg");
 Require(File.Exists(nupkgPath), "The nupkg is missing.");
 Require(File.Exists(snupkgPath), "The snupkg is missing.");
+Require(File.Exists(toolNupkgPath), "The tool nupkg is missing.");
+Require(File.Exists(toolSnupkgPath), "The tool snupkg is missing.");
 
 using var nupkg = ZipFile.OpenRead(nupkgPath);
 using var snupkg = ZipFile.OpenRead(snupkgPath);
+using var toolNupkg = ZipFile.OpenRead(toolNupkgPath);
+using var toolSnupkg = ZipFile.OpenRead(toolSnupkgPath);
 ValidateEntries(nupkg, "nupkg");
 ValidateEntries(snupkg, "snupkg");
+ValidateEntries(toolNupkg, "tool nupkg");
+ValidateEntries(toolSnupkg, "tool snupkg");
 Require(nupkg.Entries.Count == 18, "The nupkg entry count is incorrect.");
 Require(snupkg.Entries.Count == 7, "The snupkg entry count is incorrect.");
+Require(toolNupkg.Entries.Count == 124, "The tool nupkg entry count is incorrect.");
+Require(toolSnupkg.Entries.Count == 8, "The tool snupkg entry count is incorrect.");
 
 RequireEntry(nupkg, "build/Supprocom.CSharp2CUDA.targets");
 RequireEntry(nupkg, "build/compiler/Supprocom.CSharp2CUDA.Compiler.dll");
@@ -135,8 +149,11 @@ var symbolCompilerPdbBytes = ReadEntry(RequireEntry(
 Require(
     compilerPdbBytes.AsSpan().SequenceEqual(symbolCompilerPdbBytes),
     "The compiler symbol files differ.");
+var symbolCorePdbBytes = ReadEntry(RequireEntry(
+    snupkg,
+    "lib/net10.0/Supprocom.CSharp2CUDA.pdb"));
 ValidatePdb(
-    ReadEntry(RequireEntry(snupkg, "lib/net10.0/Supprocom.CSharp2CUDA.pdb")),
+    symbolCorePdbBytes,
     "/Supprocom.CSharp2CUDA/CudaTranspiler.cs",
     expectedCommit);
 ValidatePdb(
@@ -148,11 +165,95 @@ ValidatePdb(
     "/Supprocom.CSharp2CUDA.Compiler/CudaTranspilationAnalyzer.cs",
     expectedCommit);
 
+RequireEntry(toolNupkg, "tools/net10.0/any/DotnetToolSettings.xml");
+var toolDllBytes = ReadEntry(RequireEntry(
+    toolNupkg,
+    "tools/net10.0/any/Supprocom.CSharp2CUDA.Tool.dll"));
+var toolCoreBytes = ReadEntry(RequireEntry(
+    toolNupkg,
+    "tools/net10.0/any/Supprocom.CSharp2CUDA.dll"));
+Require(
+    toolCoreBytes.AsSpan().SequenceEqual(libraryBytes),
+    "The tool package has a different core assembly.");
+var toolPdbBytes = ReadEntry(RequireEntry(
+    toolNupkg,
+    "tools/net10.0/any/Supprocom.CSharp2CUDA.Tool.pdb"));
+var symbolToolPdbBytes = ReadEntry(RequireEntry(
+    toolSnupkg,
+    "tools/net10.0/any/Supprocom.CSharp2CUDA.Tool.pdb"));
+Require(
+    toolPdbBytes.AsSpan().SequenceEqual(symbolToolPdbBytes),
+    "The tool symbol files differ.");
+var toolCorePdbBytes = ReadEntry(RequireEntry(
+    toolNupkg,
+    "tools/net10.0/any/Supprocom.CSharp2CUDA.pdb"));
+var symbolToolCorePdbBytes = ReadEntry(RequireEntry(
+    toolSnupkg,
+    "tools/net10.0/any/Supprocom.CSharp2CUDA.pdb"));
+Require(
+    toolCorePdbBytes.AsSpan().SequenceEqual(symbolToolCorePdbBytes),
+    "The tool core symbol files differ.");
+Require(
+    toolCorePdbBytes.AsSpan().SequenceEqual(symbolCorePdbBytes),
+    "The core package and tool package symbols differ.");
+ValidatePdb(
+    symbolToolPdbBytes,
+    "/Supprocom.CSharp2CUDA.Tool/ToolApplication.cs",
+    expectedCommit);
+ValidatePdb(
+    symbolToolCorePdbBytes,
+    "/Supprocom.CSharp2CUDA/CudaTranspiler.cs",
+    expectedCommit);
+
+var toolNuspecEntry = toolNupkg.Entries.Single(entry =>
+    entry.FullName.EndsWith(".nuspec", StringComparison.Ordinal));
+var toolNuspec = XDocument.Parse(
+    Encoding.UTF8.GetString(ReadEntry(toolNuspecEntry)).TrimStart('\uFEFF'));
+var toolMetadata = toolNuspec.Root!.Elements().Single().Elements().ToDictionary(
+    element => element.Name.LocalName,
+    element => element);
+Require(
+    toolMetadata["id"].Value == "Supprocom.CSharp2CUDA.Tool",
+    "The tool package ID is incorrect.");
+Require(
+    toolMetadata["version"].Value == expectedVersion,
+    "The tool package version is incorrect.");
+Require(
+    toolMetadata["license"].Value == "AGPL-3.0-only" &&
+    toolMetadata["license"].Attribute("type")?.Value == "expression",
+    "The tool package license is incorrect.");
+var toolRepository = toolMetadata["repository"];
+Require(
+    toolRepository.Attribute("url")?.Value ==
+        "https://github.com/Supprocom/CSharp2CUDA" &&
+    toolRepository.Attribute("branch")?.Value == expectedBranch &&
+    toolRepository.Attribute("commit")?.Value == expectedCommit,
+    "The tool repository provenance is incorrect.");
+Require(
+    toolMetadata["packageTypes"].Descendants().Single()
+        .Attribute("name")?.Value == "DotnetTool",
+    "The tool package type is incorrect.");
+CompareEntry(toolNupkg, "README.md", Path.Combine(repositoryDirectory, "README.md"));
+CompareEntry(toolNupkg, "LICENSE.md", Path.Combine(repositoryDirectory, "LICENSE.md"));
+CompareEntry(
+    toolNupkg,
+    "THIRD-PARTY-NOTICES.md",
+    Path.Combine(repositoryDirectory, "THIRD-PARTY-NOTICES.md"));
+CompareEntry(
+    toolNupkg,
+    "docs/getting-started.md",
+    Path.Combine(repositoryDirectory, "docs", "getting-started.md"));
+
 Console.WriteLine($"NupkgSha256={HashFile(nupkgPath)}");
 Console.WriteLine($"SnupkgSha256={HashFile(snupkgPath)}");
 Console.WriteLine($"CoreDllSha256={HashBytes(libraryBytes)}");
+Console.WriteLine($"ToolNupkgSha256={HashFile(toolNupkgPath)}");
+Console.WriteLine($"ToolSnupkgSha256={HashFile(toolSnupkgPath)}");
+Console.WriteLine($"ToolDllSha256={HashBytes(toolDllBytes)}");
 Console.WriteLine($"NupkgEntryCount={nupkg.Entries.Count}");
 Console.WriteLine($"SnupkgEntryCount={snupkg.Entries.Count}");
+Console.WriteLine($"ToolNupkgEntryCount={toolNupkg.Entries.Count}");
+Console.WriteLine($"ToolSnupkgEntryCount={toolSnupkg.Entries.Count}");
 Console.WriteLine("ArchiveSafety=passed");
 Console.WriteLine("PackedDocumentation=matched");
 Console.WriteLine("SourceLink=matched");
