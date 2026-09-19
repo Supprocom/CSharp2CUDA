@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="[5.6.0]" />
+    <PackageReference Include="Supprocom.CSharp2CUDA"
+                      Version="[$(CSharp2CUDAPackageVersion)]" />
+    <Reference Include="Supprocom.CSharp2CUDA.Compiler">
+      <HintPath>$(CSharp2CUDACompilerAssembly)</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+</Project>
