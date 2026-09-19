@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using Microsoft.CodeAnalysis;
 using Supprocom.CSharp2CUDA.Emission;
@@ -8,36 +9,59 @@ internal sealed class CudaModuleEmitter(
     CudaEmissionPlan plan,
     CudaTranspilationOptions options)
 {
-    public string Emit()
+    private readonly CudaSourcePathMapper sourceMapper = new(options.SourceRoot);
+
+    public CudaModuleEmission Emit()
     {
-        var sections = new List<string>();
+        var sections = new List<CudaModuleSection>();
         var structures = plan.Structs.Where(static structure => !structure.IsExternal).ToArray();
         var functions = plan.Functions.Where(static function => !function.IsExternal).ToArray();
         var prototypes = plan.Functions.Where(static function =>
             !function.IsExternal || function.EmitsDeclaration).ToArray();
 
         if (functions.Length > 0)
-            sections.Add(NormalizeNewLines(IntegerSemantics));
+            sections.Add(CudaModuleSection.Raw(NormalizeNewLines(IntegerSemantics)));
         if (plan.UsesArrayViews)
-            sections.Add(NormalizeNewLines(ArrayViewTypes));
+            sections.Add(CudaModuleSection.Raw(NormalizeNewLines(ArrayViewTypes)));
         if (plan.UsesVolatileMappedMemory)
-            sections.Add(NormalizeNewLines(VolatileMappedMemoryIntrinsics));
+            sections.Add(CudaModuleSection.Raw(NormalizeNewLines(VolatileMappedMemoryIntrinsics)));
         if (plan.UsesGlobalTimer)
-            sections.Add(NormalizeNewLines(GlobalTimerIntrinsic));
+            sections.Add(CudaModuleSection.Raw(NormalizeNewLines(GlobalTimerIntrinsic)));
         if (structures.Any(plan.RequiresAbiLayout))
-            sections.Add("#include <stddef.h>");
+            sections.Add(CudaModuleSection.Raw("#include <stddef.h>"));
         foreach (var constant in plan.ConstantArrays)
-            sections.Add(EmitConstantArray(constant));
+        {
+            sections.Add(CreateMappedSection(
+                EmitConstantArray(constant),
+                constant.Declaration.GetLocation()));
+        }
         if (structures.Length > 0)
-            sections.Add(EmitStructForwardDeclarations(structures));
+        {
+            sections.Add(CudaModuleSection.Raw(
+                EmitStructForwardDeclarations(structures)));
+        }
         foreach (var structure in structures)
-            sections.Add(EmitStruct(structure));
-        if (prototypes.Length > 0)
-            sections.Add(EmitFunctionPrototypes(prototypes));
+        {
+            sections.Add(CreateMappedSection(
+                EmitStruct(structure),
+                structure.Syntax.GetLocation()));
+        }
+        foreach (var function in prototypes)
+            sections.Add(EmitFunctionPrototype(function));
         foreach (var function in functions)
             sections.Add(EmitFunction(function));
 
-        return string.Join(options.NewLine + options.NewLine, sections);
+        var source = string.Join(
+            options.NewLine + options.NewLine,
+            sections.Select(static section => section.Source));
+        var sourceMap = CombineSourceMaps(sections);
+        var entryPoints = plan.Functions
+            .Where(static function => function.Kind == CudaFunctionKind.Global)
+            .Select(static function => new CudaEntryPoint(
+                function.Symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
+                function.EmittedName))
+            .ToImmutableArray();
+        return new CudaModuleEmission(source, entryPoints, sourceMap);
     }
 
     private string EmitConstantArray(CudaConstantArrayPlan constant)
@@ -172,28 +196,36 @@ internal sealed class CudaModuleEmitter(
         return output.ToString();
     }
 
-    private string EmitFunctionPrototypes(IEnumerable<CudaFunctionPlan> functions)
+    private CudaModuleSection EmitFunctionPrototype(CudaFunctionPlan function)
     {
         using var output = CreateWriter();
-        var first = true;
-        foreach (var function in functions)
-        {
-            if (!first)
-                output.WriteLine();
-            EmitFunctionHeader(output, function);
-            output.Write(';');
-            first = false;
-        }
-        return output.ToString();
+        EmitFunctionHeader(output, function);
+        output.Write(';');
+        return CreateMappedSection(output.ToString(), function.Syntax.GetLocation());
     }
 
-    private string EmitFunction(CudaFunctionPlan function)
+    private CudaModuleSection EmitFunction(CudaFunctionPlan function)
     {
         using var output = CreateWriter();
         EmitFunctionHeader(output, function);
         output.WriteLine();
-        output.Write(TranslateBody(function));
-        return output.ToString();
+        var header = CreateMappedSection(
+            output.ToString(),
+            function.Syntax.GetLocation());
+        var body = TranslateBody(function);
+        var sourceMap = ImmutableArray.CreateBuilder<CudaSourceMapEntry>();
+        sourceMap.AddRange(header.SourceMap);
+        var bodyLineOffset = CountLinesBeforeNextText(header.Source);
+        foreach (var entry in body.SourceMap)
+        {
+            sourceMap.Add(entry with
+            {
+                GeneratedLine = entry.GeneratedLine + bodyLineOffset
+            });
+        }
+        return new CudaModuleSection(
+            header.Source + body.Source,
+            sourceMap.ToImmutable());
     }
 
     private void EmitFunctionHeader(TextWriter output, CudaFunctionPlan function)
@@ -265,12 +297,58 @@ internal sealed class CudaModuleEmitter(
         output.Write(')');
     }
 
-    private string TranslateBody(CudaFunctionPlan function)
+    private CudaBodyEmission TranslateBody(CudaFunctionPlan function)
     {
         if (function.Body is null)
-            return string.Empty;
-        return new CudaCppBodyEmitter(options.NewLine).Emit(function.Body);
+            return new CudaBodyEmission(string.Empty, []);
+        return new CudaCppBodyEmitter(
+            options.NewLine,
+            sourceMapper,
+            options.EmitLineDirectives).Emit(function.Body);
     }
+
+    private CudaModuleSection CreateMappedSection(string source, Location location)
+    {
+        var mapped = sourceMapper.Map(location);
+        if (mapped is null)
+            return CudaModuleSection.Raw(source);
+
+        var generatedLine = 1;
+        if (options.EmitLineDirectives)
+        {
+            source = $"#line {mapped.SourceLine.ToString(CultureInfo.InvariantCulture)} \"{CudaSourcePathMapper.EscapeDirectivePath(mapped.SourcePath)}\"{options.NewLine}{source}";
+            generatedLine++;
+        }
+
+        return new CudaModuleSection(
+            source,
+            [new CudaSourceMapEntry(mapped.SourcePath, mapped.SourceLine, generatedLine)]);
+    }
+
+    private ImmutableArray<CudaSourceMapEntry> CombineSourceMaps(
+        IReadOnlyList<CudaModuleSection> sections)
+    {
+        var result = ImmutableArray.CreateBuilder<CudaSourceMapEntry>();
+        var sectionStartLine = 1;
+        for (var index = 0; index < sections.Count; index++)
+        {
+            var section = sections[index];
+            foreach (var entry in section.SourceMap)
+            {
+                result.Add(entry with
+                {
+                    GeneratedLine = entry.GeneratedLine + sectionStartLine - 1
+                });
+            }
+            if (index + 1 < sections.Count)
+                sectionStartLine += CountNewLines(section.Source) + 2;
+        }
+        return result.ToImmutable();
+    }
+
+    private static int CountLinesBeforeNextText(string text) => CountNewLines(text);
+
+    private static int CountNewLines(string text) => text.Count(static character => character == '\n');
 
     private StringWriter CreateWriter() => new() { NewLine = options.NewLine };
 
@@ -1013,4 +1091,16 @@ internal sealed class CudaModuleEmitter(
         static __device__ __forceinline__ short csharp2cuda_i16_post_decrement(short& target) { short result = target; target = csharp2cuda_i16_from_bits((unsigned int)(int)target - 1u); return result; }
         #endif
         """;
+}
+
+internal sealed record CudaModuleEmission(
+    string Source,
+    ImmutableArray<CudaEntryPoint> EntryPoints,
+    ImmutableArray<CudaSourceMapEntry> SourceMap);
+
+internal sealed record CudaModuleSection(
+    string Source,
+    ImmutableArray<CudaSourceMapEntry> SourceMap)
+{
+    public static CudaModuleSection Raw(string source) => new(source, []);
 }

@@ -20,6 +20,7 @@
     <_SupprocomCSharp2CUDAIntermediatePayload Condition="$([System.IO.Path]::IsPathRooted('$(IntermediateOutputPath)'))">$([System.IO.Path]::Combine('$(IntermediateOutputPath)', 'Supprocom.CSharp2CUDA.payload'))</_SupprocomCSharp2CUDAIntermediatePayload>
     <_SupprocomCSharp2CUDAIntermediatePayload Condition="!$([System.IO.Path]::IsPathRooted('$(IntermediateOutputPath)'))">$([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(IntermediateOutputPath)', 'Supprocom.CSharp2CUDA.payload'))</_SupprocomCSharp2CUDAIntermediatePayload>
     <SupprocomCSharp2CUDAIntermediatePayloadPath>$(_SupprocomCSharp2CUDAIntermediatePayload)</SupprocomCSharp2CUDAIntermediatePayloadPath>
+    <SupprocomCSharp2CUDASourceRoot>$(MSBuildProjectDirectory)</SupprocomCSharp2CUDASourceRoot>
   </PropertyGroup>
 
   <ItemGroup>
@@ -27,6 +28,7 @@
     <Analyzer Include="$(_SupprocomCSharp2CUDACompilerAssembly)" />
     <CompilerVisibleProperty Include="SupprocomCSharp2CUDAEnabled" />
     <CompilerVisibleProperty Include="SupprocomCSharp2CUDAIntermediatePayloadPath" />
+    <CompilerVisibleProperty Include="SupprocomCSharp2CUDASourceRoot" />
     <CompilerVisibleProperty Include="TranspileToCUDA" />
     <CompilerVisibleProperty Include="TranspileToCUDAOutputPath" />
     <CompilerVisibleProperty Include="DesignTimeBuild" />

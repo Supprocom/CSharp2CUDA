@@ -677,10 +677,18 @@ internal sealed class CudaEmissionPlan
         ValidateStructLayouts(structures);
 
         Structs = OrderStructs(structures).ToImmutableArray();
-        Functions = functions.ToImmutableArray();
-        ConstantArrays = constants.ToImmutableArray();
+        Functions = functions
+            .OrderBy(static function => function.EmittedName, StringComparer.Ordinal)
+            .ThenBy(
+                static function => function.Symbol.ToDisplayString(
+                    SymbolDisplayFormat.FullyQualifiedFormat),
+                StringComparer.Ordinal)
+            .ToImmutableArray();
+        ConstantArrays = constants
+            .OrderBy(static constant => constant.EmittedName, StringComparer.Ordinal)
+            .ToImmutableArray();
 
-        foreach (var function in functions)
+        foreach (var function in Functions)
             ValidateFunction(function);
 
         ValidateGlobalCollisions();
@@ -1808,7 +1816,9 @@ internal sealed class CudaEmissionPlan
         var visited = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
         var visiting = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
 
-        foreach (var structure in structures)
+        foreach (var structure in structures.OrderBy(
+                     static item => item.EmittedName,
+                     StringComparer.Ordinal))
             Visit(structure);
         return ordered;
 
@@ -1817,7 +1827,9 @@ internal sealed class CudaEmissionPlan
             if (!visited.Add(structure.Symbol))
                 return;
             visiting.Add(structure.Symbol);
-            foreach (var field in structure.Fields)
+            foreach (var field in structure.Fields.OrderBy(
+                         static item => item.Symbol.Name,
+                         StringComparer.Ordinal))
             {
                 var fieldType = field.InlineArrayLength > 0
                     ? ((IPointerTypeSymbol)field.Symbol.Type).PointedAtType

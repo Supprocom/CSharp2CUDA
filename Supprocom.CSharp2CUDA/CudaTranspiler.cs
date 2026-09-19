@@ -144,15 +144,17 @@ public static class CudaTranspiler
             return new CudaTranspilationResult(string.Empty, diagnostics.ToImmutable());
 
         var emitter = new CudaModuleEmitter(plan, options);
-        var source = emitter.Emit();
+        var emission = emitter.Emit();
 
         var completedDiagnostics = diagnostics.ToImmutable();
         var failed = completedDiagnostics.Any(static diagnostic =>
             diagnostic.Severity == DiagnosticSeverity.Error);
         return new CudaTranspilationResult(
-            failed ? string.Empty : source,
+            failed ? string.Empty : emission.Source,
             completedDiagnostics,
-            selection.RequestedOutputPath);
+            selection.RequestedOutputPath,
+            failed ? [] : emission.EntryPoints,
+            failed ? [] : emission.SourceMap);
     }
 
     internal static bool HasAttributedTranslationUnit(CSharpCompilation compilation)
@@ -184,6 +186,14 @@ public static class CudaTranspiler
         {
             throw new ArgumentException(
                 "NewLine must be either a line feed or a carriage return followed by a line feed.",
+                nameof(options));
+        }
+        if (options.SourceRoot is not null &&
+            (string.IsNullOrWhiteSpace(options.SourceRoot) ||
+             !Path.IsPathFullyQualified(options.SourceRoot)))
+        {
+            throw new ArgumentException(
+                "SourceRoot must be a fully qualified path when it is specified.",
                 nameof(options));
         }
     }

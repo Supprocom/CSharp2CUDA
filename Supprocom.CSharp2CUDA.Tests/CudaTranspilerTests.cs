@@ -624,7 +624,8 @@ public sealed class CudaTranspilerTests
             "__device__ int Later(int value);",
             StringComparison.Ordinal);
         var definition = result.Source.IndexOf(
-            "__device__ int Later(int value)\n{",
+            "__device__ int Later(int value)",
+            prototype + 1,
             StringComparison.Ordinal);
         Assert.True(prototype >= 0);
         Assert.True(definition > prototype);

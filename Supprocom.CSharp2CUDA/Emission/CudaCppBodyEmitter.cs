@@ -1,23 +1,34 @@
+using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
+using Microsoft.CodeAnalysis;
 using Supprocom.CSharp2CUDA.Semantics;
 
 namespace Supprocom.CSharp2CUDA.Emission;
 
-internal sealed class CudaCppBodyEmitter(string newLine)
+internal sealed class CudaCppBodyEmitter(
+    string newLine,
+    CudaSourcePathMapper sourceMapper,
+    bool emitLineDirectives)
 {
     private readonly StringBuilder output = new();
+    private readonly List<CudaSourceMapEntry> sourceMap = [];
     private readonly Stack<LoopEmissionContext> loops = [];
     private int indentation;
+    private int generatedLine = 1;
 
-    public string Emit(CudaFunctionBodyIr body)
+    public CudaBodyEmission Emit(CudaFunctionBodyIr body)
     {
         EmitStatement(body.Body);
-        return output.ToString().TrimEnd('\r', '\n');
+        return new CudaBodyEmission(
+            output.ToString().TrimEnd('\r', '\n'),
+            sourceMap.ToImmutableArray());
     }
 
     private void EmitStatement(CudaStatementIr statement)
     {
+        if (statement is not CudaStatementGroupIr)
+            EmitLocation(statement.Location);
         switch (statement)
         {
             case CudaBlockStatementIr block:
@@ -263,6 +274,7 @@ internal sealed class CudaCppBodyEmitter(string newLine)
         indentation++;
         foreach (var section in selection.Sections)
         {
+            EmitLocation(section.Location);
             foreach (var label in section.Labels)
                 WriteIndentedLine(label is null ? "default:" : $"case {label}:");
             indentation++;
@@ -327,7 +339,33 @@ internal sealed class CudaCppBodyEmitter(string newLine)
 
     private void WriteIndent() => output.Append(' ', indentation * 4);
 
-    private void WriteLine(string text = "") => output.Append(text).Append(newLine);
+    private void EmitLocation(Location location)
+    {
+        var mapped = sourceMapper.Map(location);
+        if (mapped is null)
+            return;
+
+        if (emitLineDirectives)
+        {
+            output.Append("#line ")
+                .Append(mapped.SourceLine.ToString(CultureInfo.InvariantCulture))
+                .Append(" \"")
+                .Append(CudaSourcePathMapper.EscapeDirectivePath(mapped.SourcePath))
+                .Append('"');
+            WriteLine();
+        }
+
+        sourceMap.Add(new CudaSourceMapEntry(
+            mapped.SourcePath,
+            mapped.SourceLine,
+            generatedLine));
+    }
+
+    private void WriteLine(string text = "")
+    {
+        output.Append(text).Append(newLine);
+        generatedLine++;
+    }
 
     private sealed class LoopEmissionContext(string? label)
     {
@@ -336,3 +374,7 @@ internal sealed class CudaCppBodyEmitter(string newLine)
         public bool Used { get; set; }
     }
 }
+
+internal sealed record CudaBodyEmission(
+    string Source,
+    ImmutableArray<CudaSourceMapEntry> SourceMap);

@@ -16,6 +16,8 @@ public sealed class CudaTranspilationAnalyzer : DiagnosticAnalyzer
         PropertyPrefix + "TranspileToCUDAOutputPath";
     private const string IntermediatePayloadPathProperty =
         PropertyPrefix + "SupprocomCSharp2CUDAIntermediatePayloadPath";
+    private const string SourceRootProperty =
+        PropertyPrefix + "SupprocomCSharp2CUDASourceRoot";
     private const string DesignTimeBuildProperty = PropertyPrefix + "DesignTimeBuild";
     private const string CrossTargetingBuildProperty = PropertyPrefix + "IsCrossTargetingBuild";
 
@@ -68,6 +70,7 @@ public sealed class CudaTranspilationAnalyzer : DiagnosticAnalyzer
             compilation,
             new CudaTranspilationOptions
             {
+                SourceRoot = GetProperty(globalOptions, SourceRootProperty),
                 TranspileAttributedClassesOnly = !entireProject
             });
         foreach (var diagnostic in result.Diagnostics)

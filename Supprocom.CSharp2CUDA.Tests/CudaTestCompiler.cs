@@ -56,6 +56,8 @@ internal static class CudaTestCompiler
         CudaTranspilationOptions? options) => new()
         {
             NewLine = options?.NewLine ?? "\n",
+            EmitLineDirectives = options?.EmitLineDirectives ?? true,
+            SourceRoot = options?.SourceRoot,
             TranspileAttributedClassesOnly = true
         };
 
