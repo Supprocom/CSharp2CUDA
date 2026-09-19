@@ -71,7 +71,10 @@ public sealed class ToolApplicationTests : IDisposable
             "PackageReference Include=\"Supprocom.CSharp2CUDA\" Version=\"0.3.0\"",
             projectText,
             StringComparison.Ordinal);
-        Assert.Contains("Imported\\Algorithm.cs", projectText, StringComparison.Ordinal);
+        Assert.Contains(
+            Path.Combine("Imported", "Algorithm.cs"),
+            projectText,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("Program Files", projectText, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Algorithms.Arithmetic.Twice", adapter, StringComparison.Ordinal);
         Assert.True(File.Exists(Path.Combine(output, "csharp2cuda.json")));
@@ -100,7 +103,7 @@ public sealed class ToolApplicationTests : IDisposable
 
         Assert.Equal(0, refresh.ExitCode);
         Assert.Contains(
-            "Imported\\Helper.cs",
+            Path.Combine("Imported", "Helper.cs"),
             File.ReadAllText(Path.Combine(output, "Algorithms.Cuda.csproj")),
             StringComparison.Ordinal);
     }
