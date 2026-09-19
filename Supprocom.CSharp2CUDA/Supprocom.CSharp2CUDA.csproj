@@ -41,6 +41,7 @@
     <AssemblyMetadata Include="RepositoryCommit" Value="$(RepositoryCommit)" Condition="'$(RepositoryCommit)' != ''" />
     <InternalsVisibleTo Include="Supprocom.CSharp2CUDA.Build" />
     <InternalsVisibleTo Include="Supprocom.CSharp2CUDA.Compiler" />
+    <InternalsVisibleTo Include="Supprocom.CSharp2CUDA.Tool" />
     <InternalsVisibleTo Include="Supprocom.CSharp2CUDA.Tests" />
   </ItemGroup>
 

@@ -249,6 +249,43 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
+    public void Transpile_ConvertsArrayViewsToSpanParameters()
+    {
+        const string source = """
+            using System;
+            using Supprocom.CSharp2CUDA;
+
+            internal static class ExistingAlgorithm
+            {
+                public static int ReadFirst(ReadOnlySpan<int> values) => values[0];
+
+                public static void Scale(Span<double> values, double factor)
+                {
+                    values[0] *= factor;
+                }
+            }
+
+            [TranspileToCUDA]
+            internal static unsafe class SpanAdapter
+            {
+                [CudaGlobal]
+                private static void Run(int* input, double* output)
+                {
+                    int first = ExistingAlgorithm.ReadFirst(Cuda.ReadOnlyArray(input, 1));
+                    ExistingAlgorithm.Scale(Cuda.Array(output, 1), first);
+                }
+            }
+            """;
+
+        var result = CudaTestCompiler.Transpile(source);
+
+        Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
+        Assert.Contains("csharp2cuda_readonly_array_view<int>", result.Source, StringComparison.Ordinal);
+        Assert.Contains("csharp2cuda_array_view<double>", result.Source, StringComparison.Ordinal);
+        Assert.Contains("__dmul_rn", result.Source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Transpile_LowersArrayForeach()
     {
         const string source = """

@@ -5,5 +5,7 @@
   <Project Path="Supprocom.CSharp2CUDA.Build/Supprocom.CSharp2CUDA.Build.csproj" />
   <Project Path="Supprocom.CSharp2CUDA.Compiler/Supprocom.CSharp2CUDA.Compiler.csproj" />
   <Project Path="Supprocom.CSharp2CUDA.Tests/Supprocom.CSharp2CUDA.Tests.csproj" />
+  <Project Path="Supprocom.CSharp2CUDA.Tool/Supprocom.CSharp2CUDA.Tool.csproj" />
+  <Project Path="Supprocom.CSharp2CUDA.Tool.Tests/Supprocom.CSharp2CUDA.Tool.Tests.csproj" />
   <Project Path="Supprocom.CSharp2CUDA/Supprocom.CSharp2CUDA.csproj" />
 </Solution>

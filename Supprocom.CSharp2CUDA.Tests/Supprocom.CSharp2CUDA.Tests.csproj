@@ -28,6 +28,7 @@
   <ItemGroup>
     <Compile Update="Golden\*Module.cs" CopyToOutputDirectory="PreserveNewest" />
     <Compile Update="FileInputs\**\*.cs" CopyToOutputDirectory="PreserveNewest" />
+    <Compile Update="PortabilityCorpus\**\*.cs" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Native\*.cu" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

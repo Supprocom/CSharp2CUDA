@@ -2108,11 +2108,18 @@ internal sealed class CudaEmissionPlan
                 {
                     if (!TryGetSourceFunction(target, out var syntax, out var model))
                     {
+                        var callPath = BuildCallPath(function.Symbol, target, parents);
                         diagnostics.Add(Diagnostic.Create(
                             CudaDiagnostics.MissingReachableBody,
                             invocation.Syntax.GetLocation(),
+                            CreateReachabilityProperties(
+                                function.Symbol,
+                                target,
+                                parents,
+                                callPath,
+                                "Move the unsupported call outside the CUDA kernel."),
                             target.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
-                            BuildCallPath(function.Symbol, target, parents)));
+                            callPath));
                         continue;
                     }
 
@@ -2120,11 +2127,18 @@ internal sealed class CudaEmissionPlan
                         .FirstOrDefault();
                     if (containingType is not (ClassDeclarationSyntax or StructDeclarationSyntax))
                     {
+                        var callPath = BuildCallPath(function.Symbol, target, parents);
                         diagnostics.Add(Diagnostic.Create(
                             CudaDiagnostics.UnsupportedReachableMethod,
                             syntax.Identifier.GetLocation(),
+                            CreateReachabilityProperties(
+                                function.Symbol,
+                                target,
+                                parents,
+                                callPath,
+                                "Move the method into a source class or structure."),
                             target.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
-                            BuildCallPath(function.Symbol, target, parents),
+                            callPath,
                             "The method is not declared in a source class or structure."));
                         continue;
                     }
@@ -2291,11 +2305,20 @@ internal sealed class CudaEmissionPlan
                         SymbolEqualityComparer.Default.Equals(item, call.Target));
                     var cycle = stack.Skip(Math.Max(0, cycleStart))
                         .Append(call.Target)
-                        .Select(FormatCallPathName);
+                        .Select(FormatCallPathName)
+                        .ToArray();
+                    var callPath = string.Join(" -> ", cycle);
                     diagnostics.Add(Diagnostic.Create(
                         CudaDiagnostics.RecursiveCall,
                         call.Location,
-                        string.Join(" -> ", cycle)));
+                        ImmutableDictionary<string, string?>.Empty
+                            .Add("RootSymbol", FormatCallPathName(stack[0]))
+                            .Add("FailingSymbol", FormatCallPathName(call.Target))
+                            .Add("CallPath", callPath)
+                            .Add(
+                                "SuggestedReplacement",
+                                "Replace recursion with a bounded iterative algorithm."),
+                        callPath));
                     return true;
                 }
             }
@@ -2321,6 +2344,23 @@ internal sealed class CudaEmissionPlan
         path.Reverse();
         path.Add(target);
         return string.Join(" -> ", path.Select(FormatCallPathName));
+    }
+
+    private ImmutableDictionary<string, string?> CreateReachabilityProperties(
+        IMethodSymbol caller,
+        IMethodSymbol target,
+        IReadOnlyDictionary<IMethodSymbol, CudaCallParent?> parents,
+        string callPath,
+        string suggestedReplacement)
+    {
+        var root = caller;
+        while (parents.TryGetValue(root, out var parent) && parent is not null)
+            root = parent.Caller;
+        return ImmutableDictionary<string, string?>.Empty
+            .Add("RootSymbol", FormatCallPathName(root))
+            .Add("FailingSymbol", FormatCallPathName(target))
+            .Add("CallPath", callPath)
+            .Add("SuggestedReplacement", suggestedReplacement);
     }
 
     private string FormatCallPathName(IMethodSymbol method)

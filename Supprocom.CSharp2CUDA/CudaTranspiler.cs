@@ -430,10 +430,21 @@ public static class CudaTranspiler
     private static ImmutableArray<MetadataReference> CreateDefaultReferences()
     {
         var references = new Dictionary<string, MetadataReference>(StringComparer.OrdinalIgnoreCase);
+        var runtimeDirectory = Path.GetDirectoryName(typeof(object).Assembly.Location)!;
         if (AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") is string trustedAssemblies)
         {
             foreach (var path in trustedAssemblies.Split(Path.PathSeparator))
-                references[path] = MetadataReference.CreateFromFile(path);
+            {
+                if (string.Equals(
+                        Path.GetDirectoryName(path),
+                        runtimeDirectory,
+                        OperatingSystem.IsWindows()
+                            ? StringComparison.OrdinalIgnoreCase
+                            : StringComparison.Ordinal))
+                {
+                    references[path] = MetadataReference.CreateFromFile(path);
+                }
+            }
         }
 
         var assemblyPath = typeof(TranspileToCUDAAttribute).Assembly.Location;

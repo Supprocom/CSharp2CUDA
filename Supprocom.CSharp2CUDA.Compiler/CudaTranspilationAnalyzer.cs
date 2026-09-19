@@ -37,7 +37,6 @@ public sealed class CudaTranspilationAnalyzer : DiagnosticAnalyzer
     {
         var globalOptions = context.Options.AnalyzerConfigOptionsProvider.GlobalOptions;
         if (!GetBoolean(globalOptions, EnabledProperty) ||
-            GetBoolean(globalOptions, DesignTimeBuildProperty) ||
             GetBoolean(globalOptions, CrossTargetingBuildProperty) ||
             context.Compilation is not CSharpCompilation compilation)
         {
@@ -49,7 +48,12 @@ public sealed class CudaTranspilationAnalyzer : DiagnosticAnalyzer
             var entireProject = GetBoolean(globalOptions, EntireProjectProperty);
             if (!entireProject && !CudaTranspiler.HasAttributedTranslationUnit(compilation))
                 return;
-            Transpile(context, globalOptions, compilation, entireProject);
+            Transpile(
+                context,
+                globalOptions,
+                compilation,
+                entireProject,
+                GetBoolean(globalOptions, DesignTimeBuildProperty));
         }
         catch (Exception exception)
         {
@@ -64,7 +68,8 @@ public sealed class CudaTranspilationAnalyzer : DiagnosticAnalyzer
         CompilationAnalysisContext context,
         AnalyzerConfigOptions globalOptions,
         CSharpCompilation compilation,
-        bool entireProject)
+        bool entireProject,
+        bool designTimeBuild)
     {
         var result = CudaTranspiler.Transpile(
             compilation,
@@ -78,7 +83,7 @@ public sealed class CudaTranspilationAnalyzer : DiagnosticAnalyzer
             if (diagnostic.Id.StartsWith("CS2CUDA", StringComparison.Ordinal))
                 context.ReportDiagnostic(diagnostic);
         }
-        if (!result.Succeeded || string.IsNullOrEmpty(result.Source))
+        if (designTimeBuild || !result.Succeeded || string.IsNullOrEmpty(result.Source))
             return;
 
         var relativePath = entireProject

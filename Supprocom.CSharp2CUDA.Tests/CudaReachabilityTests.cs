@@ -230,7 +230,12 @@ public sealed class CudaReachabilityTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA027");
+        var diagnostic = Assert.Single(
+            result.Diagnostics,
+            item => item.Id == "CS2CUDA027");
+        Assert.Equal("run", diagnostic.Properties["RootSymbol"]);
+        Assert.Contains("ExistingAlgorithm.First", diagnostic.Properties["CallPath"]);
+        Assert.Contains("iterative", diagnostic.Properties["SuggestedReplacement"]);
     }
 
     [Fact]
@@ -267,6 +272,10 @@ public sealed class CudaReachabilityTests
         Assert.Contains("run", diagnostic.GetMessage(), StringComparison.Ordinal);
         Assert.Contains("ExistingAlgorithm.Calculate", diagnostic.GetMessage(), StringComparison.Ordinal);
         Assert.Contains("System.Math.Log", diagnostic.GetMessage(), StringComparison.Ordinal);
+        Assert.Equal("run", diagnostic.Properties["RootSymbol"]);
+        Assert.Contains("System.Math.Log", diagnostic.Properties["FailingSymbol"]);
+        Assert.Contains("ExistingAlgorithm.Calculate", diagnostic.Properties["CallPath"]);
+        Assert.Contains("outside", diagnostic.Properties["SuggestedReplacement"]);
     }
 
     private static string FormatDiagnostics(CudaTranspilationResult result) =>

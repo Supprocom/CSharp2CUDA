@@ -1201,12 +1201,6 @@ internal sealed class CudaOperationLowerer(
             ReportUnsupported(conversion.Syntax);
             return InvalidExpression(conversion.Syntax.GetLocation());
         }
-        if (conversion.Operand.Type?.IsValueType == true &&
-                conversion.Type?.IsReferenceType == true ||
-            conversion.Operand.Type?.IsReferenceType == true &&
-                conversion.Type?.IsValueType == true)
-            return ManagedAllocationExpression(conversion);
-
         var operand = LowerOperation(conversion.Operand);
         if (conversion.Conversion.IsIdentity ||
             plan.IsCudaInt32Type(conversion.OperatorMethod?.ContainingType))
@@ -1249,6 +1243,14 @@ internal sealed class CudaOperationLowerer(
                         : operand.Value.ViewMutability
                 }
             };
+        }
+
+        if (conversion.Operand.Type?.IsValueType == true &&
+                conversion.Type?.IsReferenceType == true ||
+            conversion.Operand.Type?.IsReferenceType == true &&
+                conversion.Type?.IsValueType == true)
+        {
+            return ManagedAllocationExpression(conversion);
         }
 
         var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
@@ -1516,6 +1518,7 @@ internal sealed class CudaOperationLowerer(
     private CudaExpressionIr LowerCompoundAssignment(ICompoundAssignmentOperation assignment)
     {
         if (assignment.Target is IPropertyReferenceOperation property &&
+            !IsArrayViewIndexer(property) &&
             !plan.TryGetProperty(property.Property, out _))
         {
             return LowerPropertyCompoundAssignment(property, assignment);
@@ -1560,6 +1563,7 @@ internal sealed class CudaOperationLowerer(
     private CudaExpressionIr LowerIncrement(IIncrementOrDecrementOperation increment)
     {
         if (increment.Target is IPropertyReferenceOperation property &&
+            !IsArrayViewIndexer(property) &&
             !plan.TryGetProperty(property.Property, out _))
         {
             return LowerPropertyIncrement(property, increment);
@@ -2154,6 +2158,12 @@ internal sealed class CudaOperationLowerer(
             ViewMutability = target.ViewMutability
         };
     }
+
+    private bool IsArrayViewIndexer(IPropertyReferenceOperation property) =>
+        property.Property.IsIndexer &&
+        property.Instance is not null &&
+        property.Arguments.Length == 1 &&
+        plan.IsArrayViewType(property.Instance.Type);
 
     private CudaPlaceIr LowerPointerElementPlace(IOperation element)
     {

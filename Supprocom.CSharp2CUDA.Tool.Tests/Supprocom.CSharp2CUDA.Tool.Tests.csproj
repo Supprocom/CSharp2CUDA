@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>Supprocom.CSharp2CUDA.Tool.Tests</AssemblyName>
+    <RootNamespace>Supprocom.CSharp2CUDA.Tool.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Supprocom.CSharp2CUDA.Tool\Supprocom.CSharp2CUDA.Tool.csproj" />
+    <ProjectReference Include="..\Supprocom.CSharp2CUDA.Compiler\Supprocom.CSharp2CUDA.Compiler.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="[17.14.1]" />
+    <PackageReference Include="xunit" Version="[2.9.3]" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="[3.1.5]">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+</Project>
