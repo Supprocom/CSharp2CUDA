@@ -328,9 +328,32 @@ $markedLimit = [Math]::Max(
 $buildPass = $unmarkedDelta -le $unmarkedLimit -and $markedDelta -le $markedLimit
 $samples | Export-Csv -LiteralPath (Join-Path $evidenceRoot 'build-samples.csv') -NoTypeInformation
 
-$processor = Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name
-$computer = Get-CimInstance Win32_ComputerSystem
-$video = @(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name)
+$processor = [System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString()
+if (-not [string]::IsNullOrWhiteSpace($env:PROCESSOR_IDENTIFIER)) {
+    $processor = $env:PROCESSOR_IDENTIFIER
+}
+elseif (Test-Path -LiteralPath '/proc/cpuinfo') {
+    $processorLine = Get-Content -LiteralPath '/proc/cpuinfo' |
+        Where-Object { $_ -match '^model name\s*:' } |
+        Select-Object -First 1
+    if (-not [string]::IsNullOrWhiteSpace($processorLine)) {
+        $processor = ($processorLine -split ':', 2)[1].Trim()
+    }
+}
+$memoryBytes = [GC]::GetGCMemoryInfo().TotalAvailableMemoryBytes
+if (Test-Path -LiteralPath '/proc/meminfo') {
+    $memoryLine = Get-Content -LiteralPath '/proc/meminfo' |
+        Where-Object { $_ -match '^MemTotal:\s+(\d+)\s+kB$' } |
+        Select-Object -First 1
+    if ($memoryLine -match '^MemTotal:\s+(\d+)\s+kB$') {
+        $memoryBytes = [long]$Matches[1] * 1KB
+    }
+}
+$video = @()
+$nvidiaSmi = Get-Command 'nvidia-smi' -ErrorAction SilentlyContinue
+if ($null -ne $nvidiaSmi) {
+    $video = @(& $nvidiaSmi.Source '--query-gpu=name' '--format=csv,noheader' 2>$null)
+}
 $sdk = (Invoke-Process -Name 'dotnet-version' -FileName 'dotnet' -Arguments @('--version')).Output.Trim()
 $nvrtcPath = $env:CSHARP2CUDA_NVRTC_LIBRARY
 $nvrtcHash = if (-not [string]::IsNullOrWhiteSpace($nvrtcPath) -and
@@ -345,10 +368,10 @@ $summary = [ordered]@{
     PackageVersion = $PackageVersion
     PackageSha256 = $packageHash
     DotNetSdk = $sdk
-    OperatingSystem = [Environment]::OSVersion.ToString()
+    OperatingSystem = [System.Runtime.InteropServices.RuntimeInformation]::OSDescription
     Processor = $processor
     LogicalProcessorCount = [Environment]::ProcessorCount
-    MemoryBytes = [long]$computer.TotalPhysicalMemory
+    MemoryBytes = $memoryBytes
     VideoControllers = $video
     NvrtcPath = $nvrtcPath
     NvrtcSha256 = $nvrtcHash

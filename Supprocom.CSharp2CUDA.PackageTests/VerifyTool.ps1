@@ -148,8 +148,13 @@ Invoke-Process -Name 'tool-install' -FileName 'dotnet' -Arguments @(
     '--no-cache'
 ) | Out-Null
 
-$toolExecutable = Join-Path $toolRoot 'csharp2cuda.exe'
-if (-not (Test-Path -LiteralPath $toolExecutable)) {
+$toolExecutable = @(
+    Join-Path $toolRoot 'csharp2cuda'
+    Join-Path $toolRoot 'csharp2cuda.exe'
+) | Where-Object {
+    Test-Path -LiteralPath $_ -PathType Leaf
+} | Select-Object -First 1
+if ([string]::IsNullOrWhiteSpace($toolExecutable)) {
     throw 'The installed csharp2cuda command is missing.'
 }
 

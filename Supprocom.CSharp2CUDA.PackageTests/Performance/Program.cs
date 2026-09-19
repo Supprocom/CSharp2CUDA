@@ -63,8 +63,8 @@ for (var iteration = 0; iteration < 10; iteration++)
         Encoding.UTF8.GetBytes(result.Source))));
 }
 
-const int reachabilityWarmupTranspilations = 20;
-const int reachabilityTranspilationsPerSample = 50;
+const int reachabilityWarmupTranspilations = 50;
+const int reachabilityTranspilationsPerSample = 200;
 var reachabilityCases = new[] { 32, 64, 128, 256 }
     .Select(operationCount => (
         OperationCount: operationCount,
