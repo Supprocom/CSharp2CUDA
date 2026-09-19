@@ -63,46 +63,69 @@ for (var iteration = 0; iteration < 10; iteration++)
         Encoding.UTF8.GetBytes(result.Source))));
 }
 
-var reachability = new List<ReachabilityMeasurement>();
-foreach (var operationCount in new[] { 32, 64, 128, 256 })
+const int reachabilityWarmupTranspilations = 20;
+const int reachabilityTranspilationsPerSample = 50;
+var reachabilityCases = new[] { 32, 64, 128, 256 }
+    .Select(operationCount => (
+        OperationCount: operationCount,
+        Compilation: CreateReachabilityCompilation(operationCount),
+        Options: CreateAttributedOptions(Path.GetTempPath()),
+        Samples: new List<double>()))
+    .ToArray();
+for (var caseIndex = reachabilityCases.Length - 1; caseIndex >= 0; caseIndex--)
 {
-    var compilation = CreateReachabilityCompilation(operationCount);
-    var options = CreateAttributedOptions(Path.GetTempPath());
-    var warm = CudaTranspiler.Transpile(compilation, options);
-    RequireSuccess(warm, $"The {operationCount}-operation warm-up failed.");
-    var samples = new List<double>();
-    for (var iteration = 0; iteration < 10; iteration++)
+    var reachabilityCase = reachabilityCases[caseIndex];
+    for (var warmupIndex = 0;
+         warmupIndex < reachabilityWarmupTranspilations;
+         warmupIndex++)
     {
-        var timer = Stopwatch.StartNew();
-        var result = CudaTranspiler.Transpile(compilation, options);
-        timer.Stop();
-        RequireSuccess(result, $"The {operationCount}-operation transpilation failed.");
-        samples.Add(timer.Elapsed.TotalMilliseconds);
+        var warm = CudaTranspiler.Transpile(
+            reachabilityCase.Compilation,
+            reachabilityCase.Options);
+        RequireSuccess(
+            warm,
+            $"The {reachabilityCase.OperationCount}-operation warm-up failed.");
     }
-    reachability.Add(new ReachabilityMeasurement(
-        operationCount,
-        samples,
-        Median(samples),
-        Percentile(samples, 0.95)));
 }
+for (var iteration = 0; iteration < 10; iteration++)
+{
+    for (var orderIndex = 0; orderIndex < reachabilityCases.Length; orderIndex++)
+    {
+        var caseIndex = iteration % 2 == 0
+            ? orderIndex
+            : reachabilityCases.Length - 1 - orderIndex;
+        var reachabilityCase = reachabilityCases[caseIndex];
+        var timer = Stopwatch.StartNew();
+        for (var batchIndex = 0;
+             batchIndex < reachabilityTranspilationsPerSample;
+             batchIndex++)
+        {
+            var result = CudaTranspiler.Transpile(
+                reachabilityCase.Compilation,
+                reachabilityCase.Options);
+            RequireSuccess(
+                result,
+                $"The {reachabilityCase.OperationCount}-operation transpilation failed.");
+        }
+        timer.Stop();
+        reachabilityCase.Samples.Add(
+            timer.Elapsed.TotalMilliseconds / reachabilityTranspilationsPerSample);
+    }
+}
+var reachability = reachabilityCases.Select(reachabilityCase =>
+    new ReachabilityMeasurement(
+        reachabilityCase.OperationCount,
+        reachabilityCase.Samples,
+        Median(reachabilityCase.Samples),
+        Percentile(reachabilityCase.Samples, 0.95))).ToList();
 
 var diagnosticP95 = Percentile(diagnosticSamples, 0.95);
-if (diagnosticP95 >= 1000.0)
-    throw new InvalidOperationException($"Design-time diagnostic p95 is {diagnosticP95:F3} ms.");
-if (deterministicHashes.Distinct(StringComparer.Ordinal).Count() != 1)
-    throw new InvalidOperationException("Repeated transpilation produced different CUDA bytes.");
-
 var reachabilityRatios = new List<double>();
 for (var index = 1; index < reachability.Count; index++)
 {
     var ratio = reachability[index].MedianMilliseconds /
         reachability[index - 1].MedianMilliseconds;
     reachabilityRatios.Add(ratio);
-    if (ratio > 2.2)
-    {
-        throw new InvalidOperationException(
-            $"Reachability growth ratio {ratio:F3} exceeds 2.2.");
-    }
 }
 
 var report = new PerformanceReport(
@@ -111,6 +134,8 @@ var report = new PerformanceReport(
     Environment.OSVersion.ToString(),
     Environment.ProcessorCount,
     Directory.GetFiles(corpusDirectory, "*.cs", SearchOption.AllDirectories).Length,
+    reachabilityWarmupTranspilations,
+    reachabilityTranspilationsPerSample,
     diagnosticSamples,
     Median(diagnosticSamples),
     diagnosticP95,
@@ -122,6 +147,16 @@ File.WriteAllText(
     outputPath,
     JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }) + "\n",
     new UTF8Encoding(false));
+if (diagnosticP95 >= 1000.0)
+    throw new InvalidOperationException($"Design-time diagnostic p95 is {diagnosticP95:F3} ms.");
+if (deterministicHashes.Distinct(StringComparer.Ordinal).Count() != 1)
+    throw new InvalidOperationException("Repeated transpilation produced different CUDA bytes.");
+var failingRatio = reachabilityRatios.FirstOrDefault(static ratio => ratio > 2.2);
+if (failingRatio > 2.2)
+{
+    throw new InvalidOperationException(
+        $"Reachability growth ratio {failingRatio:F3} exceeds 2.2.");
+}
 Console.WriteLine($"DesignTimeDiagnosticP95Milliseconds={diagnosticP95:F3}");
 Console.WriteLine($"DeterministicCudaSha256={deterministicHashes[0]}");
 Console.WriteLine($"MaximumReachabilityGrowthRatio={reachabilityRatios.Max():F3}");
@@ -260,6 +295,8 @@ internal sealed record PerformanceReport(
     string OperatingSystem,
     int ProcessorCount,
     int CorpusFileCount,
+    int ReachabilityWarmupTranspilations,
+    int ReachabilityTranspilationsPerSample,
     IReadOnlyList<double> DiagnosticSamplesMilliseconds,
     double DiagnosticMedianMilliseconds,
     double DiagnosticP95Milliseconds,
