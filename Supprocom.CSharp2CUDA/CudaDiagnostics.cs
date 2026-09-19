@@ -199,6 +199,30 @@ internal static class CudaDiagnostics
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    public static readonly DiagnosticDescriptor UnsupportedReachableMethod = new(
+        "CS2CUDA025",
+        "Reachable method is not supported",
+        "Method '{0}' is not GPU-portable. Call path: {1}. Reason: {2}.",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor MissingReachableBody = new(
+        "CS2CUDA026",
+        "Reachable method body is missing",
+        "Method '{0}' has no source body or supported mapping. Call path: {1}.",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor RecursiveCall = new(
+        "CS2CUDA027",
+        "Recursive CUDA call is not supported",
+        "Recursive CUDA call path '{0}' is not supported",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public static ImmutableArray<DiagnosticDescriptor> All { get; } =
     [
         MissingTranslationUnit,
@@ -224,6 +248,9 @@ internal static class CudaDiagnostics
         InvalidOutputPath,
         ConflictingOutputPaths,
         BuildFailure,
-        InvalidInlineArray
+        InvalidInlineArray,
+        UnsupportedReachableMethod,
+        MissingReachableBody,
+        RecursiveCall
     ];
 }

@@ -37,6 +37,38 @@ public sealed class CudaLogTests
         Assert.DoesNotContain("Cuda.Log", result.Source, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Transpile_InfersSourceLookalikeWithoutMappingItToCudaLog()
+    {
+        const string source = """
+            using Supprocom.CSharp2CUDA;
+
+            internal static class CudaLookalike
+            {
+                public static double Log(double value)
+                {
+                    return value;
+                }
+            }
+
+            [TranspileToCUDA]
+            internal static class KernelModule
+            {
+                [CudaDevice]
+                private static double Run(double value)
+                {
+                    return CudaLookalike.Log(value);
+                }
+            }
+            """;
+
+        var result = CudaTestCompiler.Transpile(source);
+
+        Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
+        Assert.Contains("__device__ double cs2cuda_", result.Source, StringComparison.Ordinal);
+        Assert.DoesNotContain("return log(value);", result.Source, StringComparison.Ordinal);
+    }
+
     [Theory]
     [MemberData(nameof(InvalidLogSources))]
     public void Transpile_RejectsInvalidLogUse(string source, string diagnosticId)
@@ -190,30 +222,6 @@ public sealed class CudaLogTests
             }
             """,
             "CS2CUDA005"
-        },
-        {
-            """
-            using Supprocom.CSharp2CUDA;
-
-            internal static class CudaLookalike
-            {
-                public static double Log(double value)
-                {
-                    return value;
-                }
-            }
-
-            [TranspileToCUDA]
-            internal static class InvalidModule
-            {
-                [CudaDevice]
-                private static double Run(double value)
-                {
-                    return CudaLookalike.Log(value);
-                }
-            }
-            """,
-            "CS2CUDA006"
         }
     };
 

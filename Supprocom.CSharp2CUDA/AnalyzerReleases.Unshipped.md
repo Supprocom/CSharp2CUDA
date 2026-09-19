@@ -28,3 +28,6 @@ CS2CUDA021 | Supprocom.CSharp2CUDA | Error | Reports an invalid CUDA output path
 CS2CUDA022 | Supprocom.CSharp2CUDA | Error | Reports conflicting CUDA output paths.
 CS2CUDA023 | Supprocom.CSharp2CUDA | Error | Reports an automatic build transpilation failure.
 CS2CUDA024 | Supprocom.CSharp2CUDA | Error | Reports an invalid CUDA inline array.
+CS2CUDA025 | Supprocom.CSharp2CUDA | Error | Reports a reachable method that is not GPU-portable.
+CS2CUDA026 | Supprocom.CSharp2CUDA | Error | Reports a reachable method without a source body or supported mapping.
+CS2CUDA027 | Supprocom.CSharp2CUDA | Error | Reports a recursive CUDA call path.

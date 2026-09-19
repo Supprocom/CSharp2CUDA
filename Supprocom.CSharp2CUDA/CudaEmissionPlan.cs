@@ -1,7 +1,9 @@
 using System.Collections.Immutable;
+using System.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace Supprocom.CSharp2CUDA;
 
@@ -266,6 +268,7 @@ internal sealed class CudaEmissionPlan
 
     public CudaCallPlan? GetCallPlan(IMethodSymbol method)
     {
+        method = NormalizeMethod(method);
         if (functionPlans.TryGetValue(method, out var function))
             return new CudaCallPlan(CudaCallKind.PlannedFunction, function.EmittedName);
 
@@ -552,20 +555,18 @@ internal sealed class CudaEmissionPlan
                         RegisterStruct(unit, structure, structures);
                         break;
                     case MethodDeclarationSyntax method:
-                        RegisterFunction(unit, method, functions);
+                        if (HasCudaFunctionContract(unit.Model, method))
+                            RegisterFunction(unit, method, functions, isInferred: false);
                         break;
                     case FieldDeclarationSyntax field:
-                        RegisterConstantArray(unit, field, constants);
-                        break;
-                    default:
-                        diagnostics.Add(Diagnostic.Create(
-                            CudaDiagnostics.UnsupportedMember,
-                            member.GetLocation(),
-                            member.Kind().ToString()));
+                        if (HasCudaConstantContract(unit.Model, field))
+                            RegisterConstantArray(unit, field, constants);
                         break;
                 }
             }
         }
+
+        DiscoverReachableFunctions(functions);
 
         foreach (var structure in structures)
             ValidateStruct(structure);
@@ -697,9 +698,13 @@ internal sealed class CudaEmissionPlan
     private void RegisterFunction(
         CudaUnitPlan unit,
         MethodDeclarationSyntax syntax,
-        ICollection<CudaFunctionPlan> functions)
+        ICollection<CudaFunctionPlan> functions,
+        bool isInferred)
     {
         if (unit.Model.GetDeclaredSymbol(syntax) is not IMethodSymbol symbol)
+            return;
+        symbol = NormalizeMethod(symbol);
+        if (functionPlans.ContainsKey(symbol))
             return;
 
         var externalAttribute = GetAttribute(symbol, ExternalAttributeName);
@@ -707,13 +712,15 @@ internal sealed class CudaEmissionPlan
         var external = externalAttribute is not null || externalDevice is not null;
         var device = GetAttribute(symbol, DeviceAttributeName);
         var global = GetAttribute(symbol, GlobalAttributeName);
-        var kind = device is not null || externalDevice is not null
+        var kind = isInferred || device is not null || externalDevice is not null
             ? CudaFunctionKind.Device
             : global is not null
                 ? CudaFunctionKind.Global
                 : CudaFunctionKind.External;
         var namingAttribute = device ?? global ?? externalDevice;
-        var name = namingAttribute is null
+        var name = isInferred
+            ? CreateInferredFunctionName(symbol)
+            : namingAttribute is null
             ? symbol.Name
             : GetNamedString(namingAttribute, nameof(CudaDeviceAttribute.Name)) ?? symbol.Name;
         var location = namingAttribute is null
@@ -737,7 +744,8 @@ internal sealed class CudaEmissionPlan
             externalDevice is not null,
             device is not null,
             global is not null,
-            externalDevice is not null);
+            externalDevice is not null,
+            isInferred);
         functions.Add(function);
         functionPlans[symbol] = function;
 
@@ -1020,12 +1028,12 @@ internal sealed class CudaEmissionPlan
             syntax.TypeParameterList is not null ||
             syntax.ConstraintClauses.Count != 0 ||
             syntax.ExplicitInterfaceSpecifier is not null ||
-            !HasOnlyAttributes(
+            (!function.IsInferred && !HasOnlyAttributes(
                 syntax.AttributeLists,
                 ExternalAttributeName,
                 ExternalDeviceAttributeName,
                 DeviceAttributeName,
-                GlobalAttributeName))
+                GlobalAttributeName)))
         {
             ReportUnsupportedSyntax(syntax);
         }
@@ -1046,7 +1054,8 @@ internal sealed class CudaEmissionPlan
         }
         else if (!function.IsExternal &&
             !function.HasDeviceAttribute &&
-            !function.HasGlobalAttribute)
+            !function.HasGlobalAttribute &&
+            !function.IsInferred)
         {
             diagnostics.Add(Diagnostic.Create(
                 CudaDiagnostics.MissingFunctionKind,
@@ -1503,6 +1512,275 @@ internal sealed class CudaEmissionPlan
         }
         return method.Locations.FirstOrDefault() ?? Location.None;
     }
+
+    private bool HasCudaFunctionContract(
+        SemanticModel model,
+        MethodDeclarationSyntax syntax) =>
+        model.GetDeclaredSymbol(syntax) is IMethodSymbol symbol &&
+        (GetAttribute(symbol, ExternalAttributeName) is not null ||
+         GetAttribute(symbol, ExternalDeviceAttributeName) is not null ||
+         GetAttribute(symbol, DeviceAttributeName) is not null ||
+         GetAttribute(symbol, GlobalAttributeName) is not null);
+
+    private bool HasCudaConstantContract(
+        SemanticModel model,
+        FieldDeclarationSyntax syntax) =>
+        syntax.Declaration.Variables
+            .Select(variable => model.GetDeclaredSymbol(variable))
+            .OfType<IFieldSymbol>()
+            .Any(symbol => GetAttribute(symbol, ConstantAttributeName) is not null);
+
+    private void DiscoverReachableFunctions(List<CudaFunctionPlan> functions)
+    {
+        var roots = functions.Where(static function =>
+                !function.IsExternal &&
+                (function.HasDeviceAttribute || function.HasGlobalAttribute))
+            .ToArray();
+        var queue = new Queue<CudaFunctionPlan>(roots);
+        var visited = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
+        var parents = new Dictionary<IMethodSymbol, CudaCallParent?>(
+            SymbolEqualityComparer.Default);
+        var edges = new Dictionary<IMethodSymbol, List<CudaCallEdge>>(
+            SymbolEqualityComparer.Default);
+        foreach (var root in roots)
+            parents.TryAdd(root.Symbol, null);
+
+        while (queue.Count > 0)
+        {
+            var function = queue.Dequeue();
+            if (!visited.Add(function.Symbol) || function.IsExternal)
+                continue;
+
+            foreach (var invocation in EnumerateInvocations(function))
+            {
+                var target = NormalizeMethod(invocation.TargetMethod);
+                if (GetCallPlan(target) is { Kind: not CudaCallKind.PlannedFunction })
+                    continue;
+
+                if (!functionPlans.TryGetValue(target, out var targetFunction))
+                {
+                    if (!TryGetSourceMethod(target, out var syntax, out var model))
+                    {
+                        diagnostics.Add(Diagnostic.Create(
+                            CudaDiagnostics.MissingReachableBody,
+                            invocation.Syntax.GetLocation(),
+                            target.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
+                            BuildCallPath(function.Symbol, target, parents)));
+                        continue;
+                    }
+
+                    var unitSyntax = syntax.Ancestors().OfType<ClassDeclarationSyntax>()
+                        .FirstOrDefault();
+                    if (unitSyntax is null)
+                    {
+                        diagnostics.Add(Diagnostic.Create(
+                            CudaDiagnostics.UnsupportedReachableMethod,
+                            syntax.Identifier.GetLocation(),
+                            target.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
+                            BuildCallPath(function.Symbol, target, parents),
+                            "The method is not declared in a source class."));
+                        continue;
+                    }
+
+                    var hasContract = HasCudaFunctionContract(model, syntax);
+                    RegisterFunction(
+                        new CudaUnitPlan(unitSyntax, model),
+                        syntax,
+                        functions,
+                        isInferred: !hasContract);
+                    if (!functionPlans.TryGetValue(target, out targetFunction))
+                        continue;
+                }
+
+                if (targetFunction.IsExternal)
+                    continue;
+
+                if (!edges.TryGetValue(function.Symbol, out var functionEdges))
+                {
+                    functionEdges = [];
+                    edges.Add(function.Symbol, functionEdges);
+                }
+                functionEdges.Add(new CudaCallEdge(targetFunction.Symbol, invocation.Syntax.GetLocation()));
+                if (parents.TryAdd(
+                        targetFunction.Symbol,
+                        new CudaCallParent(function.Symbol, invocation.Syntax.GetLocation())))
+                {
+                    queue.Enqueue(targetFunction);
+                }
+            }
+        }
+
+        ValidateNoRecursion(roots, edges);
+    }
+
+    private static IEnumerable<IInvocationOperation> EnumerateInvocations(
+        CudaFunctionPlan function)
+    {
+        IOperation? operation = function.Syntax.Body is not null
+            ? function.Model.GetOperation(function.Syntax.Body)
+            : function.Syntax.ExpressionBody is not null
+                ? function.Model.GetOperation(function.Syntax.ExpressionBody.Expression)
+                : null;
+        if (operation is null)
+            return [];
+
+        return EnumerateOperations(operation)
+            .OfType<IInvocationOperation>()
+            .OrderBy(static invocation => invocation.Syntax.SpanStart)
+            .ToArray();
+    }
+
+    private static IEnumerable<IOperation> EnumerateOperations(IOperation operation)
+    {
+        yield return operation;
+        if (operation is ILocalFunctionOperation)
+            yield break;
+        foreach (var child in operation.ChildOperations)
+        {
+            foreach (var descendant in EnumerateOperations(child))
+                yield return descendant;
+        }
+    }
+
+    private bool TryGetSourceMethod(
+        IMethodSymbol method,
+        out MethodDeclarationSyntax syntax,
+        out SemanticModel model)
+    {
+        method = NormalizeMethod(method);
+        foreach (var syntaxReference in method.DeclaringSyntaxReferences
+                     .OrderBy(static reference => reference.SyntaxTree.FilePath, StringComparer.Ordinal)
+                     .ThenBy(static reference => reference.Span.Start))
+        {
+            if (syntaxReference.GetSyntax() is not MethodDeclarationSyntax candidate)
+                continue;
+            if (candidate.Body is null && candidate.ExpressionBody is null)
+                continue;
+            syntax = candidate;
+            model = GetSemanticModel(candidate);
+            return true;
+        }
+
+        syntax = null!;
+        model = null!;
+        return false;
+    }
+
+    private void ValidateNoRecursion(
+        IReadOnlyList<CudaFunctionPlan> roots,
+        IReadOnlyDictionary<IMethodSymbol, List<CudaCallEdge>> edges)
+    {
+        var states = new Dictionary<IMethodSymbol, int>(SymbolEqualityComparer.Default);
+        var stack = new List<IMethodSymbol>();
+        foreach (var root in roots)
+        {
+            if (Visit(root.Symbol))
+                return;
+        }
+
+        bool Visit(IMethodSymbol method)
+        {
+            states[method] = 1;
+            stack.Add(method);
+            if (edges.TryGetValue(method, out var calls))
+            {
+                foreach (var call in calls)
+                {
+                    if (!states.TryGetValue(call.Target, out var state))
+                    {
+                        if (Visit(call.Target))
+                            return true;
+                        continue;
+                    }
+                    if (state != 1)
+                        continue;
+
+                    var cycleStart = stack.FindIndex(item =>
+                        SymbolEqualityComparer.Default.Equals(item, call.Target));
+                    var cycle = stack.Skip(Math.Max(0, cycleStart))
+                        .Append(call.Target)
+                        .Select(FormatCallPathName);
+                    diagnostics.Add(Diagnostic.Create(
+                        CudaDiagnostics.RecursiveCall,
+                        call.Location,
+                        string.Join(" -> ", cycle)));
+                    return true;
+                }
+            }
+
+            stack.RemoveAt(stack.Count - 1);
+            states[method] = 2;
+            return false;
+        }
+    }
+
+    private string BuildCallPath(
+        IMethodSymbol caller,
+        IMethodSymbol target,
+        IReadOnlyDictionary<IMethodSymbol, CudaCallParent?> parents)
+    {
+        var path = new List<IMethodSymbol> { caller };
+        var current = caller;
+        while (parents.TryGetValue(current, out var parent) && parent is not null)
+        {
+            current = parent.Caller;
+            path.Add(current);
+        }
+        path.Reverse();
+        path.Add(target);
+        return string.Join(" -> ", path.Select(FormatCallPathName));
+    }
+
+    private string FormatCallPathName(IMethodSymbol method)
+    {
+        method = NormalizeMethod(method);
+        if (functionPlans.TryGetValue(method, out var function) &&
+            !function.IsInferred)
+        {
+            return function.EmittedName;
+        }
+        return method.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat);
+    }
+
+    private static IMethodSymbol NormalizeMethod(IMethodSymbol method) =>
+        method.PartialImplementationPart ?? method;
+
+    private static string CreateInferredFunctionName(IMethodSymbol method)
+    {
+        var identity = method.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+        var readable = NormalizeIdentifierPart(
+            $"{method.ContainingNamespace.ToDisplayString()}_{method.ContainingType.Name}_{method.Name}");
+        var hash = 14695981039346656037UL;
+        foreach (var value in Encoding.UTF8.GetBytes(identity))
+        {
+            hash ^= value;
+            hash *= 1099511628211UL;
+        }
+        return $"cs2cuda_{readable}_{hash:x16}";
+    }
+
+    private static string NormalizeIdentifierPart(string value)
+    {
+        var builder = new StringBuilder(value.Length);
+        var previousUnderscore = false;
+        foreach (var character in value)
+        {
+            var accepted = character is >= 'a' and <= 'z' or
+                >= 'A' and <= 'Z' or
+                >= '0' and <= '9';
+            if (accepted)
+            {
+                builder.Append(character);
+                previousUnderscore = false;
+            }
+            else if (!previousUnderscore)
+            {
+                builder.Append('_');
+                previousUnderscore = true;
+            }
+        }
+        return builder.ToString().Trim('_');
+    }
 }
 
 internal sealed record CudaUnitPlan(
@@ -1564,7 +1842,12 @@ internal sealed record CudaFunctionPlan(
     bool EmitsDeclaration,
     bool HasDeviceAttribute,
     bool HasGlobalAttribute,
-    bool HasExternalDeviceAttribute);
+    bool HasExternalDeviceAttribute,
+    bool IsInferred);
+
+internal sealed record CudaCallParent(IMethodSymbol Caller, Location Location);
+
+internal sealed record CudaCallEdge(IMethodSymbol Target, Location Location);
 
 internal enum CudaFunctionKind
 {
