@@ -13,7 +13,6 @@ jobs:
     timeout-minutes: 15
     env:
       CSHARP2CUDA_PACKAGE_VERSION: 0.3.0
-      CSHARP2CUDA_RUN_DIRECTORY: ${{ runner.temp }}/CSharp2CUDA
 
     steps:
       - name: Check out source
@@ -60,6 +59,8 @@ jobs:
 
       - name: Verify package build integration
         shell: pwsh
+        env:
+          CSHARP2CUDA_RUN_DIRECTORY: ${{ runner.temp }}/CSharp2CUDA
         run: >-
           ./Supprocom.CSharp2CUDA.PackageTests/Verify.ps1
           -PackageDirectory artifacts/package
@@ -70,6 +71,8 @@ jobs:
 
       - name: Verify installed tool
         shell: pwsh
+        env:
+          CSHARP2CUDA_RUN_DIRECTORY: ${{ runner.temp }}/CSharp2CUDA
         run: >-
           ./Supprocom.CSharp2CUDA.PackageTests/VerifyTool.ps1
           -PackageDirectory artifacts/package
@@ -78,6 +81,8 @@ jobs:
 
       - name: Verify exact-package source suite
         shell: pwsh
+        env:
+          CSHARP2CUDA_RUN_DIRECTORY: ${{ runner.temp }}/CSharp2CUDA
         run: >-
           ./Supprocom.CSharp2CUDA.PackageTests/VerifySourceSuite.ps1
           -PackageDirectory artifacts/package
@@ -85,3 +90,14 @@ jobs:
           -PackageVersion $env:CSHARP2CUDA_PACKAGE_VERSION
           -ResultsDirectory (Join-Path
           $env:CSHARP2CUDA_RUN_DIRECTORY 'package-source-tests/trx')
+
+      - name: Retain exact packages and verification evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: CSharp2CUDA-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            artifacts/package
+            ${{ runner.temp }}/CSharp2CUDA/**/evidence
+            ${{ runner.temp }}/CSharp2CUDA/**/trx
