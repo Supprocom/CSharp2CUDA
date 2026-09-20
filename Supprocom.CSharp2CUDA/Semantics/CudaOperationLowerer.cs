@@ -980,6 +980,7 @@ internal sealed class CudaOperationLowerer(
         end = MaterializeValue(end, prefix);
         var sliceCode =
             $"({target.Code}).slice({start.Code}, ({end.Code}) - ({start.Code}))";
+        var resultMutability = target.ViewMutability;
         if (target.Type is IArrayTypeSymbol { Rank: 1 } array &&
             resultType is IArrayTypeSymbol)
         {
@@ -995,6 +996,7 @@ internal sealed class CudaOperationLowerer(
             sliceCode =
                 $"csharp2cuda_copy_array({sliceCode}, {storageName}, " +
                 $"{CudaEmissionPlan.MaximumFixedLocalElementCount})";
+            resultMutability = CudaViewMutability.Writable;
         }
         return new CudaExpressionIr(
             prefix.ToImmutable(),
@@ -1005,7 +1007,7 @@ internal sealed class CudaOperationLowerer(
                 false,
                 location)
             {
-                ViewMutability = target.ViewMutability
+                ViewMutability = resultMutability
             });
     }
 

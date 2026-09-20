@@ -2807,48 +2807,375 @@ internal sealed class CudaEmissionPlan
 
     private void AnalyzeViewParameters(IEnumerable<CudaFunctionPlan> functions)
     {
-        foreach (var function in functions.Where(static item => !item.IsExternal))
+        var candidates = functions.Where(static item => !item.IsExternal).ToArray();
+        bool changed;
+        do
         {
-            var root = function.Syntax.Body is not null
-                ? function.Model.GetOperation(function.Syntax.Body)
-                : function.Syntax.ExpressionBodyExpression is not null
-                    ? function.Model.GetOperation(function.Syntax.ExpressionBodyExpression)
-                    : null;
-            if (root is null)
-                continue;
-
-            foreach (var operation in EnumerateOperations(root))
+            changed = false;
+            foreach (var function in candidates)
             {
-                IOperation? target = operation switch
-                {
-                    ISimpleAssignmentOperation assignment => assignment.Target,
-                    ICompoundAssignmentOperation assignment => assignment.Target,
-                    IIncrementOrDecrementOperation increment => increment.Target,
-                    IArgumentOperation argument when argument.Parameter?.RefKind is
-                        RefKind.Ref or RefKind.Out => argument.Value,
-                    IReturnOperation returned when
-                        (function.Symbol.ReturnsByRef ||
-                         function.Symbol.ReturnsByRefReadonly) => returned.ReturnedValue,
-                    _ => null
-                };
-                if (target is null)
+                var root = GetFunctionOperation(function);
+                if (root is null)
                     continue;
 
                 foreach (var parameter in function.Symbol.Parameters.Where(parameter =>
-                             IsArrayViewType(parameter.Type) &&
-                             IsRootedInParameter(target, parameter)))
+                             IsWritableViewType(parameter.Type) &&
+                             !writableViewParameters.Contains(parameter)))
                 {
-                    writableViewParameters.Add(parameter);
+                    DiscoverViewAliases(
+                        function,
+                        root,
+                        parameter,
+                        out var aliases,
+                        out var referenceAliases);
+                    if (RequiresWritableView(
+                            function,
+                            root,
+                            aliases,
+                            referenceAliases))
+                    {
+                        changed |= writableViewParameters.Add(parameter);
+                    }
                 }
             }
         }
+        while (changed);
     }
 
-    private static bool IsRootedInParameter(IOperation operation, IParameterSymbol parameter)
+    private bool IsWritableViewType(ITypeSymbol? type) =>
+        type is IArrayTypeSymbol { Rank: 1 } ||
+        symbols.IsSpanType(type, out var readOnly) && !readOnly;
+
+    private void DiscoverViewAliases(
+        CudaFunctionPlan function,
+        IOperation root,
+        IParameterSymbol parameter,
+        out HashSet<ISymbol> aliases,
+        out HashSet<ISymbol> referenceAliases)
     {
-        if (operation is IParameterReferenceOperation reference)
-            return SymbolEqualityComparer.Default.Equals(reference.Parameter, parameter);
-        return operation.ChildOperations.Any(child => IsRootedInParameter(child, parameter));
+        aliases = new HashSet<ISymbol>(SymbolEqualityComparer.Default) { parameter };
+        referenceAliases = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        bool changed;
+        do
+        {
+            changed = false;
+            foreach (var operation in EnumerateOperations(root))
+            {
+                switch (operation)
+                {
+                    case IVariableDeclaratorOperation
+                    {
+                        Symbol: ILocalSymbol local,
+                        Initializer.Value: { } value
+                    }:
+                        if (local.RefKind != RefKind.None &&
+                            IsViewReferenceDerived(
+                                value,
+                                function,
+                                aliases,
+                                referenceAliases))
+                        {
+                            changed |= referenceAliases.Add(local);
+                        }
+                        else if (local.RefKind == RefKind.None &&
+                            IsArrayViewType(local.Type) &&
+                            IsViewAliasDerived(value, function, aliases))
+                        {
+                            changed |= aliases.Add(local);
+                        }
+                        break;
+                    case ISimpleAssignmentOperation
+                    {
+                        Target: ILocalReferenceOperation target,
+                        Value: { } value
+                    }:
+                        if (target.Local.RefKind != RefKind.None &&
+                            IsViewReferenceDerived(
+                                value,
+                                function,
+                                aliases,
+                                referenceAliases))
+                        {
+                            changed |= referenceAliases.Add(target.Local);
+                        }
+                        else if (target.Local.RefKind == RefKind.None &&
+                            IsArrayViewType(target.Local.Type) &&
+                            IsViewAliasDerived(value, function, aliases))
+                        {
+                            changed |= aliases.Add(target.Local);
+                        }
+                        break;
+                }
+            }
+        }
+        while (changed);
+    }
+
+    private bool RequiresWritableView(
+        CudaFunctionPlan function,
+        IOperation root,
+        ISet<ISymbol> aliases,
+        ISet<ISymbol> referenceAliases)
+    {
+        if (function.Syntax.Body is null &&
+            IsWritableViewType(function.Symbol.ReturnType) &&
+            IsViewAliasDerived(root, function, aliases))
+        {
+            return true;
+        }
+
+        foreach (var operation in EnumerateOperations(root))
+        {
+            if (operation is IVariableDeclaratorOperation
+                {
+                    Symbol: ILocalSymbol { RefKind: RefKind.Ref },
+                    Initializer.Value: { } reference
+                } &&
+                IsViewReferenceDerived(
+                    reference,
+                    function,
+                    aliases,
+                    referenceAliases))
+            {
+                return true;
+            }
+
+            if (operation is IForEachLoopOperation loop &&
+                loop.Syntax is ForEachStatementSyntax syntax &&
+                function.Model.GetDeclaredSymbol(syntax) is ILocalSymbol
+                {
+                    RefKind: RefKind.Ref
+                } &&
+                IsViewAliasDerived(loop.Collection, function, aliases))
+            {
+                return true;
+            }
+
+            IOperation? writeTarget = operation switch
+            {
+                ISimpleAssignmentOperation assignment => assignment.Target,
+                ICompoundAssignmentOperation assignment => assignment.Target,
+                IIncrementOrDecrementOperation increment => increment.Target,
+                IArgumentOperation argument when argument.Parameter?.RefKind is
+                    RefKind.Ref or RefKind.Out => argument.Value,
+                IReturnOperation returned when function.Symbol.ReturnsByRef =>
+                    returned.ReturnedValue,
+                _ => null
+            };
+            if (writeTarget is not null &&
+                IsViewWriteTargetDerived(
+                    writeTarget,
+                    function,
+                    aliases,
+                    referenceAliases))
+            {
+                return true;
+            }
+
+            if (operation is IReturnOperation { ReturnedValue: { } returnedView } &&
+                IsWritableViewType(function.Symbol.ReturnType) &&
+                IsViewAliasDerived(returnedView, function, aliases))
+            {
+                return true;
+            }
+
+            if (operation is IInvocationOperation invocation &&
+                InvocationRequiresWritableView(invocation, function, aliases))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private bool InvocationRequiresWritableView(
+        IInvocationOperation invocation,
+        CudaFunctionPlan caller,
+        ISet<ISymbol> aliases)
+    {
+        var target = ResolveMethod(invocation.TargetMethod, caller);
+        var call = GetCallPlan(target);
+        if (call?.Kind == CudaCallKind.AsSpanView)
+        {
+            return InvocationViewInputs(invocation)
+                .Any(value => IsViewAliasDerived(value, caller, aliases));
+        }
+        if (call?.Kind is CudaCallKind.ClearView or CudaCallKind.FillView)
+        {
+            return invocation.Instance is not null &&
+                IsViewAliasDerived(invocation.Instance, caller, aliases);
+        }
+        if (call?.Kind is CudaCallKind.CopyView or CudaCallKind.TryCopyView)
+        {
+            return invocation.Arguments.Any(argument =>
+                IsViewAliasDerived(argument.Value, caller, aliases));
+        }
+        if (!TryGetFunction(target, out var targetFunction))
+            return false;
+
+        var reduced = invocation.TargetMethod.ReducedFrom is not null;
+        if (reduced &&
+            invocation.Instance is not null &&
+            targetFunction.Symbol.Parameters.Length > 0 &&
+            writableViewParameters.Contains(targetFunction.Symbol.Parameters[0]) &&
+            IsViewAliasDerived(invocation.Instance, caller, aliases))
+        {
+            return true;
+        }
+        foreach (var argument in invocation.Arguments)
+        {
+            if (argument.Parameter is null)
+                continue;
+            var ordinal = argument.Parameter.Ordinal + (reduced ? 1 : 0);
+            if ((uint)ordinal < (uint)targetFunction.Symbol.Parameters.Length &&
+                writableViewParameters.Contains(targetFunction.Symbol.Parameters[ordinal]) &&
+                IsViewAliasDerived(argument.Value, caller, aliases))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static IEnumerable<IOperation> InvocationViewInputs(
+        IInvocationOperation invocation)
+    {
+        if (invocation.Instance is not null)
+            yield return invocation.Instance;
+        foreach (var argument in invocation.Arguments)
+            yield return argument.Value;
+    }
+
+    private bool IsViewAliasDerived(
+        IOperation operation,
+        CudaFunctionPlan function,
+        ISet<ISymbol> aliases)
+    {
+        while (operation is IConversionOperation conversion)
+            operation = conversion.Operand;
+        if (!IsArrayViewType(operation.Type))
+            return false;
+        if (operation is ILocalReferenceOperation local)
+            return aliases.Contains(local.Local);
+        if (operation is IParameterReferenceOperation parameter)
+            return aliases.Contains(parameter.Parameter);
+        if (operation is IArrayElementReferenceOperation
+            {
+                ArrayReference: { } array,
+                Indices: [IRangeOperation]
+            })
+        {
+            return operation.Type is not IArrayTypeSymbol &&
+                IsViewAliasDerived(array, function, aliases);
+        }
+        if (operation is IImplicitIndexerReferenceOperation
+            {
+                Instance: { } instance,
+                Argument: IRangeOperation
+            })
+        {
+            return operation.Type is not IArrayTypeSymbol &&
+                IsViewAliasDerived(instance, function, aliases);
+        }
+        if (operation is IConditionalOperation conditional)
+        {
+            return IsViewAliasDerived(conditional.WhenTrue, function, aliases) ||
+                conditional.WhenFalse is not null &&
+                IsViewAliasDerived(conditional.WhenFalse, function, aliases);
+        }
+        if (operation is ICoalesceOperation coalesce)
+        {
+            return IsViewAliasDerived(coalesce.Value, function, aliases) ||
+                IsViewAliasDerived(coalesce.WhenNull, function, aliases);
+        }
+        if (operation is IInvocationOperation invocation)
+        {
+            var target = ResolveMethod(invocation.TargetMethod, function);
+            if (TryGetFunction(target, out var targetFunction) &&
+                targetFunction.Captures.Any(capture => aliases.Contains(capture.Symbol)))
+            {
+                return true;
+            }
+            return InvocationViewInputs(invocation)
+                .Any(value => IsViewAliasDerived(value, function, aliases));
+        }
+        return false;
+    }
+
+    private bool IsViewReferenceDerived(
+        IOperation operation,
+        CudaFunctionPlan function,
+        ISet<ISymbol> aliases,
+        ISet<ISymbol> referenceAliases)
+    {
+        while (operation is IConversionOperation conversion)
+            operation = conversion.Operand;
+        if (operation is ILocalReferenceOperation local)
+            return referenceAliases.Contains(local.Local);
+        if (operation is IArrayElementReferenceOperation element)
+            return IsViewAliasDerived(element.ArrayReference, function, aliases);
+        if (operation is IImplicitIndexerReferenceOperation indexer)
+            return IsViewAliasDerived(indexer.Instance, function, aliases);
+        if (operation is IPropertyReferenceOperation
+            {
+                Property.IsIndexer: true,
+                Instance: { } instance
+            })
+        {
+            return IsViewAliasDerived(instance, function, aliases);
+        }
+        if (operation is IFieldReferenceOperation { Instance: { } fieldInstance })
+        {
+            return IsViewReferenceDerived(
+                fieldInstance,
+                function,
+                aliases,
+                referenceAliases);
+        }
+        if (operation is IConditionalOperation conditional)
+        {
+            return IsViewReferenceDerived(
+                    conditional.WhenTrue,
+                    function,
+                    aliases,
+                    referenceAliases) ||
+                conditional.WhenFalse is not null &&
+                IsViewReferenceDerived(
+                    conditional.WhenFalse,
+                    function,
+                    aliases,
+                    referenceAliases);
+        }
+        if (operation is IInvocationOperation invocation &&
+            (invocation.TargetMethod.ReturnsByRef || invocation.TargetMethod.ReturnsByRefReadonly))
+        {
+            return InvocationViewInputs(invocation).Any(value =>
+                IsViewAliasDerived(value, function, aliases) ||
+                IsViewReferenceDerived(value, function, aliases, referenceAliases));
+        }
+        return false;
+    }
+
+    private bool IsViewWriteTargetDerived(
+        IOperation operation,
+        CudaFunctionPlan function,
+        ISet<ISymbol> aliases,
+        ISet<ISymbol> referenceAliases)
+    {
+        if (IsViewReferenceDerived(operation, function, aliases, referenceAliases))
+            return true;
+        return operation switch
+        {
+            IArrayElementReferenceOperation element =>
+                IsViewAliasDerived(element.ArrayReference, function, aliases),
+            IImplicitIndexerReferenceOperation indexer =>
+                IsViewAliasDerived(indexer.Instance, function, aliases),
+            IPropertyReferenceOperation { Instance: { } instance } =>
+                IsViewWriteTargetDerived(instance, function, aliases, referenceAliases),
+            IFieldReferenceOperation { Instance: { } instance } =>
+                IsViewWriteTargetDerived(instance, function, aliases, referenceAliases),
+            _ => false
+        };
     }
 
     private bool IsFunctionPure(CudaFunctionPlan function)

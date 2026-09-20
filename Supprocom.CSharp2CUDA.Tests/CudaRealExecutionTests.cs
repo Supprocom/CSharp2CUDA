@@ -15,6 +15,15 @@ public sealed class CudaRealExecutionTests
         Assert.DoesNotContain("PortableScore score = seed;", result.Source, StringComparison.Ordinal);
         Assert.Contains("PortableScore score = cs2cuda_", result.Source, StringComparison.Ordinal);
         Assert.Contains("csharp2cuda_copy_array", result.Source, StringComparison.Ordinal);
+        Assert.Contains(".as_span()", result.Source, StringComparison.Ordinal);
+        Assert.Contains(
+            "csharp2cuda_array_view<int> values",
+            result.Source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "csharp2cuda_array_view<int> copy = csharp2cuda_copy_array",
+            result.Source,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("csharp2cuda_invalid", result.Source, StringComparison.Ordinal);
     }
 
@@ -201,13 +210,28 @@ public sealed class CudaRealExecutionTests
     {
         using var runtime = CreateRuntime();
         var output = runtime.Allocate<int>([0]);
+        var spanValues = runtime.Allocate<int>([1, 2, 3, 4, 5]);
+        var spanOutput = runtime.Allocate<int>([0]);
+        var rangeValues = runtime.Allocate<int>([1, 2, 3, 4]);
+        var rangeOutput = runtime.Allocate<int>([0]);
         try
         {
             runtime.Launch("portable_profile_expansion", 1, 1, 0, 5, output);
+            runtime.Launch("parameter_span_update", 1, 1, 0, spanValues, 5, 9, spanOutput);
+            runtime.Launch("parameter_range_copy", 1, 1, 0, rangeValues, 4, rangeOutput);
+
             Assert.Equal(47, runtime.Read<int>(output, 1)[0]);
+            Assert.Equal(9, runtime.Read<int>(spanOutput, 1)[0]);
+            Assert.Equal([0, 9, 9, 9, 9], runtime.Read<int>(spanValues, 5));
+            Assert.Equal(212, runtime.Read<int>(rangeOutput, 1)[0]);
+            Assert.Equal([1, 2, 3, 4], runtime.Read<int>(rangeValues, 4));
         }
         finally
         {
+            runtime.Free(rangeOutput);
+            runtime.Free(rangeValues);
+            runtime.Free(spanOutput);
+            runtime.Free(spanValues);
             runtime.Free(output);
         }
     }
@@ -286,6 +310,29 @@ public sealed class CudaRealExecutionTests
                 copy[0] = 10;
                 return selected + selectedCaptured + selectedSum + copy[0] +
                     values[1] + observed + (sameScore ? 1 : 0);
+            }
+        }
+
+        internal static class ParameterViewAlgorithm
+        {
+            public static int Update(int[] values, int replacement)
+            {
+                Span<int> all = values.AsSpan();
+                Span<int> middle = all[1..^1];
+                middle.Fill(replacement);
+                Span<int> destination = all[..middle.Length];
+                middle.CopyTo(destination);
+                bool copied = middle.TryCopyTo(destination);
+                all[^1] = copied ? all[^2] : -1;
+                all[0..1].Clear();
+                return all[^1];
+            }
+
+            public static int CopyAndMutate(int[] values)
+            {
+                int[] copy = values[1..^1];
+                copy[0] += 10;
+                return values[1] * 100 + copy[0];
             }
         }
 
@@ -445,6 +492,25 @@ public sealed class CudaRealExecutionTests
             private static void PortableProfileExpansion(int seed, int* output)
             {
                 output[0] = PortableAlgorithm.Calculate(seed);
+            }
+
+            [CudaGlobal(Name = "parameter_span_update")]
+            private static void ParameterSpanUpdate(
+                int* values,
+                int count,
+                int replacement,
+                int* output)
+            {
+                output[0] = ParameterViewAlgorithm.Update(
+                    Cuda.Array(values, count),
+                    replacement);
+            }
+
+            [CudaGlobal(Name = "parameter_range_copy")]
+            private static void ParameterRangeCopy(int* values, int count, int* output)
+            {
+                output[0] = ParameterViewAlgorithm.CopyAndMutate(
+                    Cuda.Array(values, count));
             }
         }
         """;

@@ -679,10 +679,10 @@ internal sealed class CudaModuleEmitter(
             }
         };
 
-        template <typename T>
+        template <typename TSourceView, typename T>
         static __device__ __forceinline__ csharp2cuda_array_view<T>
         csharp2cuda_copy_array(
-            csharp2cuda_array_view<T> source,
+            TSourceView source,
             T* destination,
             int capacity)
         {

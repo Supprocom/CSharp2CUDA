@@ -689,6 +689,11 @@ public sealed class CudaPortableProfileExpansionTests
 
             internal static class ExistingAlgorithm
             {
+                private static Span<int> Forward(int[] values) => values.AsSpan();
+
+                private static void FillForwarded(Span<int> values, int replacement) =>
+                    values.Fill(replacement);
+
                 public static int Update(int[] values, int replacement)
                 {
                     Span<int> all = values.AsSpan();
@@ -701,6 +706,13 @@ public sealed class CudaPortableProfileExpansionTests
                     all[0..1].Clear();
                     return all[^1];
                 }
+
+                public static int UpdateForwarded(int[] values, int replacement)
+                {
+                    Span<int> forwarded = Forward(values);
+                    FillForwarded(forwarded, replacement);
+                    return forwarded[0];
+                }
             }
 
             [TranspileToCUDA]
@@ -712,6 +724,9 @@ public sealed class CudaPortableProfileExpansionTests
                     output[0] = ExistingAlgorithm.Update(
                         Cuda.Array(values, count),
                         replacement);
+                    output[1] = ExistingAlgorithm.UpdateForwarded(
+                        Cuda.Array(values, count),
+                        replacement);
                 }
             }
             """;
@@ -719,6 +734,14 @@ public sealed class CudaPortableProfileExpansionTests
         var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
+        Assert.Contains(
+            "csharp2cuda_array_view<int> values",
+            result.Source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "csharp2cuda_readonly_array_view<int> values",
+            result.Source,
+            StringComparison.Ordinal);
         Assert.Contains(".as_span()", result.Source, StringComparison.Ordinal);
         Assert.Contains(".slice(", result.Source, StringComparison.Ordinal);
         Assert.Contains(".fill(replacement)", result.Source, StringComparison.Ordinal);
@@ -736,9 +759,8 @@ public sealed class CudaPortableProfileExpansionTests
 
             internal static class ExistingAlgorithm
             {
-                public static int Calculate(int seed)
+                public static int Calculate(int[] values)
                 {
-                    int[] values = [seed, 2, 3];
                     int[] copy = values[1..];
                     copy[0] = 9;
                     return values[1] + copy[0];
@@ -749,8 +771,8 @@ public sealed class CudaPortableProfileExpansionTests
             internal static unsafe class RangeAdapter
             {
                 [CudaGlobal]
-                private static void Run(int seed, int* output) =>
-                    output[0] = ExistingAlgorithm.Calculate(seed);
+                private static void Run(int* values, int count, int* output) =>
+                    output[0] = ExistingAlgorithm.Calculate(Cuda.Array(values, count));
             }
             """;
         const string rejectedSource = """
@@ -796,6 +818,14 @@ public sealed class CudaPortableProfileExpansionTests
 
         Assert.True(accepted.Succeeded, FormatDiagnostics(accepted.Diagnostics));
         Assert.Contains("csharp2cuda_copy_array", accepted.Source, StringComparison.Ordinal);
+        Assert.Contains(
+            "csharp2cuda_readonly_array_view<int> values",
+            accepted.Source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "csharp2cuda_array_view<int> copy = csharp2cuda_copy_array",
+            accepted.Source,
+            StringComparison.Ordinal);
         Assert.False(rejected.Succeeded);
         Assert.Empty(rejected.Source);
         Assert.Contains(
