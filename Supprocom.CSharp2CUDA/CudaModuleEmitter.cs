@@ -327,7 +327,7 @@ internal sealed class CudaModuleEmitter(
                 output.Write("const ");
             output.Write(plan.FormatType(
                 capture.Type,
-                false,
+                plan.IsArrayViewType(capture.Type) && !capture.IsWritableView,
                 capture.Symbol.Locations.FirstOrDefault() ?? function.Syntax.GetLocation()));
             if (capture.ByReference)
                 output.Write('*');

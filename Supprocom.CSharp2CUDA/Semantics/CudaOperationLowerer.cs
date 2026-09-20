@@ -4360,6 +4360,12 @@ internal sealed class CudaOperationLowerer(
             return CudaViewMutability.None;
         if (viewMutabilities.TryGetValue(symbol, out var mutability))
             return mutability;
+        if (function.TryGetCapture(symbol, out var capture))
+        {
+            return capture.IsWritableView
+                ? CudaViewMutability.Writable
+                : CudaViewMutability.ReadOnly;
+        }
         if (symbol is IParameterSymbol parameter)
         {
             return plan.IsViewParameterWritable(parameter)

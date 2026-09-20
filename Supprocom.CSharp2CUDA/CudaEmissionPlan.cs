@@ -2808,6 +2808,14 @@ internal sealed class CudaEmissionPlan
     private void AnalyzeViewParameters(IEnumerable<CudaFunctionPlan> functions)
     {
         var candidates = functions.Where(static item => !item.IsExternal).ToArray();
+        var writableViewCaptures = new Dictionary<IMethodSymbol, HashSet<ISymbol>>(
+            SymbolEqualityComparer.Default);
+        foreach (var function in candidates.Where(static item => item.IsClosureFunction))
+        {
+            writableViewCaptures.Add(
+                function.Symbol,
+                new HashSet<ISymbol>(SymbolEqualityComparer.Default));
+        }
         bool changed;
         do
         {
@@ -2832,14 +2840,53 @@ internal sealed class CudaEmissionPlan
                             function,
                             root,
                             aliases,
-                            referenceAliases))
+                            referenceAliases,
+                            writableViewCaptures))
                     {
                         changed |= writableViewParameters.Add(parameter);
+                    }
+                }
+
+                if (!writableViewCaptures.TryGetValue(
+                        function.Symbol,
+                        out var functionCaptures))
+                {
+                    continue;
+                }
+                foreach (var capture in function.Captures.Where(capture =>
+                             IsWritableViewType(capture.Type) &&
+                             !functionCaptures.Contains(capture.Symbol)))
+                {
+                    DiscoverViewAliases(
+                        function,
+                        root,
+                        capture.Symbol,
+                        out var aliases,
+                        out var referenceAliases);
+                    if (RequiresWritableView(
+                            function,
+                            root,
+                            aliases,
+                            referenceAliases,
+                            writableViewCaptures))
+                    {
+                        changed |= functionCaptures.Add(capture.Symbol);
                     }
                 }
             }
         }
         while (changed);
+
+        foreach (var function in candidates.Where(static item => item.IsClosureFunction))
+        {
+            var functionCaptures = writableViewCaptures[function.Symbol];
+            function.Captures = function.Captures
+                .Select(capture => capture with
+                {
+                    IsWritableView = functionCaptures.Contains(capture.Symbol)
+                })
+                .ToImmutableArray();
+        }
     }
 
     private bool IsWritableViewType(ITypeSymbol? type) =>
@@ -2849,11 +2896,11 @@ internal sealed class CudaEmissionPlan
     private void DiscoverViewAliases(
         CudaFunctionPlan function,
         IOperation root,
-        IParameterSymbol parameter,
+        ISymbol viewRoot,
         out HashSet<ISymbol> aliases,
         out HashSet<ISymbol> referenceAliases)
     {
-        aliases = new HashSet<ISymbol>(SymbolEqualityComparer.Default) { parameter };
+        aliases = new HashSet<ISymbol>(SymbolEqualityComparer.Default) { viewRoot };
         referenceAliases = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
         bool changed;
         do
@@ -2915,7 +2962,8 @@ internal sealed class CudaEmissionPlan
         CudaFunctionPlan function,
         IOperation root,
         ISet<ISymbol> aliases,
-        ISet<ISymbol> referenceAliases)
+        ISet<ISymbol> referenceAliases,
+        IReadOnlyDictionary<IMethodSymbol, HashSet<ISymbol>> writableViewCaptures)
     {
         if (function.Syntax.Body is null &&
             IsWritableViewType(function.Symbol.ReturnType) &&
@@ -2980,7 +3028,11 @@ internal sealed class CudaEmissionPlan
             }
 
             if (operation is IInvocationOperation invocation &&
-                InvocationRequiresWritableView(invocation, function, aliases))
+                InvocationRequiresWritableView(
+                    invocation,
+                    function,
+                    aliases,
+                    writableViewCaptures))
             {
                 return true;
             }
@@ -2991,9 +3043,12 @@ internal sealed class CudaEmissionPlan
     private bool InvocationRequiresWritableView(
         IInvocationOperation invocation,
         CudaFunctionPlan caller,
-        ISet<ISymbol> aliases)
+        ISet<ISymbol> aliases,
+        IReadOnlyDictionary<IMethodSymbol, HashSet<ISymbol>> writableViewCaptures)
     {
-        var target = ResolveMethod(invocation.TargetMethod, caller);
+        var target = TryGetDirectAnonymousFunction(invocation.Instance, out var anonymous)
+            ? ResolveMethod(anonymous.Symbol, caller)
+            : ResolveMethod(invocation.TargetMethod, caller);
         var call = GetCallPlan(target);
         if (call?.Kind == CudaCallKind.AsSpanView)
         {
@@ -3012,6 +3067,16 @@ internal sealed class CudaEmissionPlan
         }
         if (!TryGetFunction(target, out var targetFunction))
             return false;
+
+        if (writableViewCaptures.TryGetValue(
+                targetFunction.Symbol,
+                out var targetCaptures) &&
+            targetFunction.Captures.Any(capture =>
+                targetCaptures.Contains(capture.Symbol) &&
+                aliases.Contains(capture.Symbol)))
+        {
+            return true;
+        }
 
         var reduced = invocation.TargetMethod.ReducedFrom is not null;
         if (reduced &&
@@ -4203,7 +4268,10 @@ internal sealed record CudaCapturePlan(
     ITypeSymbol Type,
     string EmittedName,
     bool ByReference,
-    bool IsReadOnly);
+    bool IsReadOnly)
+{
+    public bool IsWritableView { get; init; }
+}
 
 internal sealed class CudaFunctionSource
 {

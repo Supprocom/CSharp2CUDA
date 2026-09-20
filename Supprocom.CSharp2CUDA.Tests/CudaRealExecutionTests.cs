@@ -24,6 +24,18 @@ public sealed class CudaRealExecutionTests
             "csharp2cuda_array_view<int> copy = csharp2cuda_copy_array",
             result.Source,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "csharp2cuda_array_view<int>* csharp2cuda_capture_values",
+            result.Source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "csharp2cuda_array_view<int>* csharp2cuda_capture_alias",
+            result.Source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "csharp2cuda_readonly_array_view<int> csharp2cuda_capture_values",
+            result.Source,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("csharp2cuda_invalid", result.Source, StringComparison.Ordinal);
     }
 
@@ -236,6 +248,26 @@ public sealed class CudaRealExecutionTests
         }
     }
 
+    [CudaFact]
+    public void Cuda_ExecutesWritableViewClosureCaptures()
+    {
+        using var runtime = CreateRuntime();
+        var values = runtime.Allocate<int>([10, 20, 30, 40]);
+        var output = runtime.Allocate<int>([0, 0]);
+        try
+        {
+            runtime.Launch("closure_view_captures", 1, 1, 0, values, 4, output);
+
+            Assert.Equal([11, 22, 33, 40], runtime.Read<int>(values, 4));
+            Assert.Equal([106, 40], runtime.Read<int>(output, 2));
+        }
+        finally
+        {
+            runtime.Free(output);
+            runtime.Free(values);
+        }
+    }
+
     private static CudaTestRuntime CreateRuntime()
     {
         var result = CudaTestCompiler.Transpile(IntegrationSource);
@@ -333,6 +365,40 @@ public sealed class CudaRealExecutionTests
                 int[] copy = values[1..^1];
                 copy[0] += 10;
                 return values[1] * 100 + copy[0];
+            }
+        }
+
+        internal static class CapturedViewAlgorithm
+        {
+            public static int Update(int[] values)
+            {
+                void MutateDirect() => values[0]++;
+                MutateDirect();
+
+                int[] alias = values;
+
+                void MutateAlias()
+                {
+                    Span<int> view = alias.AsSpan();
+                    view[1] += 2;
+                }
+
+                void Relay() => MutateAlias();
+                Relay();
+
+                ((Action)(() =>
+                {
+                    Span<int> view = alias.AsSpan();
+                    view[2] += 3;
+                }))();
+
+                return values[0] + alias[1] + alias[2] + values[3];
+            }
+
+            public static int ReadOnly(int[] values)
+            {
+                int Read() => values[3];
+                return Read();
             }
         }
 
@@ -511,6 +577,14 @@ public sealed class CudaRealExecutionTests
             {
                 output[0] = ParameterViewAlgorithm.CopyAndMutate(
                     Cuda.Array(values, count));
+            }
+
+            [CudaGlobal(Name = "closure_view_captures")]
+            private static void ClosureViewCaptures(int* values, int count, int* output)
+            {
+                int[] view = Cuda.Array(values, count);
+                output[0] = CapturedViewAlgorithm.Update(view);
+                output[1] = CapturedViewAlgorithm.ReadOnly(view);
             }
         }
         """;

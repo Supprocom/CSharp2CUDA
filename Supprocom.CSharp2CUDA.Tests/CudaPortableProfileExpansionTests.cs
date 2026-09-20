@@ -263,6 +263,92 @@ public sealed class CudaPortableProfileExpansionTests
     }
 
     [Fact]
+    public void Transpile_PropagatesWritableArrayAndSpanAliasesThroughClosureCaptures()
+    {
+        const string source = """
+            using System;
+            using Supprocom.CSharp2CUDA;
+
+            internal static class ExistingAlgorithm
+            {
+                public static int UpdateDirect(int[] values)
+                {
+                    void Mutate() => values[0]++;
+                    Mutate();
+                    return values[0];
+                }
+
+                public static int UpdateTransitive(int[] values)
+                {
+                    int[] alias = values;
+
+                    void MutateAlias()
+                    {
+                        Span<int> view = alias.AsSpan();
+                        view[1] += 2;
+                    }
+
+                    void Relay() => MutateAlias();
+                    Relay();
+                    return alias[1];
+                }
+
+                public static int UpdateLambda(int[] values)
+                {
+                    int[] alias = values;
+                    return ((Func<int>)(() =>
+                    {
+                        Span<int> view = alias.AsSpan();
+                        view[2] += 3;
+                        return view[2];
+                    }))();
+                }
+
+                public static int ReadOnly(int[] values)
+                {
+                    int Read() => values[3];
+                    return Read();
+                }
+            }
+
+            [TranspileToCUDA]
+            internal static unsafe class CaptureAdapter
+            {
+                [CudaGlobal]
+                private static void Run(int* values, int count, int* output)
+                {
+                    int[] view = Cuda.Array(values, count);
+                    output[0] = ExistingAlgorithm.UpdateDirect(view);
+                    output[1] = ExistingAlgorithm.UpdateTransitive(view);
+                    output[2] = ExistingAlgorithm.UpdateLambda(view);
+                    output[3] = ExistingAlgorithm.ReadOnly(view);
+                }
+            }
+            """;
+
+        var result = CudaTestCompiler.Transpile(source);
+
+        Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
+        Assert.Contains(
+            "csharp2cuda_array_view<int>* csharp2cuda_capture_values",
+            result.Source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "csharp2cuda_array_view<int>* csharp2cuda_capture_alias",
+            result.Source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "csharp2cuda_readonly_array_view<int> csharp2cuda_capture_values",
+            result.Source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "csharp2cuda_readonly_array_view<int> values",
+            result.Source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("csharp2cuda_invalid", result.Source, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Transpile_LowersClosedTuplesNestedDeconstructionAndEquality()
     {
         const string source = """
