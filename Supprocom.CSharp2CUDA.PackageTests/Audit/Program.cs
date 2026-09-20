@@ -52,9 +52,9 @@ ValidateEntries(nupkg, "nupkg");
 ValidateEntries(snupkg, "snupkg");
 ValidateEntries(toolNupkg, "tool nupkg");
 ValidateEntries(toolSnupkg, "tool snupkg");
-Require(nupkg.Entries.Count == 18, "The nupkg entry count is incorrect.");
+Require(nupkg.Entries.Count == 21, "The nupkg entry count is incorrect.");
 Require(snupkg.Entries.Count == 7, "The snupkg entry count is incorrect.");
-Require(toolNupkg.Entries.Count == 124, "The tool nupkg entry count is incorrect.");
+Require(toolNupkg.Entries.Count == 127, "The tool nupkg entry count is incorrect.");
 Require(toolSnupkg.Entries.Count == 8, "The tool snupkg entry count is incorrect.");
 
 RequireEntry(nupkg, "build/Supprocom.CSharp2CUDA.targets");
@@ -114,6 +114,18 @@ CompareEntry(
     nupkg,
     "docs/getting-started.md",
     Path.Combine(repositoryDirectory, "docs", "getting-started.md"));
+CompareEntry(
+    nupkg,
+    "docs/portable-csharp.md",
+    Path.Combine(repositoryDirectory, "docs", "portable-csharp.md"));
+CompareEntry(
+    nupkg,
+    "docs/cuda-interop.md",
+    Path.Combine(repositoryDirectory, "docs", "cuda-interop.md"));
+CompareEntry(
+    nupkg,
+    "docs/tool.md",
+    Path.Combine(repositoryDirectory, "docs", "tool.md"));
 
 var libraryBytes = ReadEntry(RequireEntry(
     nupkg,
@@ -243,6 +255,18 @@ CompareEntry(
     toolNupkg,
     "docs/getting-started.md",
     Path.Combine(repositoryDirectory, "docs", "getting-started.md"));
+CompareEntry(
+    toolNupkg,
+    "docs/portable-csharp.md",
+    Path.Combine(repositoryDirectory, "docs", "portable-csharp.md"));
+CompareEntry(
+    toolNupkg,
+    "docs/cuda-interop.md",
+    Path.Combine(repositoryDirectory, "docs", "cuda-interop.md"));
+CompareEntry(
+    toolNupkg,
+    "docs/tool.md",
+    Path.Combine(repositoryDirectory, "docs", "tool.md"));
 
 Console.WriteLine($"NupkgSha256={HashFile(nupkgPath)}");
 Console.WriteLine($"SnupkgSha256={HashFile(snupkgPath)}");

@@ -68,7 +68,7 @@ public sealed class ToolApplicationTests : IDisposable
         var projectText = File.ReadAllText(Path.Combine(output, "Algorithms.Cuda.csproj"));
         var adapter = File.ReadAllText(Path.Combine(output, "CudaAdapter.cs"));
         Assert.Contains(
-            "PackageReference Include=\"Supprocom.CSharp2CUDA\" Version=\"0.3.0\"",
+            "PackageReference Include=\"Supprocom.CSharp2CUDA\" Version=\"0.3.1\"",
             projectText,
             StringComparison.Ordinal);
         Assert.Contains(

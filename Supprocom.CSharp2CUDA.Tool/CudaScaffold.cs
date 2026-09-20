@@ -8,7 +8,7 @@ namespace Supprocom.CSharp2CUDA.Tool;
 
 internal static class CudaScaffoldBuilder
 {
-    public const string CorePackageVersion = "0.3.0";
+    public const string CorePackageVersion = "0.3.1";
 
     public static CudaScaffoldPlan Build(
         CudaProjectModel model,

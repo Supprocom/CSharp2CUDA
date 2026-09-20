@@ -22,6 +22,8 @@ internal sealed class CudaSymbolCatalog
         CudaInt32Type = ResolvePackageType(compilation, "Supprocom.CSharp2CUDA.CudaInt32");
         SpanType = compilation.GetTypeByMetadataName("System.Span`1");
         ReadOnlySpanType = compilation.GetTypeByMetadataName("System.ReadOnlySpan`1");
+        IndexType = compilation.GetTypeByMetadataName("System.Index");
+        MemoryExtensionsType = compilation.GetTypeByMetadataName("System.MemoryExtensions");
         StructLayoutAttributeType = compilation.GetTypeByMetadataName(
             "System.Runtime.InteropServices.StructLayoutAttribute");
         FieldOffsetAttributeType = compilation.GetTypeByMetadataName(
@@ -164,6 +166,42 @@ internal sealed class CudaSymbolCatalog
         AddRuntime(compilation, "System.MathF", "Tan", "tanf", SpecialType.System_Single);
         AddRuntime(compilation, "System.MathF", "Tanh", "tanhf", SpecialType.System_Single);
         AddRuntime(compilation, "System.MathF", "Truncate", "truncf", SpecialType.System_Single);
+
+        foreach (var type in new[]
+        {
+            SpecialType.System_SByte,
+            SpecialType.System_Int16,
+            SpecialType.System_Int32,
+            SpecialType.System_Int64
+        })
+        {
+            AddRuntime(compilation, "System.Math", "Abs", "csharp2cuda_integral_abs", type);
+            AddRuntime(compilation, "System.Math", "Sign", "csharp2cuda_integral_sign", type);
+        }
+        foreach (var type in new[]
+        {
+            SpecialType.System_SByte,
+            SpecialType.System_Byte,
+            SpecialType.System_Int16,
+            SpecialType.System_UInt16,
+            SpecialType.System_Int32,
+            SpecialType.System_UInt32,
+            SpecialType.System_Int64,
+            SpecialType.System_UInt64
+        })
+        {
+            AddRuntime(compilation, "System.Math", "Min", "csharp2cuda_integral_minimum", type, type);
+            AddRuntime(compilation, "System.Math", "Max", "csharp2cuda_integral_maximum", type, type);
+            AddRuntime(
+                compilation,
+                "System.Math",
+                "Clamp",
+                "csharp2cuda_integral_clamp",
+                type,
+                type,
+                type);
+        }
+
         AddRuntime(compilation, "System.Double", "IsFinite", "isfinite", SpecialType.System_Double);
         AddRuntime(
             compilation,
@@ -212,10 +250,19 @@ internal sealed class CudaSymbolCatalog
         AddRuntime(compilation, "System.Numerics.BitOperations", "RotateRight", "csharp2cuda_u64_rotate_right", SpecialType.System_UInt64, SpecialType.System_Int32);
         AddRuntime(compilation, "System.Numerics.BitOperations", "Log2", "csharp2cuda_u32_log2", SpecialType.System_UInt32);
         AddRuntime(compilation, "System.Numerics.BitOperations", "Log2", "csharp2cuda_u64_log2", SpecialType.System_UInt64);
+        AddRuntime(compilation, "System.Numerics.BitOperations", "IsPow2", "csharp2cuda_is_pow2", SpecialType.System_Int32);
+        AddRuntime(compilation, "System.Numerics.BitOperations", "IsPow2", "csharp2cuda_is_pow2", SpecialType.System_Int64);
+        AddRuntime(compilation, "System.Numerics.BitOperations", "IsPow2", "csharp2cuda_is_pow2", SpecialType.System_UInt32);
+        AddRuntime(compilation, "System.Numerics.BitOperations", "IsPow2", "csharp2cuda_is_pow2", SpecialType.System_UInt64);
+        AddRuntime(compilation, "System.Numerics.BitOperations", "RoundUpToPowerOf2", "csharp2cuda_u32_round_up_to_power_of_two", SpecialType.System_UInt32);
+        AddRuntime(compilation, "System.Numerics.BitOperations", "RoundUpToPowerOf2", "csharp2cuda_u64_round_up_to_power_of_two", SpecialType.System_UInt64);
 
         AddRuntimeField(compilation, "System.Math", "E");
         AddRuntimeField(compilation, "System.Math", "PI");
         AddRuntimeField(compilation, "System.Math", "Tau");
+        AddRuntimeField(compilation, "System.MathF", "E");
+        AddRuntimeField(compilation, "System.MathF", "PI");
+        AddRuntimeField(compilation, "System.MathF", "Tau");
         foreach (var name in new[]
         {
             "Epsilon", "MaxValue", "MinValue", "NaN", "NegativeInfinity",
@@ -246,6 +293,10 @@ internal sealed class CudaSymbolCatalog
 
     public INamedTypeSymbol? ReadOnlySpanType { get; }
 
+    public INamedTypeSymbol? IndexType { get; }
+
+    public INamedTypeSymbol? MemoryExtensionsType { get; }
+
     public INamedTypeSymbol? StructLayoutAttributeType { get; }
 
     public INamedTypeSymbol? FieldOffsetAttributeType { get; }
@@ -271,6 +322,11 @@ internal sealed class CudaSymbolCatalog
             ReadOnlySpanType);
         return readOnly;
     }
+
+    public bool IsMemoryExtensionsType(ITypeSymbol? type) =>
+        IsType(type, MemoryExtensionsType);
+
+    public bool IsIndexType(ITypeSymbol? type) => IsType(type, IndexType);
 
     public bool TryGetRuntimeMethod(IMethodSymbol method, out string name) =>
         runtimeMethods.TryGetValue(method.OriginalDefinition, out name!);

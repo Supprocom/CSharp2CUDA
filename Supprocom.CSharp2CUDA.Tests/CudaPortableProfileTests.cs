@@ -649,7 +649,6 @@ public sealed class CudaPortableProfileTests
     }
 
     [Theory]
-    [InlineData("int[] values = new int[4];")]
     [InlineData("object value = new object();")]
     [InlineData("object value = 1;")]
     public void Transpile_RejectsManagedAllocationAndObjectStorage(string statement)

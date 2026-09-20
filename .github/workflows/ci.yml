@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      CSHARP2CUDA_PACKAGE_VERSION: 0.3.0
+      CSHARP2CUDA_PACKAGE_VERSION: 0.3.1
 
     steps:
       - name: Check out source

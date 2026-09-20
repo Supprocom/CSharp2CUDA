@@ -263,6 +263,70 @@ internal static class CudaDiagnostics
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    public static readonly DiagnosticDescriptor LocalStorageEscape = new(
+        "CS2CUDA033",
+        "Fixed local storage escapes",
+        "Fixed local storage '{0}' cannot escape its declaring CUDA function; keep every alias local and pass it only to nonescaping source helpers",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor ClosureEscape = new(
+        "CS2CUDA034",
+        "Closure cannot be lowered",
+        "Anonymous function or local function '{0}' escapes its statically known invocation and would require a managed delegate or closure",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InvalidReferenceEscape = new(
+        "CS2CUDA035",
+        "Reference lifetime cannot be preserved",
+        "Reference '{0}' cannot be emitted because its source is read-only or has a shorter CUDA lifetime",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InvalidPortableAbiType = new(
+        "CS2CUDA036",
+        "Device-internal type cannot cross the CUDA ABI",
+        "Type '{0}' is device-internal in CSharp2CUDA 0.3.1 and cannot be used at a global or external CUDA boundary",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor UnsupportedPattern = new(
+        "CS2CUDA037",
+        "Pattern is outside the portable subset",
+        "Pattern '{0}' is not portable; use constants, relational/logical patterns, discard, or var bindings",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor UnsupportedOperator = new(
+        "CS2CUDA038",
+        "User-defined operator cannot be lowered",
+        "Operator or conversion '{0}' does not have a reachable portable source body",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor UnsupportedRangeOperation = new(
+        "CS2CUDA039",
+        "Range or Span operation cannot be lowered",
+        "Range or Span operation '{0}' cannot preserve the required bounds, overlap, or mutability semantics",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor FixedLocalStorageLimit = new(
+        "CS2CUDA040",
+        "Fixed local storage is too large",
+        "Fixed local storage '{0}' has {1} elements; the portable limit is {2} elements per declaration",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public static ImmutableArray<DiagnosticDescriptor> All { get; } =
     [
         MissingTranslationUnit,
@@ -296,6 +360,14 @@ internal static class CudaDiagnostics
         InvalidGenericConstruction,
         ManagedAllocation,
         ViewEscape,
-        InvalidStructureLayout
+        InvalidStructureLayout,
+        LocalStorageEscape,
+        ClosureEscape,
+        InvalidReferenceEscape,
+        InvalidPortableAbiType,
+        UnsupportedPattern,
+        UnsupportedOperator,
+        UnsupportedRangeOperation,
+        FixedLocalStorageLimit
     ];
 }

@@ -13,6 +13,18 @@ public sealed class CudaMaintenanceRealExecutionTests
     private const int CompleteSequenceOffset = 80;
     private const int SequenceCount = 8;
 
+    [Fact]
+    public void Transpile_AcceptsFixedPointerStorageAtExternalDeviceBoundary()
+    {
+        var result = CudaTestCompiler.Transpile(
+            ExternalDeviceConsumerSource,
+            path: "ExternalDeviceConsumerModule.cs");
+
+        Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
+        Assert.Contains("_storage[3]", result.Source, StringComparison.Ordinal);
+        Assert.Contains("external_operation_dispatch", result.Source, StringComparison.Ordinal);
+    }
+
     [CudaFact]
     public async Task Cuda_MappedRingObservesHostClearsAndRejectsStaleHeaders()
     {

@@ -15,6 +15,7 @@ internal sealed class CudaOperationLowerer(
     private readonly SemanticModel semanticModel = function.Model;
     private readonly Dictionary<ISymbol, CudaViewMutability> viewMutabilities =
         new(SymbolEqualityComparer.Default);
+    private readonly Dictionary<SwitchStatementSyntax, string> patternSwitchBreakLabels = [];
     private int temporaryIndex;
     private int labelIndex;
 
@@ -52,14 +53,21 @@ internal sealed class CudaOperationLowerer(
         if (function.Syntax.Body is not null)
             return new CudaFunctionBodyIr(LowerBlock(function.Syntax.Body));
 
-        if (function.Syntax.ExpressionBody is { Expression: var expression })
+        if (function.Syntax.ExpressionBodyExpression is { } expression)
         {
+            var contextualConversion = FindContextualConversionOperation(
+                semanticModel.GetOperation(function.Syntax.Node),
+                expression);
             CudaStatementIr statement = function.Symbol.ReturnsVoid
                 ? new CudaExpressionStatementIr(
                     LowerExpression(expression),
                     expression.GetLocation())
                 : new CudaReturnStatementIr(
-                    LowerExpression(expression),
+                    function.Symbol.ReturnsByRef || function.Symbol.ReturnsByRefReadonly
+                        ? LowerReferenceExpression(expression)
+                        : contextualConversion is null
+                            ? LowerExpression(expression)
+                            : LowerOperation(contextualConversion),
                     expression.GetLocation());
             return new CudaFunctionBodyIr(new CudaBlockStatementIr(
                 [statement],
@@ -102,16 +110,31 @@ internal sealed class CudaOperationLowerer(
         ForStatementSyntax loop => LowerFor(loop),
         ForEachStatementSyntax loop => LowerForEach(loop),
         SwitchStatementSyntax selection => LowerSwitch(selection),
-        ReturnStatementSyntax returned => new CudaReturnStatementIr(
-            returned.Expression is null ? null : LowerExpression(returned.Expression),
-            returned.GetLocation()),
-        BreakStatementSyntax statement => new CudaBreakStatementIr(statement.GetLocation()),
+        ReturnStatementSyntax returned => LowerReturn(returned),
+        BreakStatementSyntax statement => LowerBreak(statement),
         ContinueStatementSyntax statement => new CudaContinueStatementIr(statement.GetLocation()),
         LocalFunctionStatementSyntax statement => new CudaEmptyStatementIr(
             statement.GetLocation()),
         EmptyStatementSyntax statement => new CudaEmptyStatementIr(statement.GetLocation()),
         _ => UnsupportedStatement(syntax)
     };
+
+    private CudaReturnStatementIr LowerReturn(ReturnStatementSyntax syntax)
+    {
+        if (syntax.Expression is null)
+            return new CudaReturnStatementIr(null, syntax.GetLocation());
+        var returned = semanticModel.GetOperation(syntax) is IReturnOperation operation
+            ? operation.ReturnedValue
+            : null;
+        var expression = function.Symbol.ReturnsByRef || function.Symbol.ReturnsByRefReadonly
+            ? returned is null
+                ? LowerReferenceExpression(syntax.Expression)
+                : LowerReferenceOperation(returned)
+            : returned is null
+                ? LowerExpression(syntax.Expression)
+                : LowerOperation(returned);
+        return new CudaReturnStatementIr(expression, syntax.GetLocation());
+    }
 
     private CudaStatementIr LowerLocalDeclaration(LocalDeclarationStatementSyntax syntax)
     {
@@ -126,8 +149,8 @@ internal sealed class CudaOperationLowerer(
                 syntax.GetLocation());
         }
 
-        if (plan.IsFixedLocalArray(syntax))
-            return LowerFixedArray(syntax);
+        if (plan.TryGetFixedLocalArray(syntax, out var fixedArray))
+            return LowerFixedArray(syntax, fixedArray);
 
         return LowerVariableDeclaration(
             syntax.Declaration,
@@ -145,9 +168,39 @@ internal sealed class CudaOperationLowerer(
         {
             if (semanticModel.GetDeclaredSymbol(variable) is not ILocalSymbol local)
                 continue;
+            if (local.RefKind != RefKind.None)
+            {
+                if (variable.Initializer is null)
+                {
+                    ReportUnsupported(variable);
+                    continue;
+                }
+                var reference = LowerReferenceExpression(variable.Initializer.Value);
+                statements.AddRange(reference.Prefix);
+                var typeName = FormatType(
+                    local.Type,
+                    false,
+                    declaration.Type.GetLocation());
+                if (local.RefKind == RefKind.RefReadOnly)
+                    typeName = "const " + typeName;
+                statements.Add(new CudaVariableDeclarationStatementIr(
+                    typeName + "*",
+                    plan.GetIdentifier(local),
+                    reference.Value,
+                    false,
+                    variable.GetLocation()));
+                continue;
+            }
             CudaExpressionIr? initializer = null;
             if (variable.Initializer is not null)
-                initializer = LowerExpression(variable.Initializer.Value);
+            {
+                var contextualConversion = FindContextualConversionOperation(
+                    semanticModel.GetOperation(variable),
+                    variable.Initializer.Value);
+                initializer = contextualConversion is null
+                    ? LowerExpression(variable.Initializer.Value)
+                    : LowerOperation(contextualConversion);
+            }
             if (initializer is not null)
                 statements.AddRange(initializer.Prefix);
             var viewMutability = initializer?.Value.ViewMutability ?? CudaViewMutability.None;
@@ -170,45 +223,75 @@ internal sealed class CudaOperationLowerer(
         return new CudaStatementGroupIr(statements.ToImmutable(), location);
     }
 
-    private CudaStatementIr LowerFixedArray(LocalDeclarationStatementSyntax syntax)
+    private CudaStatementIr LowerFixedArray(
+        LocalDeclarationStatementSyntax syntax,
+        CudaFixedLocalArrayPlan fixedArray)
     {
-        var variable = syntax.Declaration.Variables[0];
-        var stack = (StackAllocArrayCreationExpressionSyntax)variable.Initializer!.Value;
-        var arrayType = (ArrayTypeSyntax)stack.Type;
-        var size = arrayType.RankSpecifiers[0].Sizes[0];
-        var length = (int)semanticModel.GetConstantValue(size).Value!;
-        var local = (ILocalSymbol)semanticModel.GetDeclaredSymbol(variable)!;
-        ITypeSymbol elementType;
-        var readOnly = false;
-        if (local.Type is IPointerTypeSymbol pointer)
+        var statements = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        if (fixedArray.Length == 0)
         {
-            elementType = pointer.PointedAtType;
+            var elementName = FormatType(
+                fixedArray.ElementType,
+                false,
+                syntax.Declaration.Type.GetLocation());
+            var viewName = fixedArray.IsReadOnly
+                ? "csharp2cuda_readonly_array_view"
+                : "csharp2cuda_array_view";
+            var mutability = fixedArray.IsReadOnly
+                ? CudaViewMutability.ReadOnly
+                : CudaViewMutability.Writable;
+            viewMutabilities[fixedArray.Symbol] = mutability;
+            statements.Add(new CudaVariableDeclarationStatementIr(
+                $"{viewName}<{elementName}>",
+                plan.GetIdentifier(fixedArray.Symbol),
+                new CudaValueIr(
+                    $"{viewName}<{elementName}>(nullptr, 0, false)",
+                    fixedArray.Symbol.Type,
+                    CudaEffectIr.None,
+                    false,
+                    syntax.GetLocation())
+                {
+                    ViewMutability = mutability
+                },
+                false,
+                syntax.GetLocation()));
+            return new CudaStatementGroupIr(statements.ToImmutable(), syntax.GetLocation());
         }
-        else
-        {
-            var named = (INamedTypeSymbol)local.Type;
-            elementType = named.TypeArguments[0];
-            plan.IsSpanType(named, out readOnly);
-        }
-
         var initializers = ImmutableArray.CreateBuilder<CudaValueIr>();
-        if (stack.Initializer is not null)
+        var declarationOperation = semanticModel.GetOperation(
+            syntax.Declaration.Variables[0]);
+        foreach (var expression in fixedArray.Initializers)
         {
-            foreach (var expression in stack.Initializer.Expressions)
-            {
-                var lowered = LowerExpression(expression);
-                if (!lowered.Prefix.IsEmpty)
-                    ReportUnsupported(expression);
-                initializers.Add(lowered.Value);
-            }
+            var contextualConversion = FindContextualConversionOperation(
+                declarationOperation,
+                expression);
+            var lowered = contextualConversion is null
+                ? LowerExpression(expression)
+                : LowerOperation(contextualConversion);
+            statements.AddRange(lowered.Prefix);
+            initializers.Add(lowered.Value);
         }
-        return new CudaFixedArrayDeclarationStatementIr(
-            FormatType(elementType, false, arrayType.ElementType.GetLocation()),
-            plan.GetIdentifier(local),
-            length,
-            readOnly,
+        var bindingKind = fixedArray.IsPointer
+            ? CudaFixedArrayBindingKind.Pointer
+            : fixedArray.IsReadOnly
+                ? CudaFixedArrayBindingKind.ReadOnlyView
+                : CudaFixedArrayBindingKind.WritableView;
+        viewMutabilities[fixedArray.Symbol] = fixedArray.IsReadOnly
+            ? CudaViewMutability.ReadOnly
+            : CudaViewMutability.Writable;
+        statements.Add(new CudaFixedArrayDeclarationStatementIr(
+            FormatType(fixedArray.ElementType, false, syntax.Declaration.Type.GetLocation()),
+            NewTemporaryName() + "_storage",
+            fixedArray.Length,
+            fixedArray.IsReadOnly,
             initializers.ToImmutable(),
-            syntax.GetLocation());
+            syntax.GetLocation())
+        {
+            BindingKind = bindingKind,
+            BindingName = plan.GetIdentifier(fixedArray.Symbol),
+            ZeroInitialize = fixedArray.ZeroInitialize
+        });
+        return new CudaStatementGroupIr(statements.ToImmutable(), syntax.GetLocation());
     }
 
     private CudaForStatementIr LowerFor(ForStatementSyntax syntax)
@@ -240,8 +323,7 @@ internal sealed class CudaOperationLowerer(
 
     private CudaForStatementIr LowerForEach(ForEachStatementSyntax syntax)
     {
-        if (syntax.Type is RefTypeSyntax ||
-            semanticModel.GetDeclaredSymbol(syntax) is not ILocalSymbol iteration ||
+        if (semanticModel.GetDeclaredSymbol(syntax) is not ILocalSymbol iteration ||
             !plan.IsArrayViewType(semanticModel.GetTypeInfo(syntax.Expression).Type))
         {
             ReportUnsupported(syntax);
@@ -277,12 +359,37 @@ internal sealed class CudaOperationLowerer(
             false,
             syntax.GetLocation()));
 
+        var isReference = iteration.RefKind != RefKind.None || syntax.Type is RefTypeSyntax;
+        var isReadOnlyReference = iteration.RefKind == RefKind.RefReadOnly ||
+            syntax.Type is RefTypeSyntax { ReadOnlyKeyword.RawKind: not 0 };
+        if (isReference && !isReadOnlyReference &&
+            collection.Value.ViewMutability == CudaViewMutability.ReadOnly)
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.ViewEscape,
+                syntax.Type.GetLocation(),
+                iteration.Name));
+        }
+        var iterationTypeName = FormatType(
+            iteration.Type,
+            false,
+            syntax.Type.GetLocation());
+        if (isReference && isReadOnlyReference)
+            iterationTypeName = "const " + iterationTypeName;
+        if (isReference)
+            iterationTypeName += "*";
+        var iterationValueType = isReference
+            ? semanticModel.Compilation.CreatePointerTypeSymbol(iteration.Type)
+            : iteration.Type;
+        var iterationCode = isReference
+            ? $"&(({collectionName})[{indexName}])"
+            : $"({collectionName})[{indexName}]";
         var iterationDeclaration = new CudaVariableDeclarationStatementIr(
-            FormatType(iteration.Type, false, syntax.Type.GetLocation()),
+            iterationTypeName,
             plan.GetIdentifier(iteration),
             new CudaValueIr(
-                $"({collectionName})[{indexName}]",
-                iteration.Type,
+                iterationCode,
+                iterationValueType,
                 CudaEffectIr.Read,
                 false,
                 syntax.GetLocation()),
@@ -313,8 +420,15 @@ internal sealed class CudaOperationLowerer(
             syntax.GetLocation());
     }
 
-    private CudaSwitchStatementIr LowerSwitch(SwitchStatementSyntax syntax)
+    private CudaStatementIr LowerSwitch(SwitchStatementSyntax syntax)
     {
+        if (syntax.Sections.SelectMany(static section => section.Labels)
+            .Any(static label => label is CasePatternSwitchLabelSyntax) &&
+            semanticModel.GetOperation(syntax) is ISwitchOperation operation)
+        {
+            return LowerPatternSwitch(syntax, operation);
+        }
+
         var sections = ImmutableArray.CreateBuilder<CudaSwitchSectionIr>();
         foreach (var section in syntax.Sections)
         {
@@ -358,9 +472,6 @@ internal sealed class CudaOperationLowerer(
             return InvalidExpression(syntax.GetLocation());
         }
 
-        if (syntax is ElementAccessExpressionSyntax element)
-            return LowerPointerElement(element);
-
         if (syntax is PrefixUnaryExpressionSyntax)
         {
             var constant = semanticModel.GetConstantValue(syntax);
@@ -394,6 +505,41 @@ internal sealed class CudaOperationLowerer(
         return LowerOperation(operation);
     }
 
+    private CudaExpressionIr LowerReferenceExpression(ExpressionSyntax syntax)
+    {
+        if (syntax is RefExpressionSyntax reference)
+            syntax = reference.Expression;
+        var operation = semanticModel.GetOperation(syntax);
+        if (operation is null)
+        {
+            ReportUnsupported(syntax);
+            return InvalidExpression(syntax.GetLocation());
+        }
+        return LowerReferenceOperation(operation);
+    }
+
+    private CudaExpressionIr LowerReferenceOperation(IOperation operation)
+    {
+        if (operation is IInvocationOperation invocation &&
+            (invocation.TargetMethod.ReturnsByRef ||
+             invocation.TargetMethod.ReturnsByRefReadonly))
+        {
+            return LowerInvocation(invocation, preserveReference: true);
+        }
+        if (!IsAddressable(operation))
+            return UnsupportedExpression(operation);
+        var place = LowerPlace(operation);
+        var pointerType = semanticModel.Compilation.CreatePointerTypeSymbol(place.Type);
+        return new CudaExpressionIr(
+            place.Prefix,
+            new CudaValueIr(
+                place.AddressCode,
+                pointerType,
+                place.Effects,
+                false,
+                operation.Syntax.GetLocation()));
+    }
+
     private CudaExpressionIr LowerOperation(IOperation operation)
     {
         if (IsPointerIndirection(operation))
@@ -410,28 +556,29 @@ internal sealed class CudaOperationLowerer(
                 true,
                 literal.Syntax.GetLocation())),
             IDefaultValueOperation value => LowerDefaultValue(value),
-            ILocalReferenceOperation local => ReferenceExpression(
-                plan.GetIdentifier(local.Local),
-                local.Type,
-                local.Syntax.GetLocation(),
-                GetViewMutability(local.Local, local.Type)),
+            ILocalReferenceOperation local => LowerLocalReference(local),
             IParameterReferenceOperation parameter => LowerParameterReference(parameter),
             IFieldReferenceOperation field => LowerField(field),
             IPropertyReferenceOperation property => LowerProperty(property),
             IArrayElementReferenceOperation element => LowerElement(element),
+            IImplicitIndexerReferenceOperation indexer => LowerImplicitIndexer(indexer),
             IAddressOfOperation address => LowerAddress(address),
             IInvocationOperation invocation => LowerInvocation(invocation),
             IArrayCreationOperation array => ManagedAllocationExpression(array),
             IObjectCreationOperation creation => LowerObjectCreation(creation),
             IAnonymousObjectCreationOperation anonymous => ManagedAllocationExpression(anonymous),
             IDelegateCreationOperation creation => ManagedAllocationExpression(creation),
+            ITupleOperation tuple => LowerTuple(tuple),
+            ITupleBinaryOperation tuple => LowerTupleBinary(tuple),
             IConversionOperation conversion => LowerConversion(conversion),
             IBinaryOperation binary => LowerBinary(binary),
             IUnaryOperation unary => LowerUnary(unary),
             ISimpleAssignmentOperation assignment => LowerSimpleAssignment(assignment),
+            IDeconstructionAssignmentOperation assignment => LowerDeconstruction(assignment),
             ICompoundAssignmentOperation assignment => LowerCompoundAssignment(assignment),
             IIncrementOrDecrementOperation increment => LowerIncrement(increment),
             IConditionalOperation conditional => LowerConditional(conditional),
+            IIsPatternOperation pattern => LowerIsPattern(pattern),
             ISwitchExpressionOperation selection => LowerSwitchExpression(selection),
             IArgumentOperation argument => LowerOperation(argument.Value),
             IInstanceReferenceOperation instance => LowerInstance(instance),
@@ -574,6 +721,21 @@ internal sealed class CudaOperationLowerer(
                 field.Syntax.GetLocation(),
                 CudaViewMutability.ReadOnly);
         }
+        if (TryGetTupleFieldName(field.Field, out var tupleFieldName))
+        {
+            if (field.Instance is null)
+                return UnsupportedExpression(field);
+            var tuplePrefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+            var instance = Materialize(LowerOperation(field.Instance), tuplePrefix);
+            return new CudaExpressionIr(
+                tuplePrefix.ToImmutable(),
+                new CudaValueIr(
+                    $"({instance.Code}).{tupleFieldName}",
+                    field.Type,
+                    CudaEffectIr.Read,
+                    false,
+                    field.Syntax.GetLocation()));
+        }
         if (!plan.TryGetIdentifier(field.Field, out var name))
         {
             ReportUnsupported(field.Syntax);
@@ -632,15 +794,30 @@ internal sealed class CudaOperationLowerer(
 
     private CudaExpressionIr LowerParameterReference(IParameterReferenceOperation parameter)
     {
-        var name = plan.GetIdentifier(parameter.Parameter);
-        var code = parameter.Parameter.RefKind == RefKind.None
-            ? name
-            : $"*({name})";
+        var captured = function.TryGetCapture(parameter.Parameter, out var capture);
+        var name = captured ? capture.EmittedName : plan.GetIdentifier(parameter.Parameter);
+        var code = captured
+            ? capture.ByReference ? $"*({name})" : name
+            : parameter.Parameter.RefKind == RefKind.None ? name : $"*({name})";
         return ReferenceExpression(
             code,
             parameter.Type,
             parameter.Syntax.GetLocation(),
             GetViewMutability(parameter.Parameter, parameter.Type));
+    }
+
+    private CudaExpressionIr LowerLocalReference(ILocalReferenceOperation local)
+    {
+        var captured = function.TryGetCapture(local.Local, out var capture);
+        var name = captured ? capture.EmittedName : plan.GetIdentifier(local.Local);
+        var indirect = captured
+            ? capture.ByReference
+            : local.Local.RefKind != RefKind.None;
+        return ReferenceExpression(
+            indirect ? $"*({name})" : name,
+            local.Type,
+            local.Syntax.GetLocation(),
+            GetViewMutability(local.Local, local.Type));
     }
 
     private CudaExpressionIr LowerProperty(IPropertyReferenceOperation property)
@@ -723,7 +900,9 @@ internal sealed class CudaOperationLowerer(
         var target = targetExpression.Value;
         if (target.Type is IPointerTypeSymbol)
             target = MaterializeValue(target, prefix);
-        var index = Materialize(LowerOperation(element.Indices[0]), prefix);
+        if (element.Indices[0] is IRangeOperation range)
+            return LowerRangeAccess(target, range, element.Type!, prefix, element.Syntax.GetLocation());
+        var index = LowerIndexArgument(element.Indices[0], target, prefix);
         return new CudaExpressionIr(
             prefix.ToImmutable(),
             new CudaValueIr(
@@ -732,6 +911,174 @@ internal sealed class CudaOperationLowerer(
                 CudaEffectIr.Read,
                 false,
                 element.Syntax.GetLocation()));
+    }
+
+    private CudaExpressionIr LowerImplicitIndexer(IImplicitIndexerReferenceOperation indexer)
+    {
+        var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        var target = Materialize(LowerOperation(indexer.Instance), prefix);
+        if (indexer.Argument is IRangeOperation range)
+            return LowerRangeAccess(target, range, indexer.Type!, prefix, indexer.Syntax.GetLocation());
+        var argument = LowerIndexArgument(indexer.Argument, target, prefix);
+        return new CudaExpressionIr(
+            prefix.ToImmutable(),
+            new CudaValueIr(
+                $"({target.Code})[{argument.Code}]",
+                indexer.Type,
+                CudaEffectIr.Read,
+                false,
+                indexer.Syntax.GetLocation())
+            {
+                ViewMutability = target.ViewMutability
+            });
+    }
+
+    private CudaExpressionIr LowerRangeAccess(
+        CudaValueIr target,
+        IRangeOperation range,
+        ITypeSymbol resultType,
+        ImmutableArray<CudaStatementIr>.Builder prefix,
+        Location location)
+    {
+        target = MaterializeForReuse(target, prefix);
+        CudaValueIr? startOperand = null;
+        var startFromEnd = false;
+        if (range.LeftOperand is not null)
+        {
+            startOperand = LowerRangeEndpointOperand(
+                range.LeftOperand,
+                prefix,
+                out startFromEnd);
+        }
+        CudaValueIr? endOperand = null;
+        var endFromEnd = false;
+        if (range.RightOperand is not null)
+        {
+            endOperand = LowerRangeEndpointOperand(
+                range.RightOperand,
+                prefix,
+                out endFromEnd);
+        }
+        var length = MaterializeValue(new CudaValueIr(
+            $"({target.Code}).get_length()",
+            semanticModel.Compilation.GetSpecialType(SpecialType.System_Int32),
+            CudaEffectIr.Read,
+            false,
+            range.Syntax.GetLocation()), prefix);
+        var start = startOperand is null
+            ? new CudaValueIr(
+                "0",
+                length.Type,
+                CudaEffectIr.None,
+                true,
+                range.Syntax.GetLocation())
+            : ResolveRangeEndpoint(startOperand, startFromEnd, length);
+        var end = endOperand is null
+            ? length
+            : ResolveRangeEndpoint(endOperand, endFromEnd, length);
+        start = MaterializeForReuse(start, prefix);
+        end = MaterializeValue(end, prefix);
+        var sliceCode =
+            $"({target.Code}).slice({start.Code}, ({end.Code}) - ({start.Code}))";
+        if (target.Type is IArrayTypeSymbol { Rank: 1 } array &&
+            resultType is IArrayTypeSymbol)
+        {
+            var elementName = FormatType(array.ElementType, false, location);
+            var storageName = NewTemporaryName() + "_range_storage";
+            prefix.Add(new CudaFixedArrayDeclarationStatementIr(
+                elementName,
+                storageName,
+                CudaEmissionPlan.MaximumFixedLocalElementCount,
+                false,
+                [],
+                location));
+            sliceCode =
+                $"csharp2cuda_copy_array({sliceCode}, {storageName}, " +
+                $"{CudaEmissionPlan.MaximumFixedLocalElementCount})";
+        }
+        return new CudaExpressionIr(
+            prefix.ToImmutable(),
+            new CudaValueIr(
+                sliceCode,
+                resultType,
+                CudaEffectIr.Read,
+                false,
+                location)
+            {
+                ViewMutability = target.ViewMutability
+            });
+    }
+
+    private CudaValueIr LowerRangeEndpointOperand(
+        IOperation endpoint,
+        ImmutableArray<CudaStatementIr>.Builder prefix,
+        out bool fromEnd)
+    {
+        fromEnd = false;
+        if (endpoint is IConversionOperation conversion &&
+            conversion.Type?.Name == nameof(Index) &&
+            conversion.Type.ContainingNamespace?.ToDisplayString() == "System")
+        {
+            return Materialize(LowerOperation(conversion.Operand), prefix);
+        }
+        if (endpoint is IUnaryOperation { OperatorKind: UnaryOperatorKind.Hat } fromEndOperation)
+        {
+            fromEnd = true;
+            return Materialize(LowerOperation(fromEndOperation.Operand), prefix);
+        }
+        diagnostics.Add(Diagnostic.Create(
+            CudaDiagnostics.UnsupportedRangeOperation,
+            endpoint.Syntax.GetLocation(),
+            endpoint.Syntax.ToString()));
+        return new CudaValueIr(
+            "csharp2cuda_invalid",
+            semanticModel.Compilation.GetSpecialType(SpecialType.System_Int32),
+            CudaEffectIr.None,
+            true,
+            endpoint.Syntax.GetLocation());
+    }
+
+    private static CudaValueIr ResolveRangeEndpoint(
+        CudaValueIr operand,
+        bool fromEnd,
+        CudaValueIr length) => fromEnd
+        ? operand with
+        {
+            Code = $"csharp2cuda_index_from_end({length.Code}, {operand.Code})",
+            Type = length.Type,
+            Effects = CudaEffectIr.Trap,
+            IsSimple = false
+        }
+        : operand;
+
+    private CudaValueIr LowerIndexArgument(
+        IOperation argument,
+        CudaValueIr target,
+        ImmutableArray<CudaStatementIr>.Builder prefix)
+    {
+        if (argument is IUnaryOperation { OperatorKind: UnaryOperatorKind.Hat } fromEnd)
+        {
+            var value = Materialize(LowerOperation(fromEnd.Operand), prefix);
+            var length = MaterializeValue(new CudaValueIr(
+                $"({target.Code}).get_length()",
+                semanticModel.Compilation.GetSpecialType(SpecialType.System_Int32),
+                CudaEffectIr.Read,
+                false,
+                argument.Syntax.GetLocation()), prefix);
+            return new CudaValueIr(
+                $"csharp2cuda_index_from_end({length.Code}, {value.Code})",
+                length.Type,
+                CudaEffectIr.Trap,
+                false,
+                argument.Syntax.GetLocation());
+        }
+        if (argument is IConversionOperation conversion &&
+            conversion.Type?.Name == nameof(Index) &&
+            conversion.Type.ContainingNamespace?.ToDisplayString() == "System")
+        {
+            return Materialize(LowerOperation(conversion.Operand), prefix);
+        }
+        return Materialize(LowerOperation(argument), prefix);
     }
 
     private CudaExpressionIr LowerPointerElement(IOperation element)
@@ -820,10 +1167,31 @@ internal sealed class CudaOperationLowerer(
                 address.Syntax.GetLocation()));
     }
 
-    private CudaExpressionIr LowerInvocation(IInvocationOperation invocation)
+    private CudaExpressionIr LowerInvocation(
+        IInvocationOperation invocation,
+        bool preserveReference = false)
     {
         var reducedFrom = invocation.TargetMethod.ReducedFrom;
-        var targetMethod = plan.ResolveMethod(invocation.TargetMethod, function);
+        var sourceTarget = TryGetDirectAnonymousFunction(invocation.Instance, out var anonymous)
+            ? anonymous.Symbol
+            : invocation.TargetMethod;
+        var targetMethod = plan.ResolveMethod(sourceTarget, function);
+        if (CudaEmissionPlan.IsGeneratedPositionalRecordMember(targetMethod))
+        {
+            if (targetMethod.Name == nameof(object.Equals) &&
+                invocation.Instance is not null &&
+                invocation.Arguments.Length == 1)
+            {
+                return LowerRecordEquality(
+                    invocation.Instance,
+                    invocation.Arguments[0].Value,
+                    negate: false,
+                    invocation.Type,
+                    invocation.Syntax.GetLocation());
+            }
+            if (targetMethod.Name == "Deconstruct" && invocation.Instance is not null)
+                return LowerRecordDeconstruct(invocation, targetMethod);
+        }
         var call = plan.GetCallPlan(targetMethod);
         if (call is null)
         {
@@ -845,6 +1213,13 @@ internal sealed class CudaOperationLowerer(
             return LowerArrayView(invocation, call.Kind == CudaCallKind.ReadOnlyArrayView);
         if (call.Kind == CudaCallKind.SliceView)
             return LowerSliceView(invocation);
+        if (call.Kind == CudaCallKind.AsSpanView)
+            return LowerAsSpanView(invocation);
+        if (call.Kind is CudaCallKind.ClearView or CudaCallKind.FillView or
+            CudaCallKind.CopyView or CudaCallKind.TryCopyView)
+        {
+            return LowerViewOperation(invocation, call);
+        }
         if (call.Kind == CudaCallKind.NaN)
         {
             return ValueExpression(new CudaValueIr(
@@ -879,11 +1254,14 @@ internal sealed class CudaOperationLowerer(
         }
 
         var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
-        var hasInstance = plan.TryGetFunction(targetMethod, out var targetFunction)
+        var hasTargetFunction = plan.TryGetFunction(targetMethod, out var targetFunction);
+        var hasInstance = hasTargetFunction
             ? targetFunction.HasInstance
             : !targetMethod.IsStatic;
         var isReducedExtension = reducedFrom is not null;
-        var arguments = new string?[targetMethod.Parameters.Length + (hasInstance ? 1 : 0)];
+        var captureCount = hasTargetFunction ? targetFunction.Captures.Length : 0;
+        var arguments = new string?[
+            targetMethod.Parameters.Length + (hasInstance ? 1 : 0) + captureCount];
         var argumentOffset = hasInstance ? 1 : 0;
         if (hasInstance)
         {
@@ -910,8 +1288,23 @@ internal sealed class CudaOperationLowerer(
             if (isReducedExtension)
                 ordinal++;
             var targetParameter = targetMethod.Parameters[ordinal];
+            if (argument.ArgumentKind is ArgumentKind.ParamArray or ArgumentKind.ParamCollection)
+            {
+                arguments[argumentOffset + ordinal] = LowerExpandedParamsArgument(
+                    argument,
+                    targetParameter,
+                    prefix);
+                continue;
+            }
             if (targetParameter.RefKind == RefKind.None)
             {
+                if (plan.IsArrayViewType(targetParameter.Type) && IsNullConstant(argument.Value))
+                {
+                    arguments[argumentOffset + ordinal] = CreateNullView(
+                        targetParameter,
+                        argument.Syntax.GetLocation());
+                    continue;
+                }
                 var lowered = LowerOperation(argument.Value);
                 if (plan.IsViewParameterWritable(targetParameter) &&
                     lowered.Value.ViewMutability == CudaViewMutability.ReadOnly)
@@ -942,20 +1335,187 @@ internal sealed class CudaOperationLowerer(
                 ? Materialize(LowerOperation(argument.Value), prefix).Code
                 : LowerCallArgument(argument.Value, targetParameter, prefix);
         }
+        if (hasTargetFunction)
+        {
+            for (var index = 0; index < targetFunction.Captures.Length; index++)
+            {
+                arguments[argumentOffset + targetMethod.Parameters.Length + index] =
+                    LowerCaptureArgument(targetFunction.Captures[index], prefix);
+            }
+        }
         for (var index = 0; index < arguments.Length; index++)
             arguments[index] ??= "csharp2cuda_invalid";
         var effects = plan.IsPureCall(targetMethod)
             ? CudaEffectIr.None
             : CudaEffectIr.Call;
+        var callCode = $"{call.Name}({string.Join(", ", arguments)})";
+        var resultType = ResolveType(invocation.Type);
+        if (targetMethod.ReturnsByRef || targetMethod.ReturnsByRefReadonly)
+        {
+            if (preserveReference)
+            {
+                resultType = semanticModel.Compilation.CreatePointerTypeSymbol(
+                    targetMethod.ReturnType);
+            }
+            else
+            {
+                callCode = $"*({callCode})";
+            }
+        }
         return new CudaExpressionIr(
             prefix.ToImmutable(),
             new CudaValueIr(
-                $"{call.Name}({string.Join(", ", arguments)})",
-                ResolveType(invocation.Type),
+                callCode,
+                resultType,
                 effects,
                 false,
                 invocation.Syntax.GetLocation()));
     }
+
+    private static bool TryGetDirectAnonymousFunction(
+        IOperation? operation,
+        out IAnonymousFunctionOperation anonymous)
+    {
+        while (operation is IConversionOperation conversion)
+            operation = conversion.Operand;
+        if (operation is IDelegateCreationOperation { Target: IAnonymousFunctionOperation value })
+        {
+            anonymous = value;
+            return true;
+        }
+        anonymous = null!;
+        return false;
+    }
+
+    private string LowerCaptureArgument(
+        CudaCapturePlan capture,
+        ImmutableArray<CudaStatementIr>.Builder prefix)
+    {
+        if (function.TryGetCapture(capture.Symbol, out var forwarded))
+        {
+            if (capture.ByReference)
+                return forwarded.ByReference
+                    ? forwarded.EmittedName
+                    : $"&({forwarded.EmittedName})";
+            var code = forwarded.ByReference
+                ? $"*({forwarded.EmittedName})"
+                : forwarded.EmittedName;
+            return MaterializeValue(new CudaValueIr(
+                code,
+                capture.Type,
+                CudaEffectIr.Read,
+                true,
+                capture.Symbol.Locations.FirstOrDefault() ?? function.Syntax.GetLocation()), prefix).Code;
+        }
+
+        var name = plan.GetIdentifier(capture.Symbol);
+        var sourceIsReference = capture.Symbol switch
+        {
+            IParameterSymbol parameter => parameter.RefKind != RefKind.None,
+            ILocalSymbol local => local.RefKind != RefKind.None,
+            _ => false
+        };
+        if (capture.ByReference)
+            return sourceIsReference ? name : $"&({name})";
+        var valueCode = sourceIsReference ? $"*({name})" : name;
+        return MaterializeValue(new CudaValueIr(
+            valueCode,
+            capture.Type,
+            CudaEffectIr.Read,
+            true,
+            capture.Symbol.Locations.FirstOrDefault() ?? function.Syntax.GetLocation()), prefix).Code;
+    }
+
+    private string LowerExpandedParamsArgument(
+        IArgumentOperation argument,
+        IParameterSymbol parameter,
+        ImmutableArray<CudaStatementIr>.Builder prefix)
+    {
+        ImmutableArray<IOperation> elements;
+        if (argument.Value is IArrayCreationOperation
+            {
+                Initializer: { } initializer
+            })
+        {
+            elements = initializer.ElementValues;
+        }
+        else if (argument.Value is ICollectionExpressionOperation collection)
+        {
+            elements = collection.Elements;
+        }
+        else
+        {
+            ReportUnsupported(argument.Syntax);
+            return "csharp2cuda_invalid";
+        }
+
+        ITypeSymbol elementType;
+        if (parameter.Type is IArrayTypeSymbol { Rank: 1 } array)
+        {
+            elementType = ResolveType(array.ElementType)!;
+        }
+        else if (ResolveType(parameter.Type) is INamedTypeSymbol named &&
+            plan.IsSpanType(named, out _))
+        {
+            elementType = ResolveType(named.TypeArguments[0])!;
+        }
+        else
+        {
+            ReportUnsupported(argument.Syntax);
+            return "csharp2cuda_invalid";
+        }
+
+        var readOnly = !plan.IsViewParameterWritable(parameter);
+        var elementName = FormatType(elementType, false, argument.Syntax.GetLocation());
+        var viewName = readOnly
+            ? "csharp2cuda_readonly_array_view"
+            : "csharp2cuda_array_view";
+        if (elements.IsEmpty)
+            return $"{viewName}<{elementName}>(nullptr, 0, false)";
+        if (elements.Length > CudaEmissionPlan.MaximumFixedLocalElementCount)
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.FixedLocalStorageLimit,
+                argument.Syntax.GetLocation(),
+                parameter.Name,
+                elements.Length,
+                CudaEmissionPlan.MaximumFixedLocalElementCount));
+            return "csharp2cuda_invalid";
+        }
+
+        var initializers = ImmutableArray.CreateBuilder<CudaValueIr>();
+        foreach (var element in elements)
+            initializers.Add(Materialize(LowerOperation(element), prefix));
+        var storageName = NewTemporaryName() + "_params";
+        prefix.Add(new CudaFixedArrayDeclarationStatementIr(
+            elementName,
+            storageName,
+            elements.Length,
+            readOnly,
+            initializers.ToImmutable(),
+            argument.Syntax.GetLocation()));
+        return $"{viewName}<{elementName}>({storageName}, {elements.Length}, false)";
+    }
+
+    private string CreateNullView(IParameterSymbol parameter, Location location)
+    {
+        var elementType = parameter.Type switch
+        {
+            IArrayTypeSymbol { Rank: 1 } array => array.ElementType,
+            INamedTypeSymbol named when plan.IsSpanType(named, out _) => named.TypeArguments[0],
+            _ => null
+        };
+        if (elementType is null)
+            return "csharp2cuda_invalid";
+        var viewName = plan.IsViewParameterWritable(parameter)
+            ? "csharp2cuda_array_view"
+            : "csharp2cuda_readonly_array_view";
+        return $"{viewName}<{FormatType(elementType, false, location)}>(nullptr, 0, true)";
+    }
+
+    private static bool IsNullConstant(IOperation operation) =>
+        operation.ConstantValue is { HasValue: true, Value: null } ||
+        operation is IConversionOperation conversion && IsNullConstant(conversion.Operand);
 
     private string LowerCallArgument(
         IOperation operation,
@@ -1076,6 +1636,66 @@ internal sealed class CudaOperationLowerer(
             if (creation.Type is INamedTypeSymbol structure &&
                 creation.Constructor is { } constructor)
             {
+                if (plan.TryGetStruct(structure, out var recordPlan) &&
+                    recordPlan.IsPositionalRecord &&
+                    CudaEmissionPlan.IsGeneratedPositionalRecordMember(constructor))
+                {
+                    if (creation.Initializer is not null)
+                        return UnsupportedExpression(creation);
+                    var recordPrefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+                    var recordArguments = new CudaValueIr?[constructor.Parameters.Length];
+                    foreach (var argument in creation.Arguments
+                                 .OrderBy(static item => item.Syntax.SpanStart))
+                    {
+                        if (argument.Parameter is null)
+                            continue;
+                        recordArguments[argument.Parameter.Ordinal] = Materialize(
+                            LowerOperation(argument.Value),
+                            recordPrefix);
+                    }
+                    var recordType = FormatType(
+                        structure,
+                        false,
+                        creation.Syntax.GetLocation());
+                    var recordName = NewTemporaryName();
+                    recordPrefix.Add(new CudaVariableDeclarationStatementIr(
+                        recordType,
+                        recordName,
+                        new CudaValueIr(
+                            "{}",
+                            structure,
+                            CudaEffectIr.None,
+                            true,
+                            creation.Syntax.GetLocation()),
+                        false,
+                        creation.Syntax.GetLocation()));
+                    var components = recordPlan.Properties
+                        .Where(static property => property.Declaration is ParameterSyntax)
+                        .ToArray();
+                    if (components.Length != recordArguments.Length)
+                        return UnsupportedExpression(creation);
+                    for (var index = 0; index < recordArguments.Length; index++)
+                    {
+                        var argument = recordArguments[index] ?? new CudaValueIr(
+                            "csharp2cuda_invalid",
+                            constructor.Parameters[index].Type,
+                            CudaEffectIr.None,
+                            true,
+                            creation.Syntax.GetLocation());
+                        recordPrefix.Add(CreateAssignmentStatement(
+                            $"({recordName}).{plan.GetIdentifier(components[index].Symbol)}",
+                            argument,
+                            creation.Syntax.GetLocation()));
+                    }
+                    return new CudaExpressionIr(
+                        recordPrefix.ToImmutable(),
+                        new CudaValueIr(
+                            recordName,
+                            structure,
+                            CudaEffectIr.None,
+                            true,
+                            creation.Syntax.GetLocation()));
+                }
                 if (constructor.IsImplicitlyDeclared && creation.Arguments.IsEmpty)
                 {
                     var typeName = FormatType(
@@ -1181,6 +1801,79 @@ internal sealed class CudaOperationLowerer(
             });
     }
 
+    private CudaExpressionIr LowerAsSpanView(IInvocationOperation invocation)
+    {
+        var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        var values = new List<IOperation>();
+        if (invocation.TargetMethod.ReducedFrom is not null)
+        {
+            if (invocation.Instance is null)
+                return UnsupportedExpression(invocation);
+            values.Add(invocation.Instance);
+        }
+        values.AddRange(invocation.Arguments
+            .Where(static argument => argument.ArgumentKind != ArgumentKind.DefaultValue)
+            .OrderBy(static argument => argument.Syntax.SpanStart)
+            .Select(static argument => argument.Value));
+        if (values.Count is < 1 or > 3)
+            return UnsupportedExpression(invocation);
+
+        var source = Materialize(LowerOperation(values[0]), prefix);
+        var code = $"({source.Code}).as_span()";
+        for (var index = 1; index < values.Count; index++)
+        {
+            var argument = Materialize(LowerOperation(values[index]), prefix);
+            code += index == 1 ? $".slice({argument.Code}" : $", {argument.Code}";
+        }
+        if (values.Count > 1)
+            code += ")";
+        return new CudaExpressionIr(
+            prefix.ToImmutable(),
+            new CudaValueIr(
+                code,
+                invocation.Type,
+                CudaEffectIr.None,
+                false,
+                invocation.Syntax.GetLocation())
+            {
+                ViewMutability = CudaViewMutability.Writable
+            });
+    }
+
+    private CudaExpressionIr LowerViewOperation(
+        IInvocationOperation invocation,
+        CudaCallPlan call)
+    {
+        if (invocation.Instance is null)
+            return UnsupportedExpression(invocation);
+        var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        var instance = Materialize(LowerOperation(invocation.Instance), prefix);
+        if (call.Kind is (CudaCallKind.ClearView or CudaCallKind.FillView) &&
+            instance.ViewMutability == CudaViewMutability.ReadOnly)
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.ViewEscape,
+                invocation.Syntax.GetLocation(),
+                invocation.TargetMethod.Name));
+        }
+        var arguments = invocation.Arguments
+            .OrderBy(static argument => argument.Syntax.SpanStart)
+            .Select(argument => Materialize(LowerOperation(argument.Value), prefix).Code)
+            .ToArray();
+        var effects = call.Kind is CudaCallKind.ClearView or CudaCallKind.FillView or
+            CudaCallKind.CopyView or CudaCallKind.TryCopyView
+            ? CudaEffectIr.Read | CudaEffectIr.Write
+            : CudaEffectIr.Read;
+        return new CudaExpressionIr(
+            prefix.ToImmutable(),
+            new CudaValueIr(
+                $"({instance.Code}).{call.Name}({string.Join(", ", arguments)})",
+                invocation.Type,
+                effects,
+                false,
+                invocation.Syntax.GetLocation()));
+    }
+
     private CudaExpressionIr LowerConversionIntrinsic(
         IInvocationOperation invocation,
         CudaCallKind kind)
@@ -1212,6 +1905,15 @@ internal sealed class CudaOperationLowerer(
             ReportUnsupported(conversion.Syntax);
             return InvalidExpression(conversion.Syntax.GetLocation());
         }
+        if (TryGetUserDefinedCall(conversion.OperatorMethod, out var conversionTarget, out var conversionCall))
+        {
+            return LowerUserDefinedCall(
+                conversionTarget,
+                conversionCall,
+                [conversion.Operand],
+                conversion.Type,
+                conversion.Syntax.GetLocation());
+        }
         var operand = LowerOperation(conversion.Operand);
         if (conversion.Conversion.IsIdentity ||
             plan.IsCudaInt32Type(conversion.OperatorMethod?.ContainingType))
@@ -1220,6 +1922,18 @@ internal sealed class CudaOperationLowerer(
             {
                 Value = operand.Value with { Type = conversion.Type }
             };
+        }
+
+        if (conversion.Operand.Type is INamedTypeSymbol sourceTuple &&
+            conversion.Type is INamedTypeSymbol targetTuple &&
+            plan.IsTupleType(sourceTuple) &&
+            plan.IsTupleType(targetTuple))
+        {
+            return LowerTupleConversion(
+                conversion,
+                operand,
+                sourceTuple,
+                targetTuple);
         }
 
         if (plan.IsArrayViewType(conversion.Operand.Type) &&
@@ -1299,12 +2013,148 @@ internal sealed class CudaOperationLowerer(
                 conversion.Syntax.GetLocation()));
     }
 
+    private CudaExpressionIr LowerTupleConversion(
+        IConversionOperation conversion,
+        CudaExpressionIr operand,
+        INamedTypeSymbol sourceTuple,
+        INamedTypeSymbol targetTuple)
+    {
+        if (sourceTuple.TupleElements.Length != targetTuple.TupleElements.Length)
+            return UnsupportedExpression(conversion);
+
+        var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        var source = Materialize(operand, prefix);
+        var convertedElements = new string[sourceTuple.TupleElements.Length];
+        for (var index = 0; index < convertedElements.Length; index++)
+        {
+            var converted = LowerValueConversion(
+                new CudaValueIr(
+                    $"({source.Code}).item{index + 1}",
+                    sourceTuple.TupleElements[index].Type,
+                    CudaEffectIr.Read,
+                    false,
+                    conversion.Syntax.GetLocation()),
+                sourceTuple.TupleElements[index].Type,
+                targetTuple.TupleElements[index].Type,
+                conversion.Syntax.GetLocation());
+            if (converted is null)
+            {
+                ReportUnsupported(conversion.Syntax);
+                return InvalidExpression(conversion.Syntax.GetLocation());
+            }
+            convertedElements[index] = MaterializeValue(converted, prefix).Code;
+        }
+
+        var targetName = FormatType(targetTuple, false, conversion.Syntax.GetLocation());
+        return new CudaExpressionIr(
+            prefix.ToImmutable(),
+            new CudaValueIr(
+                $"{targetName}{{{string.Join(", ", convertedElements)}}}",
+                targetTuple,
+                CudaEffectIr.None,
+                false,
+                conversion.Syntax.GetLocation()));
+    }
+
+    private CudaValueIr? LowerValueConversion(
+        CudaValueIr value,
+        ITypeSymbol sourceType,
+        ITypeSymbol targetType,
+        Location location)
+    {
+        if (SymbolEqualityComparer.Default.Equals(sourceType, targetType))
+            return value with { Type = targetType };
+
+        if (sourceType is INamedTypeSymbol sourceTuple &&
+            targetType is INamedTypeSymbol targetTuple &&
+            plan.IsTupleType(sourceTuple) &&
+            plan.IsTupleType(targetTuple) &&
+            sourceTuple.TupleElements.Length == targetTuple.TupleElements.Length)
+        {
+            var elements = new string[sourceTuple.TupleElements.Length];
+            for (var index = 0; index < elements.Length; index++)
+            {
+                var element = LowerValueConversion(
+                    value with
+                    {
+                        Code = $"({value.Code}).item{index + 1}",
+                        Type = sourceTuple.TupleElements[index].Type,
+                        IsSimple = false
+                    },
+                    sourceTuple.TupleElements[index].Type,
+                    targetTuple.TupleElements[index].Type,
+                    location);
+                if (element is null)
+                    return null;
+                elements[index] = element.Code;
+            }
+            return new CudaValueIr(
+                $"{FormatType(targetTuple, false, location)}{{{string.Join(", ", elements)}}}",
+                targetTuple,
+                CudaEffectIr.None,
+                false,
+                location);
+        }
+
+        var classified = ((CSharpCompilation)semanticModel.Compilation)
+            .ClassifyConversion(sourceType, targetType);
+        if (classified.MethodSymbol is { } method &&
+            TryGetUserDefinedCall(method, out _, out var call))
+        {
+            return new CudaValueIr(
+                $"{call.Name}({value.Code})",
+                targetType,
+                CudaEffectIr.Call,
+                false,
+                location);
+        }
+        if (!classified.Exists ||
+            !TryPlanConversion(sourceType, targetType, out var helper))
+        {
+            return null;
+        }
+        var code = helper is null
+            ? $"(({FormatType(targetType, false, location)})({value.Code}))"
+            : $"{helper}({value.Code})";
+        return new CudaValueIr(
+            code,
+            targetType,
+            CudaEffectIr.None,
+            false,
+            location);
+    }
+
     private CudaExpressionIr LowerBinary(IBinaryOperation binary)
     {
         if (binary.IsChecked)
         {
             ReportUnsupported(binary.Syntax);
             return InvalidExpression(binary.Syntax.GetLocation());
+        }
+        if (binary.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals &&
+            TryLowerViewNullComparison(binary, out var viewNullComparison))
+        {
+            return viewNullComparison;
+        }
+        if (binary.OperatorMethod is { } recordOperator &&
+            CudaEmissionPlan.IsGeneratedPositionalRecordMember(recordOperator) &&
+            binary.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals)
+        {
+            return LowerRecordEquality(
+                binary.LeftOperand,
+                binary.RightOperand,
+                binary.OperatorKind == BinaryOperatorKind.NotEquals,
+                binary.Type,
+                binary.Syntax.GetLocation());
+        }
+        if (TryGetUserDefinedCall(binary.OperatorMethod, out var binaryTarget, out var binaryCall))
+        {
+            return LowerUserDefinedCall(
+                binaryTarget,
+                binaryCall,
+                [binary.LeftOperand, binary.RightOperand],
+                binary.Type,
+                binary.Syntax.GetLocation());
         }
         if (binary.OperatorKind is BinaryOperatorKind.ConditionalAnd or
             BinaryOperatorKind.ConditionalOr)
@@ -1340,6 +2190,48 @@ internal sealed class CudaOperationLowerer(
                 effects,
                 false,
                 binary.Syntax.GetLocation()));
+    }
+
+    private bool TryLowerViewNullComparison(
+        IBinaryOperation binary,
+        out CudaExpressionIr result)
+    {
+        IOperation? viewOperation = null;
+        var left = UnwrapViewReferenceConversion(binary.LeftOperand);
+        var right = UnwrapViewReferenceConversion(binary.RightOperand);
+        if (plan.IsArrayViewType(left.Type) && IsNullConstant(right))
+            viewOperation = left;
+        else if (plan.IsArrayViewType(right.Type) && IsNullConstant(left))
+            viewOperation = right;
+        if (viewOperation is null)
+        {
+            result = null!;
+            return false;
+        }
+        var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        var view = Materialize(LowerOperation(viewOperation), prefix);
+        var code = $"({view.Code}).is_null";
+        if (binary.OperatorKind == BinaryOperatorKind.NotEquals)
+            code = $"!({code})";
+        result = new CudaExpressionIr(
+            prefix.ToImmutable(),
+            new CudaValueIr(
+                code,
+                binary.Type,
+                CudaEffectIr.Read,
+                false,
+                binary.Syntax.GetLocation()));
+        return true;
+    }
+
+    private IOperation UnwrapViewReferenceConversion(IOperation operation)
+    {
+        while (operation is IConversionOperation conversion &&
+            plan.IsArrayViewType(conversion.Operand.Type))
+        {
+            operation = conversion.Operand;
+        }
+        return operation;
     }
 
     private CudaExpressionIr LowerShortCircuit(IBinaryOperation binary)
@@ -1387,6 +2279,20 @@ internal sealed class CudaOperationLowerer(
 
     private CudaExpressionIr LowerUnary(IUnaryOperation unary)
     {
+        if (unary.IsChecked)
+        {
+            ReportUnsupported(unary.Syntax);
+            return InvalidExpression(unary.Syntax.GetLocation());
+        }
+        if (TryGetUserDefinedCall(unary.OperatorMethod, out var unaryTarget, out var unaryCall))
+        {
+            return LowerUserDefinedCall(
+                unaryTarget,
+                unaryCall,
+                [unary.Operand],
+                unary.Type,
+                unary.Syntax.GetLocation());
+        }
         var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
         var operand = Materialize(LowerOperation(unary.Operand), prefix);
         if (!TryPlanUnary(unary, out var helper))
@@ -1413,6 +2319,20 @@ internal sealed class CudaOperationLowerer(
 
     private CudaExpressionIr LowerSimpleAssignment(ISimpleAssignmentOperation assignment)
     {
+        if (assignment.IsRef &&
+            assignment.Target is ILocalReferenceOperation { Local.RefKind: not RefKind.None } local)
+        {
+            var reference = LowerReferenceOperation(assignment.Value);
+            var name = plan.GetIdentifier(local.Local);
+            return new CudaExpressionIr(
+                reference.Prefix,
+                new CudaValueIr(
+                    $"*({name} = {reference.Value.Code})",
+                    assignment.Type,
+                    CudaEffectIr.Write,
+                    false,
+                    assignment.Syntax.GetLocation()));
+        }
         if (assignment.Target is IDiscardOperation)
             return LowerOperation(assignment.Value);
 
@@ -1438,6 +2358,403 @@ internal sealed class CudaOperationLowerer(
                 CudaEffectIr.Write,
                 false,
                 assignment.Syntax.GetLocation()));
+    }
+
+    private CudaExpressionIr LowerTuple(ITupleOperation tuple)
+    {
+        if (!plan.IsTupleType(tuple.Type))
+            return UnsupportedExpression(tuple);
+        var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        var elements = tuple.Elements
+            .Select(element => Materialize(LowerOperation(element), prefix).Code)
+            .ToArray();
+        var typeName = FormatType(tuple.Type!, false, tuple.Syntax.GetLocation());
+        return new CudaExpressionIr(
+            prefix.ToImmutable(),
+            new CudaValueIr(
+                $"{typeName}{{{string.Join(", ", elements)}}}",
+                tuple.Type,
+                CudaEffectIr.None,
+                false,
+                tuple.Syntax.GetLocation()));
+    }
+
+    private CudaExpressionIr LowerTupleBinary(ITupleBinaryOperation tuple)
+    {
+        if (tuple.OperatorKind is not (BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals) ||
+            tuple.LeftOperand.Type is not INamedTypeSymbol { IsTupleType: true } tupleType)
+        {
+            return UnsupportedExpression(tuple);
+        }
+        var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        var left = LowerOperation(tuple.LeftOperand);
+        prefix.AddRange(left.Prefix);
+        var leftName = NewTemporaryName();
+        prefix.Add(new CudaVariableDeclarationStatementIr(
+            FormatType(tuple.LeftOperand.Type!, false, tuple.LeftOperand.Syntax.GetLocation()),
+            leftName,
+            left.Value,
+            false,
+            tuple.LeftOperand.Syntax.GetLocation()));
+        var right = LowerOperation(tuple.RightOperand);
+        prefix.AddRange(right.Prefix);
+        var rightName = NewTemporaryName();
+        prefix.Add(new CudaVariableDeclarationStatementIr(
+            FormatType(tuple.RightOperand.Type!, false, tuple.RightOperand.Syntax.GetLocation()),
+            rightName,
+            right.Value,
+            false,
+            tuple.RightOperand.Syntax.GetLocation()));
+        var equality = BuildTupleEquality(
+            tupleType,
+            leftName,
+            rightName,
+            useEqualsSemantics: false);
+        if (equality is null)
+            return UnsupportedExpression(tuple);
+        if (tuple.OperatorKind == BinaryOperatorKind.NotEquals)
+            equality = $"!({equality})";
+        return new CudaExpressionIr(
+            prefix.ToImmutable(),
+            new CudaValueIr(
+                equality,
+                tuple.Type,
+                CudaEffectIr.None,
+                false,
+                tuple.Syntax.GetLocation()));
+    }
+
+    private string? BuildTupleEquality(
+        INamedTypeSymbol tuple,
+        string left,
+        string right,
+        bool useEqualsSemantics)
+    {
+        var comparisons = new string[tuple.TupleElements.Length];
+        for (var index = 0; index < comparisons.Length; index++)
+        {
+            var elementType = tuple.TupleElements[index].Type;
+            var leftElement = $"({left}).item{index + 1}";
+            var rightElement = $"({right}).item{index + 1}";
+            var comparison = BuildValueEquality(
+                elementType,
+                leftElement,
+                rightElement,
+                useEqualsSemantics);
+            if (comparison is null)
+                return null;
+            comparisons[index] = comparison;
+        }
+        return $"({string.Join(" && ", comparisons)})";
+    }
+
+    private CudaExpressionIr LowerRecordEquality(
+        IOperation leftOperation,
+        IOperation rightOperation,
+        bool negate,
+        ITypeSymbol? resultType,
+        Location location)
+    {
+        if (leftOperation.Type is not INamedTypeSymbol recordType ||
+            !plan.TryGetStruct(recordType, out var record) ||
+            !record.IsPositionalRecord)
+        {
+            return UnsupportedExpression(leftOperation);
+        }
+        var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        var left = LowerOperation(leftOperation);
+        prefix.AddRange(left.Prefix);
+        var leftName = NewTemporaryName();
+        prefix.Add(new CudaVariableDeclarationStatementIr(
+            FormatType(recordType, false, leftOperation.Syntax.GetLocation()),
+            leftName,
+            left.Value,
+            false,
+            leftOperation.Syntax.GetLocation()));
+        var right = LowerOperation(rightOperation);
+        prefix.AddRange(right.Prefix);
+        var rightName = NewTemporaryName();
+        prefix.Add(new CudaVariableDeclarationStatementIr(
+            FormatType(recordType, false, rightOperation.Syntax.GetLocation()),
+            rightName,
+            right.Value,
+            false,
+            rightOperation.Syntax.GetLocation()));
+        var equality = BuildRecordEquality(record, leftName, rightName);
+        if (equality is null)
+            return UnsupportedExpression(leftOperation);
+        if (negate)
+            equality = $"!({equality})";
+        return new CudaExpressionIr(
+            prefix.ToImmutable(),
+            new CudaValueIr(
+                equality,
+                resultType,
+                CudaEffectIr.None,
+                false,
+                location));
+    }
+
+    private string? BuildRecordEquality(CudaStructPlan record, string left, string right)
+    {
+        var comparisons = new List<string>(record.Fields.Count + record.Properties.Count);
+        foreach (var field in record.Fields)
+        {
+            var comparison = BuildValueEquality(
+                field.Symbol.Type,
+                $"({left}).{plan.GetIdentifier(field.Symbol)}",
+                $"({right}).{plan.GetIdentifier(field.Symbol)}",
+                useEqualsSemantics: true);
+            if (comparison is null)
+                return null;
+            comparisons.Add(comparison);
+        }
+        foreach (var property in record.Properties)
+        {
+            var name = plan.GetIdentifier(property.Symbol);
+            var comparison = BuildValueEquality(
+                property.Symbol.Type,
+                $"({left}).{name}",
+                $"({right}).{name}",
+                useEqualsSemantics: true);
+            if (comparison is null)
+                return null;
+            comparisons.Add(comparison);
+        }
+        return comparisons.Count == 0
+            ? "true"
+            : $"({string.Join(" && ", comparisons)})";
+    }
+
+    private string? BuildValueEquality(
+        ITypeSymbol type,
+        string left,
+        string right,
+        bool useEqualsSemantics)
+    {
+        if (type is INamedTypeSymbol { IsTupleType: true } tuple)
+            return BuildTupleEquality(tuple, left, right, useEqualsSemantics);
+        if (type is INamedTypeSymbol named &&
+            plan.TryGetStruct(named, out var record) &&
+            record.IsPositionalRecord)
+        {
+            return BuildRecordEquality(record, left, right);
+        }
+        if (type.SpecialType is SpecialType.System_Boolean or
+            SpecialType.System_SByte or SpecialType.System_Byte or
+            SpecialType.System_Int16 or SpecialType.System_UInt16 or
+            SpecialType.System_Char or SpecialType.System_Int32 or
+            SpecialType.System_UInt32 or SpecialType.System_Int64 or
+            SpecialType.System_UInt64 ||
+            type.TypeKind == TypeKind.Enum ||
+            type is IPointerTypeSymbol)
+        {
+            return $"(({left}) == ({right}))";
+        }
+        if (type.SpecialType is SpecialType.System_Single or SpecialType.System_Double)
+        {
+            return useEqualsSemantics
+                ? $"((({left}) == ({right})) || (isnan({left}) && isnan({right})))"
+                : $"(({left}) == ({right}))";
+        }
+        return null;
+    }
+
+    private CudaExpressionIr LowerRecordDeconstruct(
+        IInvocationOperation invocation,
+        IMethodSymbol target)
+    {
+        if (invocation.Instance?.Type is not INamedTypeSymbol recordType ||
+            !plan.TryGetStruct(recordType, out var record) ||
+            !record.IsPositionalRecord)
+        {
+            return UnsupportedExpression(invocation);
+        }
+        var components = record.Properties
+            .Where(static property => property.Declaration is ParameterSyntax)
+            .ToArray();
+        if (components.Length != target.Parameters.Length ||
+            invocation.Arguments.Length != components.Length)
+        {
+            return UnsupportedExpression(invocation);
+        }
+        var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        var instance = LowerOperation(invocation.Instance);
+        prefix.AddRange(instance.Prefix);
+        var instanceName = NewTemporaryName();
+        prefix.Add(new CudaVariableDeclarationStatementIr(
+            FormatType(recordType, false, invocation.Instance.Syntax.GetLocation()),
+            instanceName,
+            instance.Value,
+            false,
+            invocation.Instance.Syntax.GetLocation()));
+        foreach (var argument in invocation.Arguments.OrderBy(static item => item.Syntax.SpanStart))
+        {
+            if (argument.Parameter is null)
+                continue;
+            var place = LowerPlace(argument.Value);
+            RejectWrite(place, argument.Value);
+            prefix.AddRange(place.Prefix);
+            var component = components[argument.Parameter.Ordinal];
+            prefix.Add(CreateAssignmentStatement(
+                place.AccessCode,
+                new CudaValueIr(
+                    $"({instanceName}).{plan.GetIdentifier(component.Symbol)}",
+                    component.Symbol.Type,
+                    CudaEffectIr.Read,
+                    false,
+                    argument.Syntax.GetLocation()),
+                argument.Syntax.GetLocation()));
+        }
+        return new CudaExpressionIr(
+            prefix.ToImmutable(),
+            new CudaValueIr(
+                "((void)0)",
+                invocation.Type,
+                CudaEffectIr.None,
+                true,
+                invocation.Syntax.GetLocation()));
+    }
+
+    private CudaExpressionIr LowerDeconstruction(IDeconstructionAssignmentOperation assignment)
+    {
+        var isRecord = assignment.Value.Type is INamedTypeSymbol recordType &&
+            plan.TryGetStruct(recordType, out var record) &&
+            record.IsPositionalRecord;
+        if (!plan.IsTupleType(assignment.Value.Type) && !isRecord)
+            return UnsupportedExpression(assignment);
+        var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        var value = LowerOperation(assignment.Value);
+        prefix.AddRange(value.Prefix);
+        var valueName = NewTemporaryName();
+        prefix.Add(new CudaVariableDeclarationStatementIr(
+            FormatType(assignment.Value.Type!, false, assignment.Value.Syntax.GetLocation()),
+            valueName,
+            value.Value,
+            false,
+            assignment.Value.Syntax.GetLocation()));
+        var declarations = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
+        CollectDeconstructionDeclarations(assignment.Target, declarations);
+        if (!LowerDeconstructionTarget(
+                assignment.Target,
+                valueName,
+                assignment.Value.Type!,
+                declarations,
+                prefix))
+        {
+            return InvalidExpression(assignment.Syntax.GetLocation());
+        }
+        return new CudaExpressionIr(
+            prefix.ToImmutable(),
+            new CudaValueIr(
+                valueName,
+                assignment.Type,
+                CudaEffectIr.None,
+                true,
+                assignment.Syntax.GetLocation()));
+    }
+
+    private static void CollectDeconstructionDeclarations(
+        IOperation operation,
+        ISet<ILocalSymbol> declarations,
+        bool insideDeclaration = false)
+    {
+        insideDeclaration |= operation is IDeclarationExpressionOperation;
+        if (insideDeclaration && operation is ILocalReferenceOperation local)
+            declarations.Add(local.Local);
+        foreach (var child in operation.ChildOperations)
+            CollectDeconstructionDeclarations(child, declarations, insideDeclaration);
+    }
+
+    private bool LowerDeconstructionTarget(
+        IOperation target,
+        string source,
+        ITypeSymbol sourceType,
+        ISet<ILocalSymbol> declarations,
+        ImmutableArray<CudaStatementIr>.Builder prefix)
+    {
+        if (target is IDeclarationExpressionOperation declaration)
+            return LowerDeconstructionTarget(
+                declaration.ChildOperations.Single(),
+                source,
+                sourceType,
+                declarations,
+                prefix);
+        if (target is IDiscardOperation)
+            return true;
+        if (target is ITupleOperation tuple &&
+            sourceType is INamedTypeSymbol { IsTupleType: true } tupleType &&
+            tuple.Elements.Length == tupleType.TupleElements.Length)
+        {
+            for (var index = 0; index < tuple.Elements.Length; index++)
+            {
+                if (!LowerDeconstructionTarget(
+                        tuple.Elements[index],
+                        $"({source}).item{index + 1}",
+                        tupleType.TupleElements[index].Type,
+                        declarations,
+                        prefix))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if (target is ITupleOperation recordTarget &&
+            sourceType is INamedTypeSymbol recordType &&
+            plan.TryGetStruct(recordType, out var record) &&
+            record.IsPositionalRecord)
+        {
+            var components = record.Properties
+                .Where(static property => property.Declaration is ParameterSyntax)
+                .ToArray();
+            if (recordTarget.Elements.Length != components.Length)
+            {
+                ReportUnsupported(target.Syntax);
+                return false;
+            }
+            for (var index = 0; index < recordTarget.Elements.Length; index++)
+            {
+                var component = components[index];
+                if (!LowerDeconstructionTarget(
+                        recordTarget.Elements[index],
+                        $"({source}).{plan.GetIdentifier(component.Symbol)}",
+                        component.Symbol.Type,
+                        declarations,
+                        prefix))
+                {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        var value = new CudaValueIr(
+            source,
+            sourceType,
+            CudaEffectIr.Read,
+            false,
+            target.Syntax.GetLocation());
+        if (target is ILocalReferenceOperation local && declarations.Contains(local.Local))
+        {
+            prefix.Add(new CudaVariableDeclarationStatementIr(
+                FormatType(local.Type!, false, local.Syntax.GetLocation()),
+                plan.GetIdentifier(local.Local),
+                value,
+                false,
+                local.Syntax.GetLocation()));
+            return true;
+        }
+        if (!IsAddressable(target))
+        {
+            ReportUnsupported(target.Syntax);
+            return false;
+        }
+        var place = LowerPlace(target);
+        RejectWrite(place, target);
+        prefix.AddRange(place.Prefix);
+        prefix.Add(CreateAssignmentStatement(place.AccessCode, value, target.Syntax.GetLocation()));
+        return true;
     }
 
     private CudaExpressionIr LowerPropertyGetter(
@@ -1528,6 +2845,11 @@ internal sealed class CudaOperationLowerer(
 
     private CudaExpressionIr LowerCompoundAssignment(ICompoundAssignmentOperation assignment)
     {
+        if (assignment.IsChecked)
+        {
+            ReportUnsupported(assignment.Syntax);
+            return InvalidExpression(assignment.Syntax.GetLocation());
+        }
         if (assignment.Target is IPropertyReferenceOperation property &&
             !IsArrayViewIndexer(property) &&
             !plan.TryGetProperty(property.Property, out _))
@@ -1547,7 +2869,37 @@ internal sealed class CudaOperationLowerer(
                 false,
                 assignment.Target.Syntax.GetLocation()),
             prefix);
+        current = ApplyUserDefinedCompoundConversion(
+            current,
+            assignment.InConversion,
+            prefix,
+            assignment.Syntax.GetLocation());
         var value = Materialize(LowerOperation(assignment.Value), prefix);
+        if (TryGetUserDefinedCall(
+                assignment.OperatorMethod,
+                out var compoundTarget,
+                out var compoundCall))
+        {
+            var operatorResult = MaterializeValue(new CudaValueIr(
+                $"{compoundCall.Name}({current.Code}, {value.Code})",
+                compoundTarget.ReturnType,
+                CudaEffectIr.Call,
+                false,
+                assignment.Syntax.GetLocation()), prefix);
+            operatorResult = ApplyUserDefinedCompoundConversion(
+                operatorResult,
+                assignment.OutConversion,
+                prefix,
+                assignment.Syntax.GetLocation());
+            return new CudaExpressionIr(
+                prefix.ToImmutable(),
+                new CudaValueIr(
+                    $"(*({address.Code}) = {operatorResult.Code})",
+                    assignment.Type,
+                    CudaEffectIr.Write,
+                    false,
+                    assignment.Syntax.GetLocation()));
+        }
         if (!TryPlanCompound(assignment, out var helper))
         {
             ReportUnsupported(assignment.Syntax);
@@ -1573,6 +2925,11 @@ internal sealed class CudaOperationLowerer(
 
     private CudaExpressionIr LowerIncrement(IIncrementOrDecrementOperation increment)
     {
+        if (increment.IsChecked)
+        {
+            ReportUnsupported(increment.Syntax);
+            return InvalidExpression(increment.Syntax.GetLocation());
+        }
         if (increment.Target is IPropertyReferenceOperation property &&
             !IsArrayViewIndexer(property) &&
             !plan.TryGetProperty(property.Property, out _))
@@ -1584,6 +2941,31 @@ internal sealed class CudaOperationLowerer(
         RejectWrite(place, increment.Target);
         var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
         var address = MaterializeAddress(place, prefix);
+        if (TryGetUserDefinedCall(
+                increment.OperatorMethod,
+                out var incrementTarget,
+                out var incrementCall))
+        {
+            var current = MaterializeValue(new CudaValueIr(
+                $"*({address.Code})",
+                increment.Target.Type,
+                CudaEffectIr.Read,
+                false,
+                increment.Target.Syntax.GetLocation()), prefix);
+            var updated = MaterializeValue(new CudaValueIr(
+                $"{incrementCall.Name}({current.Code})",
+                incrementTarget.ReturnType,
+                CudaEffectIr.Call,
+                false,
+                increment.Syntax.GetLocation()), prefix);
+            prefix.Add(CreateAssignmentStatement(
+                $"*({address.Code})",
+                updated,
+                increment.Syntax.GetLocation()));
+            return new CudaExpressionIr(
+                prefix.ToImmutable(),
+                increment.IsPostfix ? current : updated);
+        }
         if (!TryPlanIncrement(increment, out var helper))
         {
             ReportUnsupported(increment.Syntax);
@@ -1627,7 +3009,35 @@ internal sealed class CudaOperationLowerer(
                 false,
                 property.Syntax.GetLocation())),
             prefix);
+        current = ApplyUserDefinedCompoundConversion(
+            current,
+            assignment.InConversion,
+            prefix,
+            assignment.Syntax.GetLocation());
         var value = Materialize(LowerOperation(assignment.Value), prefix);
+        if (TryGetUserDefinedCall(
+                assignment.OperatorMethod,
+                out var compoundTarget,
+                out var compoundCall))
+        {
+            var updated = MaterializeValue(new CudaValueIr(
+                $"{compoundCall.Name}({current.Code}, {value.Code})",
+                compoundTarget.ReturnType,
+                CudaEffectIr.Call,
+                false,
+                assignment.Syntax.GetLocation()), prefix);
+            updated = ApplyUserDefinedCompoundConversion(
+                updated,
+                assignment.OutConversion,
+                prefix,
+                assignment.Syntax.GetLocation());
+            setterArguments.Add(updated.Code);
+            prefix.Add(CreateCallStatement(
+                setterCall,
+                setterArguments,
+                property.Syntax.GetLocation()));
+            return new CudaExpressionIr(prefix.ToImmutable(), updated);
+        }
         if (!TryPlanCompound(assignment, out var helper))
         {
             ReportUnsupported(assignment.Syntax);
@@ -1661,8 +3071,7 @@ internal sealed class CudaOperationLowerer(
                 out var setterCall,
                 out var getterArguments,
                 out var setterArguments,
-                out var prefix) ||
-            !TryPlanIncrement(increment, out var helper))
+                out var prefix))
         {
             ReportUnsupported(increment.Syntax);
             return InvalidExpression(increment.Syntax.GetLocation());
@@ -1680,6 +3089,36 @@ internal sealed class CudaOperationLowerer(
                 property.Syntax.GetLocation()),
             false,
             property.Syntax.GetLocation()));
+        if (TryGetUserDefinedCall(
+                increment.OperatorMethod,
+                out var incrementTarget,
+                out var incrementCall))
+        {
+            var updated = MaterializeValue(new CudaValueIr(
+                $"{incrementCall.Name}({currentName})",
+                incrementTarget.ReturnType,
+                CudaEffectIr.Call,
+                false,
+                increment.Syntax.GetLocation()), prefix);
+            setterArguments.Add(updated.Code);
+            prefix.Add(CreateCallStatement(
+                setterCall,
+                setterArguments,
+                property.Syntax.GetLocation()));
+            return new CudaExpressionIr(
+                prefix.ToImmutable(),
+                increment.IsPostfix
+                    ? ReferenceExpression(
+                        currentName,
+                        property.Type,
+                        increment.Syntax.GetLocation()).Value
+                    : updated);
+        }
+        if (!TryPlanIncrement(increment, out var helper))
+        {
+            ReportUnsupported(increment.Syntax);
+            return InvalidExpression(increment.Syntax.GetLocation());
+        }
         var resultCode = helper is not null
             ? $"{helper}({currentName})"
             : increment.IsPostfix
@@ -1697,6 +3136,74 @@ internal sealed class CudaOperationLowerer(
             setterArguments,
             property.Syntax.GetLocation()));
         return new CudaExpressionIr(prefix.ToImmutable(), result);
+    }
+
+    private bool TryGetUserDefinedCall(
+        IMethodSymbol? method,
+        out IMethodSymbol target,
+        out CudaCallPlan call)
+    {
+        target = null!;
+        call = null!;
+        if (method is null || plan.IsCudaInt32Type(method.ContainingType))
+            return false;
+        target = plan.ResolveMethod(method, function);
+        if (plan.GetCallPlan(target) is not { Kind: CudaCallKind.PlannedFunction } planned)
+            return false;
+        call = planned;
+        return true;
+    }
+
+    private CudaValueIr ApplyUserDefinedCompoundConversion(
+        CudaValueIr value,
+        CommonConversion conversion,
+        ImmutableArray<CudaStatementIr>.Builder prefix,
+        Location location)
+    {
+        if (!conversion.IsUserDefined ||
+            !TryGetUserDefinedCall(
+                conversion.MethodSymbol,
+                out var conversionTarget,
+                out var conversionCall))
+        {
+            return value;
+        }
+        return MaterializeValue(new CudaValueIr(
+            $"{conversionCall.Name}({value.Code})",
+            conversionTarget.ReturnType,
+            CudaEffectIr.Call,
+            false,
+            location), prefix);
+    }
+
+    private CudaExpressionIr LowerUserDefinedCall(
+        IMethodSymbol target,
+        CudaCallPlan call,
+        IReadOnlyList<IOperation> operands,
+        ITypeSymbol? resultType,
+        Location location)
+    {
+        var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        var arguments = new string[target.Parameters.Length];
+        if (operands.Count != arguments.Length)
+        {
+            ReportUnsupported(operands[0].Syntax);
+            return InvalidExpression(location);
+        }
+        for (var index = 0; index < operands.Count; index++)
+        {
+            arguments[index] = target.Parameters[index].RefKind == RefKind.None
+                ? Materialize(LowerOperation(operands[index]), prefix).Code
+                : LowerCallArgument(operands[index], target.Parameters[index], prefix);
+        }
+        return new CudaExpressionIr(
+            prefix.ToImmutable(),
+            new CudaValueIr(
+                $"{call.Name}({string.Join(", ", arguments)})",
+                ResolveType(resultType),
+                plan.IsPureCall(target) ? CudaEffectIr.None : CudaEffectIr.Call,
+                false,
+                location));
     }
 
     private bool TryPreparePropertyMutation(
@@ -1809,6 +3316,13 @@ internal sealed class CudaOperationLowerer(
         if (selection.Type is null)
             return UnsupportedExpression(selection);
 
+        if (selection.Arms.Any(static arm =>
+                arm.Guard is not null ||
+                arm.Pattern is not (IDiscardPatternOperation or IConstantPatternOperation)))
+        {
+            return LowerPatternSwitchExpression(selection);
+        }
+
         var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
         var value = Materialize(LowerOperation(selection.Value), prefix);
         var resultName = NewTemporaryName();
@@ -1883,6 +3397,408 @@ internal sealed class CudaOperationLowerer(
                 selection.Syntax.GetLocation()));
     }
 
+    private CudaExpressionIr LowerIsPattern(IIsPatternOperation operation)
+    {
+        var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        var input = LowerOperation(operation.Value);
+        prefix.AddRange(input.Prefix);
+        var inputName = NewTemporaryName();
+        prefix.Add(new CudaVariableDeclarationStatementIr(
+            FormatType(operation.Value.Type!, false, operation.Value.Syntax.GetLocation()),
+            inputName,
+            input.Value,
+            false,
+            operation.Value.Syntax.GetLocation()));
+        var inputValue = new CudaValueIr(
+            inputName,
+            operation.Value.Type,
+            CudaEffectIr.Read,
+            true,
+            operation.Value.Syntax.GetLocation());
+        if (!TryLowerPattern(operation.Pattern, inputValue, out var condition, out var bindings))
+            return InvalidExpression(operation.Syntax.GetLocation());
+        prefix.AddRange(condition.Prefix);
+        prefix.AddRange(bindings);
+        return new CudaExpressionIr(prefix.ToImmutable(), condition.Value);
+    }
+
+    private CudaStatementIr LowerPatternSwitch(
+        SwitchStatementSyntax syntax,
+        ISwitchOperation operation)
+    {
+        var breakLabel = $"csharp2cuda_switch_break_{labelIndex++}";
+        patternSwitchBreakLabels.Add(syntax, breakLabel);
+        var statements = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        var input = LowerOperation(operation.Value);
+        statements.AddRange(input.Prefix);
+        var inputName = NewTemporaryName();
+        statements.Add(new CudaVariableDeclarationStatementIr(
+            FormatType(operation.Value.Type!, false, syntax.Expression.GetLocation()),
+            inputName,
+            input.Value,
+            false,
+            syntax.Expression.GetLocation()));
+        var boolType = semanticModel.Compilation.GetSpecialType(SpecialType.System_Boolean);
+        var matchedName = NewTemporaryName();
+        statements.Add(new CudaVariableDeclarationStatementIr(
+            "bool",
+            matchedName,
+            new CudaValueIr("false", boolType, CudaEffectIr.None, true, syntax.GetLocation()),
+            false,
+            syntax.GetLocation()));
+        var inputValue = new CudaValueIr(
+            inputName,
+            operation.Value.Type,
+            CudaEffectIr.Read,
+            true,
+            syntax.Expression.GetLocation());
+        var deferredDefaultArms = ImmutableArray.CreateBuilder<CudaStatementIr>();
+
+        for (var sectionIndex = 0; sectionIndex < operation.Cases.Length; sectionIndex++)
+        {
+            var switchCase = operation.Cases[sectionIndex];
+            var sectionSyntax = syntax.Sections[sectionIndex];
+            foreach (var clause in switchCase.Clauses)
+            {
+                if (!TryLowerCaseClause(
+                        clause,
+                        inputValue,
+                        out var condition,
+                        out var bindings,
+                        out var guard))
+                {
+                    continue;
+                }
+
+                var body = sectionSyntax.Statements
+                    .Select(LowerStatement)
+                    .ToImmutableArray();
+                var arm = CreatePatternArm(
+                    matchedName,
+                    condition,
+                    bindings,
+                    guard,
+                    body,
+                    clause.Syntax.GetLocation());
+                if (clause is IDefaultCaseClauseOperation)
+                    deferredDefaultArms.Add(arm);
+                else
+                    statements.Add(arm);
+            }
+        }
+        statements.AddRange(deferredDefaultArms);
+        patternSwitchBreakLabels.Remove(syntax);
+        statements.Add(new CudaLabelStatementIr(breakLabel, syntax.GetLocation()));
+        return new CudaStatementGroupIr(statements.ToImmutable(), syntax.GetLocation());
+    }
+
+    private CudaStatementIr LowerBreak(BreakStatementSyntax syntax)
+    {
+        var target = syntax.Ancestors().FirstOrDefault(static ancestor => ancestor is
+            SwitchStatementSyntax or ForStatementSyntax or ForEachStatementSyntax or
+            WhileStatementSyntax or DoStatementSyntax);
+        return target is SwitchStatementSyntax selection &&
+            patternSwitchBreakLabels.TryGetValue(selection, out var label)
+                ? new CudaGotoStatementIr(label, syntax.GetLocation())
+                : new CudaBreakStatementIr(syntax.GetLocation());
+    }
+
+    private CudaExpressionIr LowerPatternSwitchExpression(ISwitchExpressionOperation selection)
+    {
+        var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        var input = LowerOperation(selection.Value);
+        prefix.AddRange(input.Prefix);
+        var inputName = NewTemporaryName();
+        prefix.Add(new CudaVariableDeclarationStatementIr(
+            FormatType(selection.Value.Type!, false, selection.Value.Syntax.GetLocation()),
+            inputName,
+            input.Value,
+            false,
+            selection.Value.Syntax.GetLocation()));
+        var resultName = NewTemporaryName();
+        prefix.Add(new CudaVariableDeclarationStatementIr(
+            FormatType(selection.Type!, false, selection.Syntax.GetLocation()),
+            resultName,
+            null,
+            false,
+            selection.Syntax.GetLocation()));
+        var boolType = semanticModel.Compilation.GetSpecialType(SpecialType.System_Boolean);
+        var matchedName = NewTemporaryName();
+        prefix.Add(new CudaVariableDeclarationStatementIr(
+            "bool",
+            matchedName,
+            new CudaValueIr("false", boolType, CudaEffectIr.None, true, selection.Syntax.GetLocation()),
+            false,
+            selection.Syntax.GetLocation()));
+        var inputValue = new CudaValueIr(
+            inputName,
+            selection.Value.Type,
+            CudaEffectIr.Read,
+            true,
+            selection.Value.Syntax.GetLocation());
+
+        foreach (var arm in selection.Arms)
+        {
+            if (!TryLowerPattern(arm.Pattern, inputValue, out var condition, out var bindings))
+                continue;
+            var value = LowerOperation(arm.Value);
+            var body = ImmutableArray.CreateBuilder<CudaStatementIr>();
+            body.AddRange(value.Prefix);
+            body.Add(CreateAssignmentStatement(
+                resultName,
+                value.Value,
+                arm.Value.Syntax.GetLocation()));
+            prefix.Add(CreatePatternArm(
+                matchedName,
+                condition,
+                bindings,
+                arm.Guard is null ? null : LowerOperation(arm.Guard),
+                body.ToImmutable(),
+                arm.Syntax.GetLocation()));
+        }
+        prefix.Add(new CudaIfStatementIr(
+            ValueExpression(new CudaValueIr(
+                $"!({matchedName})",
+                boolType,
+                CudaEffectIr.Read,
+                false,
+                selection.Syntax.GetLocation())),
+            new CudaTrapStatementIr(selection.Syntax.GetLocation()),
+            null,
+            selection.Syntax.GetLocation()));
+        return new CudaExpressionIr(
+            prefix.ToImmutable(),
+            new CudaValueIr(
+                resultName,
+                selection.Type,
+                CudaEffectIr.None,
+                true,
+                selection.Syntax.GetLocation()));
+    }
+
+    private bool TryLowerCaseClause(
+        ICaseClauseOperation clause,
+        CudaValueIr input,
+        out CudaExpressionIr condition,
+        out ImmutableArray<CudaStatementIr> bindings,
+        out CudaExpressionIr? guard)
+    {
+        guard = null;
+        if (clause is IDefaultCaseClauseOperation)
+        {
+            condition = ValueExpression(new CudaValueIr(
+                "true",
+                semanticModel.Compilation.GetSpecialType(SpecialType.System_Boolean),
+                CudaEffectIr.None,
+                true,
+                clause.Syntax.GetLocation()));
+            bindings = [];
+            return true;
+        }
+        if (clause is IPatternCaseClauseOperation pattern)
+        {
+            if (!TryLowerPattern(pattern.Pattern, input, out condition, out bindings))
+                return false;
+            guard = pattern.Guard is null ? null : LowerOperation(pattern.Guard);
+            return true;
+        }
+        if (clause is ISingleValueCaseClauseOperation single)
+        {
+            var constant = LowerOperation(single.Value);
+            condition = new CudaExpressionIr(
+                constant.Prefix,
+                new CudaValueIr(
+                    $"(({input.Code}) == ({constant.Value.Code}))",
+                    semanticModel.Compilation.GetSpecialType(SpecialType.System_Boolean),
+                    CudaEffectIr.None,
+                    false,
+                    clause.Syntax.GetLocation()));
+            bindings = [];
+            return true;
+        }
+        ReportUnsupported(clause.Syntax);
+        condition = InvalidExpression(clause.Syntax.GetLocation());
+        bindings = [];
+        return false;
+    }
+
+    private CudaStatementIr CreatePatternArm(
+        string matchedName,
+        CudaExpressionIr condition,
+        ImmutableArray<CudaStatementIr> bindings,
+        CudaExpressionIr? guard,
+        ImmutableArray<CudaStatementIr> body,
+        Location location)
+    {
+        var boolType = semanticModel.Compilation.GetSpecialType(SpecialType.System_Boolean);
+        var armStatements = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        armStatements.AddRange(bindings);
+        var selected = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        selected.Add(CreateAssignmentStatement(
+            matchedName,
+            new CudaValueIr("true", boolType, CudaEffectIr.None, true, location),
+            location));
+        selected.AddRange(body);
+        if (guard is null)
+        {
+            armStatements.AddRange(selected);
+        }
+        else
+        {
+            armStatements.Add(new CudaIfStatementIr(
+                guard,
+                new CudaStatementGroupIr(selected.ToImmutable(), location),
+                null,
+                location));
+        }
+        return new CudaIfStatementIr(
+            condition with
+            {
+                Value = condition.Value with
+                {
+                    Code = $"(!({matchedName}) && ({condition.Value.Code}))",
+                    IsSimple = false
+                }
+            },
+            new CudaStatementGroupIr(armStatements.ToImmutable(), location),
+            null,
+            location);
+    }
+
+    private bool TryLowerPattern(
+        IPatternOperation pattern,
+        CudaValueIr input,
+        out CudaExpressionIr condition,
+        out ImmutableArray<CudaStatementIr> bindings)
+    {
+        var boolType = semanticModel.Compilation.GetSpecialType(SpecialType.System_Boolean);
+        switch (pattern)
+        {
+            case IDiscardPatternOperation:
+                condition = ValueExpression(new CudaValueIr(
+                    "true", boolType, CudaEffectIr.None, true, pattern.Syntax.GetLocation()));
+                bindings = [];
+                return true;
+            case IConstantPatternOperation constant:
+                {
+                    if (plan.IsArrayViewType(input.Type) && IsNullConstant(constant.Value))
+                    {
+                        condition = ValueExpression(new CudaValueIr(
+                            $"({input.Code}).is_null",
+                            boolType,
+                            CudaEffectIr.Read,
+                            false,
+                            pattern.Syntax.GetLocation()));
+                        bindings = [];
+                        return true;
+                    }
+                    var value = LowerOperation(constant.Value);
+                    condition = new CudaExpressionIr(
+                        value.Prefix,
+                        new CudaValueIr(
+                            $"(({input.Code}) == ({value.Value.Code}))",
+                            boolType,
+                            CudaEffectIr.None,
+                            false,
+                            pattern.Syntax.GetLocation()));
+                    bindings = [];
+                    return true;
+                }
+            case IRelationalPatternOperation relational:
+                {
+                    var value = LowerOperation(relational.Value);
+                    var operation = relational.OperatorKind switch
+                    {
+                        BinaryOperatorKind.LessThan => "<",
+                        BinaryOperatorKind.LessThanOrEqual => "<=",
+                        BinaryOperatorKind.GreaterThan => ">",
+                        BinaryOperatorKind.GreaterThanOrEqual => ">=",
+                        _ => null
+                    };
+                    if (operation is null)
+                        break;
+                    condition = new CudaExpressionIr(
+                        value.Prefix,
+                        new CudaValueIr(
+                            $"(({input.Code}) {operation} ({value.Value.Code}))",
+                            boolType,
+                            CudaEffectIr.None,
+                            false,
+                            pattern.Syntax.GetLocation()));
+                    bindings = [];
+                    return true;
+                }
+            case IBinaryPatternOperation binary:
+                {
+                    if (!TryLowerPattern(binary.LeftPattern, input, out var left, out var leftBindings) ||
+                        !TryLowerPattern(binary.RightPattern, input, out var right, out var rightBindings) ||
+                        binary.OperatorKind == BinaryOperatorKind.Or &&
+                        (!leftBindings.IsEmpty || !rightBindings.IsEmpty))
+                    {
+                        break;
+                    }
+                    var prefixes = ImmutableArray.CreateBuilder<CudaStatementIr>();
+                    prefixes.AddRange(left.Prefix);
+                    prefixes.AddRange(right.Prefix);
+                    var operation = binary.OperatorKind == BinaryOperatorKind.And ? "&&" : "||";
+                    condition = new CudaExpressionIr(
+                        prefixes.ToImmutable(),
+                        new CudaValueIr(
+                            $"(({left.Value.Code}) {operation} ({right.Value.Code}))",
+                            boolType,
+                            CudaEffectIr.None,
+                            false,
+                            pattern.Syntax.GetLocation()));
+                    bindings = binary.OperatorKind == BinaryOperatorKind.And
+                        ? leftBindings.AddRange(rightBindings)
+                        : [];
+                    return true;
+                }
+            case INegatedPatternOperation negated:
+                if (TryLowerPattern(negated.Pattern, input, out var inner, out var innerBindings) &&
+                    innerBindings.IsEmpty)
+                {
+                    condition = inner with
+                    {
+                        Value = inner.Value with
+                        {
+                            Code = $"!({inner.Value.Code})",
+                            IsSimple = false
+                        }
+                    };
+                    bindings = [];
+                    return true;
+                }
+                break;
+            case IDeclarationPatternOperation declaration
+                when declaration.Syntax is VarPatternSyntax &&
+                    declaration.DeclaredSymbol is ILocalSymbol local:
+                bindings =
+                [
+                    new CudaVariableDeclarationStatementIr(
+                        FormatType(
+                            local.Type,
+                            false,
+                            declaration.Syntax.GetLocation()),
+                        plan.GetIdentifier(local),
+                        input,
+                        false,
+                        declaration.Syntax.GetLocation())
+                ];
+                condition = ValueExpression(new CudaValueIr(
+                    "true", boolType, CudaEffectIr.None, true, pattern.Syntax.GetLocation()));
+                return true;
+        }
+
+        diagnostics.Add(Diagnostic.Create(
+            CudaDiagnostics.UnsupportedPattern,
+            pattern.Syntax.GetLocation(),
+            pattern.Syntax.ToString()));
+        condition = InvalidExpression(pattern.Syntax.GetLocation());
+        bindings = [];
+        return false;
+    }
+
     private CudaStatementIr CreateConditionalAssignment(
         string target,
         CudaExpressionIr source,
@@ -1952,22 +3868,33 @@ internal sealed class CudaOperationLowerer(
         {
             case ILocalReferenceOperation local:
                 {
-                    var name = plan.GetIdentifier(local.Local);
+                    var captured = function.TryGetCapture(local.Local, out var capture);
+                    var name = captured ? capture.EmittedName : plan.GetIdentifier(local.Local);
+                    var indirect = captured
+                        ? capture.ByReference
+                        : local.Local.RefKind != RefKind.None;
+                    var access = indirect ? $"*({name})" : name;
                     return new CudaPlaceIr(
                         [],
-                        name,
-                        $"&({name})",
+                        access,
+                        indirect ? name : $"&({name})",
                         local.Type!,
                         CudaEffectIr.Read,
                         local.Syntax.GetLocation());
                 }
             case IParameterReferenceOperation parameter:
                 {
-                    var name = plan.GetIdentifier(parameter.Parameter);
+                    var captured = function.TryGetCapture(parameter.Parameter, out var capture);
+                    var name = captured
+                        ? capture.EmittedName
+                        : plan.GetIdentifier(parameter.Parameter);
+                    var indirect = captured
+                        ? capture.ByReference
+                        : parameter.Parameter.RefKind != RefKind.None;
                     return new CudaPlaceIr(
                         [],
-                        parameter.Parameter.RefKind == RefKind.None ? name : $"*({name})",
-                        parameter.Parameter.RefKind == RefKind.None ? $"&({name})" : name,
+                        indirect ? $"*({name})" : name,
+                        indirect ? name : $"&({name})",
                         parameter.Type!,
                         CudaEffectIr.Read,
                         parameter.Syntax.GetLocation());
@@ -1992,6 +3919,9 @@ internal sealed class CudaOperationLowerer(
                 return LowerFieldPlace(field);
             case IArrayElementReferenceOperation element:
                 return LowerElementPlace(element);
+            case IImplicitIndexerReferenceOperation indexer when
+                indexer.Argument is not IRangeOperation:
+                return LowerImplicitIndexerPlace(indexer);
             case IPropertyReferenceOperation property when
                 plan.TryGetProperty(property.Property, out var propertyPlan) &&
                 property.Instance is not null:
@@ -2033,6 +3963,40 @@ internal sealed class CudaOperationLowerer(
 
     private CudaPlaceIr LowerFieldPlace(IFieldReferenceOperation field)
     {
+        if (TryGetTupleFieldName(field.Field, out var tupleFieldName))
+        {
+            if (field.Instance is null)
+            {
+                ReportUnsupported(field.Syntax);
+                return new CudaPlaceIr(
+                    [],
+                    "csharp2cuda_invalid",
+                    "nullptr",
+                    field.Type!,
+                    CudaEffectIr.None,
+                    field.Syntax.GetLocation());
+            }
+            var tuplePrefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+            string tupleAccess;
+            if (IsAddressable(field.Instance))
+            {
+                var instance = LowerPlace(field.Instance);
+                tuplePrefix.AddRange(instance.Prefix);
+                tupleAccess = $"({instance.AccessCode}).{tupleFieldName}";
+            }
+            else
+            {
+                var instance = Materialize(LowerOperation(field.Instance), tuplePrefix);
+                tupleAccess = $"({instance.Code}).{tupleFieldName}";
+            }
+            return new CudaPlaceIr(
+                tuplePrefix.ToImmutable(),
+                tupleAccess,
+                $"&({tupleAccess})",
+                field.Type!,
+                CudaEffectIr.Read,
+                field.Syntax.GetLocation());
+        }
         if (!plan.TryGetIdentifier(field.Field, out var name))
         {
             ReportUnsupported(field.Syntax);
@@ -2083,6 +4047,26 @@ internal sealed class CudaOperationLowerer(
             field.Type!,
             CudaEffectIr.Read,
             field.Syntax.GetLocation());
+    }
+
+    private static bool TryGetTupleFieldName(IFieldSymbol field, out string name)
+    {
+        name = string.Empty;
+        if (!field.ContainingType.IsTupleType)
+            return false;
+        var canonicalName = field.CorrespondingTupleField?.Name ?? field.Name;
+        if (!canonicalName.StartsWith("Item", StringComparison.Ordinal) ||
+            !int.TryParse(
+                canonicalName.AsSpan("Item".Length),
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var index) ||
+            index is < 1 or > 7)
+        {
+            return false;
+        }
+        name = $"item{index}";
+        return true;
     }
 
     private CudaPlaceIr LowerExplicitFieldPlace(IFieldReferenceOperation field)
@@ -2149,7 +4133,7 @@ internal sealed class CudaOperationLowerer(
         var target = targetExpression.Value;
         if (target.Type is IPointerTypeSymbol)
             target = MaterializeValue(target, prefix);
-        var index = Materialize(LowerOperation(element.Indices[0]), prefix);
+        var index = LowerIndexArgument(element.Indices[0], target, prefix);
         var access = $"({target.Code})[{index.Code}]";
         return new CudaPlaceIr(
             prefix.ToImmutable(),
@@ -2158,6 +4142,24 @@ internal sealed class CudaOperationLowerer(
             element.Type!,
             CudaEffectIr.Read,
             element.Syntax.GetLocation())
+        {
+            ViewMutability = target.ViewMutability
+        };
+    }
+
+    private CudaPlaceIr LowerImplicitIndexerPlace(IImplicitIndexerReferenceOperation indexer)
+    {
+        var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        var target = Materialize(LowerOperation(indexer.Instance), prefix);
+        var argument = LowerIndexArgument(indexer.Argument, target, prefix);
+        var access = $"({target.Code})[{argument.Code}]";
+        return new CudaPlaceIr(
+            prefix.ToImmutable(),
+            access,
+            $"&({access})",
+            indexer.Type!,
+            CudaEffectIr.Read,
+            indexer.Syntax.GetLocation())
         {
             ViewMutability = target.ViewMutability
         };
@@ -2272,6 +4274,43 @@ internal sealed class CudaOperationLowerer(
         };
     }
 
+    private CudaValueIr MaterializeForReuse(
+        CudaValueIr value,
+        ImmutableArray<CudaStatementIr>.Builder prefix)
+    {
+        var resolvedType = ResolveType(value.Type);
+        if (resolvedType is not null &&
+            !SymbolEqualityComparer.Default.Equals(resolvedType, value.Type))
+        {
+            value = value with { Type = resolvedType };
+        }
+        if (value.Type is null ||
+            value.Type.SpecialType == SpecialType.System_Void ||
+            value.IsSimple)
+        {
+            return value;
+        }
+        var name = NewTemporaryName();
+        prefix.Add(new CudaVariableDeclarationStatementIr(
+            FormatType(
+                value.Type,
+                value.ViewMutability == CudaViewMutability.ReadOnly,
+                value.Location),
+            name,
+            value,
+            false,
+            value.Location));
+        return new CudaValueIr(
+            name,
+            value.Type,
+            CudaEffectIr.None,
+            true,
+            value.Location)
+        {
+            ViewMutability = value.ViewMutability
+        };
+    }
+
     private CudaValueIr MaterializeAddress(
         CudaPlaceIr place,
         ImmutableArray<CudaStatementIr>.Builder prefix)
@@ -2332,6 +4371,21 @@ internal sealed class CudaOperationLowerer(
 
     private void RejectWrite(CudaPlaceIr place, IOperation target)
     {
+        if (target is ILocalReferenceOperation local &&
+            (local.Local.RefKind == RefKind.RefReadOnly ||
+             function.TryGetCapture(local.Local, out var localCapture) &&
+             localCapture.IsReadOnly) ||
+            target is IParameterReferenceOperation parameter &&
+            (parameter.Parameter.RefKind == RefKind.In ||
+             function.TryGetCapture(parameter.Parameter, out var parameterCapture) &&
+             parameterCapture.IsReadOnly))
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InvalidReferenceEscape,
+                target.Syntax.GetLocation(),
+                target.Syntax.ToString()));
+            return;
+        }
         var constant = EnumerateOperationTree(target)
             .OfType<IFieldReferenceOperation>()
             .Select(reference => plan.TryGetConstantArray(reference.Field, out var value)
@@ -2373,6 +4427,22 @@ internal sealed class CudaOperationLowerer(
         }
     }
 
+    private static IConversionOperation? FindContextualConversionOperation(
+        IOperation? root,
+        ExpressionSyntax expression)
+    {
+        if (root is null)
+            return null;
+        return EnumerateOperationTree(root).OfType<IConversionOperation>()
+            .FirstOrDefault(operation =>
+            !operation.Conversion.IsIdentity &&
+            operation.Operand is not (IObjectCreationOperation or IDefaultValueOperation) &&
+            expression is not StackAllocArrayCreationExpressionSyntax &&
+            operation.Syntax.RawKind == expression.RawKind &&
+            operation.Syntax.SyntaxTree == expression.SyntaxTree &&
+            operation.Syntax.Span == expression.Span);
+    }
+
     private CudaStatementIr UnsupportedStatement(StatementSyntax syntax)
     {
         ReportUnsupported(syntax);
@@ -2390,6 +4460,14 @@ internal sealed class CudaOperationLowerer(
 
     private CudaExpressionIr ManagedAllocationExpression(IOperation operation)
     {
+        if (operation is IDelegateCreationOperation)
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.ClosureEscape,
+                operation.Syntax.GetLocation(),
+                operation.Syntax.ToString()));
+            return InvalidExpression(operation.Syntax.GetLocation());
+        }
         diagnostics.Add(Diagnostic.Create(
             CudaDiagnostics.ManagedAllocation,
             operation.Syntax.GetLocation(),
@@ -2757,13 +4835,29 @@ internal sealed class CudaOperationLowerer(
 
     private bool TryPlanConversion(IConversionOperation operation, out string? helper)
     {
-        helper = null;
         var sourceType = ResolveType(operation.Operand.Type);
         var targetType = ResolveType(operation.Type);
         if (targetType is null)
+        {
+            helper = null;
             return false;
+        }
         if (sourceType is null)
+        {
+            helper = null;
             return targetType is IPointerTypeSymbol;
+        }
+        return TryPlanConversion(sourceType, targetType, out helper);
+    }
+
+    private bool TryPlanConversion(
+        ITypeSymbol sourceType,
+        ITypeSymbol targetType,
+        out string? helper)
+    {
+        helper = null;
+        sourceType = ResolveType(sourceType)!;
+        targetType = ResolveType(targetType)!;
         var source = EffectiveType(sourceType);
         var target = EffectiveType(targetType);
         var supported = IsArithmetic(source) && IsArithmetic(target) ||
@@ -2946,6 +5040,7 @@ internal sealed class CudaOperationLowerer(
             IParameterReferenceOperation or
             IFieldReferenceOperation or
             IArrayElementReferenceOperation or
+            IImplicitIndexerReferenceOperation or
             IPropertyReferenceOperation { Property.IsIndexer: true } ||
             IsPointerIndirection(operation) ||
             IsPointerElement(operation);

@@ -41,7 +41,22 @@ internal sealed record CudaFixedArrayDeclarationStatementIr(
     int Length,
     bool IsConst,
     ImmutableArray<CudaValueIr> Initializers,
-    Location Location) : CudaStatementIr(Location);
+    Location Location) : CudaStatementIr(Location)
+{
+    public CudaFixedArrayBindingKind BindingKind { get; init; }
+
+    public string? BindingName { get; init; }
+
+    public bool ZeroInitialize { get; init; }
+}
+
+internal enum CudaFixedArrayBindingKind
+{
+    None,
+    Pointer,
+    WritableView,
+    ReadOnlyView
+}
 
 internal sealed record CudaStorageDeclarationStatementIr(
     string ElementTypeName,
@@ -95,6 +110,14 @@ internal sealed record CudaReturnStatementIr(
     Location Location) : CudaStatementIr(Location);
 
 internal sealed record CudaBreakStatementIr(Location Location) : CudaStatementIr(Location);
+
+internal sealed record CudaGotoStatementIr(
+    string Label,
+    Location Location) : CudaStatementIr(Location);
+
+internal sealed record CudaLabelStatementIr(
+    string Label,
+    Location Location) : CudaStatementIr(Location);
 
 internal sealed record CudaContinueStatementIr(Location Location) : CudaStatementIr(Location);
 

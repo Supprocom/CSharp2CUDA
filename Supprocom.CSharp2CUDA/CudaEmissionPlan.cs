@@ -12,6 +12,8 @@ namespace Supprocom.CSharp2CUDA;
 
 internal sealed class CudaEmissionPlan
 {
+    public const int MaximumFixedLocalElementCount = 1024;
+
     internal const string ExternalAttributeName = "Supprocom.CSharp2CUDA.CudaExternalAttribute";
     internal const string ExternalDeviceAttributeName =
         "Supprocom.CSharp2CUDA.CudaExternalDeviceAttribute";
@@ -95,7 +97,8 @@ internal sealed class CudaEmissionPlan
         new(SymbolEqualityComparer.Default);
     private readonly Dictionary<IPropertySymbol, CudaPropertyPlan> propertyPlans =
         new(SymbolEqualityComparer.Default);
-    private readonly HashSet<LocalDeclarationStatementSyntax> fixedLocalArrays = [];
+    private readonly Dictionary<LocalDeclarationStatementSyntax, CudaFixedLocalArrayPlan>
+        fixedLocalArrays = [];
     private readonly HashSet<LocalDeclarationStatementSyntax> recognizedStorageDeclarations = [];
     private readonly Dictionary<LocalDeclarationStatementSyntax, CudaStoragePlan>
         storageDeclarations = [];
@@ -250,8 +253,10 @@ internal sealed class CudaEmissionPlan
     public bool TryGetProperty(IPropertySymbol property, out CudaPropertyPlan propertyPlan) =>
         propertyPlans.TryGetValue(property, out propertyPlan!);
 
-    public bool IsFixedLocalArray(LocalDeclarationStatementSyntax declaration) =>
-        fixedLocalArrays.Contains(declaration);
+    public bool TryGetFixedLocalArray(
+        LocalDeclarationStatementSyntax declaration,
+        out CudaFixedLocalArrayPlan fixedArray) =>
+        fixedLocalArrays.TryGetValue(declaration, out fixedArray!);
 
     public bool IsRecognizedStorageDeclaration(LocalDeclarationStatementSyntax declaration) =>
         recognizedStorageDeclarations.Contains(declaration);
@@ -369,6 +374,29 @@ internal sealed class CudaEmissionPlan
             UsesArrayViews = true;
             return new CudaCallPlan(CudaCallKind.SliceView, "slice");
         }
+        if (symbols.IsSpanType(method.ContainingType, out var readOnlySpan))
+        {
+            UsesArrayViews = true;
+            if (!readOnlySpan && method.Name == "Clear" && method.Parameters.IsEmpty)
+                return new CudaCallPlan(CudaCallKind.ClearView, "clear");
+            if (!readOnlySpan && method.Name == "Fill" && method.Parameters.Length == 1)
+                return new CudaCallPlan(CudaCallKind.FillView, "fill");
+            if (method.Name == "CopyTo" && method.Parameters.Length == 1)
+                return new CudaCallPlan(CudaCallKind.CopyView, "copy_to");
+            if (method.Name == "TryCopyTo" && method.Parameters.Length == 1)
+                return new CudaCallPlan(CudaCallKind.TryCopyView, "try_copy_to");
+        }
+        if (symbols.IsMemoryExtensionsType(method.ContainingType) &&
+            method.Name == "AsSpan" &&
+            method.IsGenericMethod &&
+            method.Parameters.Length is >= 1 and <= 3 &&
+            method.Parameters[0].Type is IArrayTypeSymbol { Rank: 1 } &&
+            method.Parameters.Skip(1).All(static parameter =>
+                parameter.Type.SpecialType == SpecialType.System_Int32))
+        {
+            UsesArrayViews = true;
+            return new CudaCallPlan(CudaCallKind.AsSpanView, "as_span");
+        }
 
         return symbols.TryGetRuntimeMethod(method, out var mappedName)
             ? new CudaCallPlan(CudaCallKind.Direct, mappedName)
@@ -389,6 +417,7 @@ internal sealed class CudaEmissionPlan
                 CudaCallKind.ArrayView or
                 CudaCallKind.ReadOnlyArrayView or
                 CudaCallKind.SliceView or
+                CudaCallKind.AsSpanView or
                 CudaCallKind.NaN ||
                 call.Kind == CudaCallKind.Direct && !IsImpureIntrinsic(call.Name));
     }
@@ -543,6 +572,16 @@ internal sealed class CudaEmissionPlan
                 : $"csharp2cuda_array_view<{element}>";
         }
 
+        if (type is INamedTypeSymbol { IsTupleType: true } tuple &&
+            tuple.TupleElements.Length is >= 2 and <= 7)
+        {
+            UsesTupleTypes = true;
+            var elements = tuple.TupleElements
+                .Select(element => FormatType(element.Type, false, location));
+            return $"csharp2cuda_tuple{tuple.TupleElements.Length}<" +
+                string.Join(", ", elements) + ">";
+        }
+
         if (type.SpecialType != SpecialType.None)
         {
             return type.SpecialType switch
@@ -585,7 +624,10 @@ internal sealed class CudaEmissionPlan
             readOnly = !IsViewParameterWritable(parameter);
         var prefix = parameter.RefKind == RefKind.In ? "const " : string.Empty;
         var suffix = parameter.RefKind == RefKind.None ? string.Empty : "*";
-        return prefix + FormatType(parameter.Type, readOnly, syntax.Type!.GetLocation()) + suffix;
+        return prefix + FormatType(
+            parameter.Type,
+            readOnly,
+            syntax.Type?.GetLocation() ?? syntax.GetLocation()) + suffix;
     }
 
     public bool IsViewParameterWritable(IParameterSymbol parameter) =>
@@ -628,6 +670,13 @@ internal sealed class CudaEmissionPlan
         type is IArrayTypeSymbol { Rank: 1 } ||
         symbols.IsSpanType(type, out _);
 
+    public bool IsTupleType(ITypeSymbol? type) =>
+        type is INamedTypeSymbol
+        {
+            IsTupleType: true,
+            TupleElements.Length: >= 2 and <= 7
+        };
+
     public bool HasAttribute(ISymbol symbol, string metadataName) =>
         GetAttribute(symbol, metadataName) is not null;
 
@@ -635,6 +684,8 @@ internal sealed class CudaEmissionPlan
         symbols.GetAttribute(symbol, metadataName);
 
     public bool UsesArrayViews { get; private set; }
+
+    public bool UsesTupleTypes { get; private set; }
 
     private void Build()
     {
@@ -651,6 +702,12 @@ internal sealed class CudaEmissionPlan
                 {
                     case StructDeclarationSyntax structure:
                         RegisterStruct(unit.Model, structure, structures);
+                        break;
+                    case RecordDeclarationSyntax
+                    {
+                        ClassOrStructKeyword.RawKind: (int)SyntaxKind.StructKeyword
+                    } record:
+                        RegisterStruct(unit.Model, record, structures);
                         break;
                     case MethodDeclarationSyntax method:
                         if (HasCudaFunctionContract(unit.Model, method))
@@ -670,6 +727,7 @@ internal sealed class CudaEmissionPlan
 
         DiscoverReachableFunctions(functions);
         DiscoverReachableStructs(functions, structures);
+        AnalyzeCaptures(functions);
         AnalyzeViewParameters(functions);
 
         foreach (var structure in structures)
@@ -786,7 +844,7 @@ internal sealed class CudaEmissionPlan
 
     private void RegisterStruct(
         SemanticModel model,
-        StructDeclarationSyntax syntax,
+        TypeDeclarationSyntax syntax,
         ICollection<CudaStructPlan> structures,
         INamedTypeSymbol? constructedSymbol = null)
     {
@@ -818,6 +876,8 @@ internal sealed class CudaEmissionPlan
             externalAttribute is not null);
         structures.Add(structure);
         structPlans[symbol] = structure;
+        if (syntax is RecordDeclarationSyntax record)
+            RegisterPositionalRecordProperties(structure, record);
     }
 
     private void DiscoverReachableStructs(
@@ -833,8 +893,8 @@ internal sealed class CudaEmissionPlan
 
             var root = function.Syntax.Body is not null
                 ? function.Model.GetOperation(function.Syntax.Body)
-                : function.Syntax.ExpressionBody is not null
-                    ? function.Model.GetOperation(function.Syntax.ExpressionBody.Expression)
+                : function.Syntax.ExpressionBodyExpression is not null
+                    ? function.Model.GetOperation(function.Syntax.ExpressionBodyExpression)
                     : null;
             if (root is null)
                 continue;
@@ -878,8 +938,13 @@ internal sealed class CudaEmissionPlan
                 .OrderBy(static reference => reference.SyntaxTree.FilePath, StringComparer.Ordinal)
                 .ThenBy(static reference => reference.Span.Start)
                 .Select(static reference => reference.GetSyntax())
-                .OfType<StructDeclarationSyntax>()
-                .FirstOrDefault();
+                .OfType<TypeDeclarationSyntax>()
+                .FirstOrDefault(static candidate =>
+                    candidate is StructDeclarationSyntax ||
+                    candidate is RecordDeclarationSyntax
+                    {
+                        ClassOrStructKeyword.RawKind: (int)SyntaxKind.StructKeyword
+                    });
             if (declaration is null)
                 continue;
 
@@ -997,10 +1062,25 @@ internal sealed class CudaEmissionPlan
             foreach (var declaration in syntax.Body.DescendantNodes()
                          .OfType<LocalDeclarationStatementSyntax>())
             {
-                if (IsValidFixedLocalArray(declaration, model))
-                    fixedLocalArrays.Add(declaration);
+                if (TryCreateFixedLocalArrayPlan(declaration, model, out var fixedArray))
+                    fixedLocalArrays.Add(declaration, fixedArray);
                 else
                     RegisterStorageDeclaration(declaration, function);
+            }
+        }
+
+        if (!external)
+        {
+            foreach (var designation in syntax.Node.DescendantNodes()
+                         .OfType<SingleVariableDesignationSyntax>())
+            {
+                if (model.GetDeclaredSymbol(designation) is ILocalSymbol local)
+                {
+                    RegisterIdentifier(
+                        local,
+                        designation.Identifier.ValueText,
+                        designation.Identifier.GetLocation());
+                }
             }
         }
     }
@@ -1139,6 +1219,16 @@ internal sealed class CudaEmissionPlan
     private void ValidateStruct(CudaStructPlan structure)
     {
         var syntax = structure.Syntax;
+        var invalidDeclarationShape = syntax switch
+        {
+            StructDeclarationSyntax { ParameterList: not null } => true,
+            RecordDeclarationSyntax record =>
+                !record.ClassOrStructKeyword.IsKind(SyntaxKind.StructKeyword) ||
+                record.ParameterList is null ||
+                !record.Modifiers.Any(SyntaxKind.ReadOnlyKeyword) ||
+                record.TypeParameterList is not null,
+            _ => false
+        };
         if (!structure.IsExternal && !structure.Symbol.IsUnmanagedType)
         {
             diagnostics.Add(Diagnostic.Create(
@@ -1149,7 +1239,7 @@ internal sealed class CudaEmissionPlan
         }
         if (syntax.Modifiers.Any(modifier => !StructModifiers.Contains(modifier.Kind())) ||
             syntax.BaseList is not null ||
-            syntax.ParameterList is not null ||
+            invalidDeclarationShape ||
             !HasOnlyAttributes(
                 syntax.AttributeLists,
                 ExternalAttributeName,
@@ -1171,20 +1261,19 @@ internal sealed class CudaEmissionPlan
 
         foreach (var member in syntax.Members)
         {
-            if (member is MethodDeclarationSyntax method &&
+            if (member is OperatorDeclarationSyntax or ConversionOperatorDeclarationSyntax)
+                continue;
+
+            if (member is BaseMethodDeclarationSyntax method &&
                 structure.Model.GetDeclaredSymbol(method) is IMethodSymbol methodSymbol &&
-                functionPlans.Values.Any(function => SymbolEqualityComparer.Default.Equals(
-                    function.DefinitionSymbol,
-                    NormalizeMethod(methodSymbol))))
+                IsPlannedFunctionDefinition(methodSymbol))
             {
                 continue;
             }
 
-            if (member is ConstructorDeclarationSyntax constructor &&
-                structure.Model.GetDeclaredSymbol(constructor) is IMethodSymbol constructorSymbol &&
-                functionPlans.Values.Any(function => SymbolEqualityComparer.Default.Equals(
-                    function.DefinitionSymbol,
-                    NormalizeMethod(constructorSymbol))))
+            if (member is ConversionOperatorDeclarationSyntax conversion &&
+                structure.Model.GetDeclaredSymbol(conversion) is IMethodSymbol conversionSymbol &&
+                IsPlannedFunctionDefinition(conversionSymbol))
             {
                 continue;
             }
@@ -1289,6 +1378,14 @@ internal sealed class CudaEmissionPlan
         }
     }
 
+    private bool IsPlannedFunctionDefinition(IMethodSymbol method)
+    {
+        method = NormalizeMethod(method);
+        return functionPlans.Values.Any(function => SymbolEqualityComparer.Default.Equals(
+            function.DefinitionSymbol,
+            method));
+    }
+
     private bool TryRegisterAutoProperty(
         CudaStructPlan structure,
         PropertyDeclarationSyntax property)
@@ -1317,7 +1414,7 @@ internal sealed class CudaEmissionPlan
             property.Identifier.GetLocation());
         identifierNames[definitionProperty] = name;
         FormatType(symbol.Type, false, property.Type.GetLocation());
-        var propertyPlan = new CudaPropertyPlan(property, symbol);
+        var propertyPlan = new CudaPropertyPlan(property, property.Type, symbol);
         structure.Properties.Add(propertyPlan);
         propertyPlans[symbol] = propertyPlan;
         propertyPlans[definitionProperty] = propertyPlan;
@@ -1331,6 +1428,40 @@ internal sealed class CudaEmissionPlan
                 "auto-properties cannot cross the kernel ABI"));
         }
         return true;
+    }
+
+    private void RegisterPositionalRecordProperties(
+        CudaStructPlan structure,
+        RecordDeclarationSyntax record)
+    {
+        if (record.ParameterList is null)
+            return;
+        foreach (var parameter in record.ParameterList.Parameters)
+        {
+            if (parameter.Type is null ||
+                structure.Model.GetDeclaredSymbol(parameter) is not IParameterSymbol positional)
+            {
+                continue;
+            }
+            var definitionProperty = structure.DefinitionSymbol.GetMembers(positional.Name)
+                .OfType<IPropertySymbol>()
+                .FirstOrDefault(static property => !property.IsStatic);
+            if (definitionProperty is null)
+                continue;
+            var symbol = structure.Symbol.GetMembers(positional.Name)
+                .OfType<IPropertySymbol>()
+                .FirstOrDefault(static property => !property.IsStatic) ?? definitionProperty;
+            var name = RegisterIdentifier(
+                symbol,
+                parameter.Identifier.ValueText,
+                parameter.Identifier.GetLocation());
+            identifierNames[definitionProperty] = name;
+            FormatType(symbol.Type, false, parameter.Type.GetLocation());
+            var propertyPlan = new CudaPropertyPlan(parameter, parameter.Type, symbol);
+            structure.Properties.Add(propertyPlan);
+            propertyPlans[symbol] = propertyPlan;
+            propertyPlans[definitionProperty] = propertyPlan;
+        }
     }
 
     private bool IsPlannedProperty(IPropertySymbol property)
@@ -1435,6 +1566,7 @@ internal sealed class CudaEmissionPlan
         if ((!syntax.Modifiers.Any(SyntaxKind.StaticKeyword) &&
                 !validInstanceMethod &&
                 !function.IsLocalFunction &&
+                !function.IsAnonymousFunction &&
                 !function.IsConstructor) ||
             syntax.Modifiers.Any(modifier => !MethodModifiers.Contains(modifier.Kind())) ||
             syntax.ExplicitInterfaceSpecifier is not null ||
@@ -1454,8 +1586,12 @@ internal sealed class CudaEmissionPlan
             ReportUnsupportedSyntax(function.Syntax.Node);
         }
 
-        if (function.IsLocalFunction && HasCapturedState(function))
+        if (function.Syntax.Node is OperatorDeclarationSyntax { CheckedKeyword.RawKind: not 0 } or
+            ConversionOperatorDeclarationSyntax { CheckedKeyword.RawKind: not 0 } ||
+            function.Symbol.Name is "op_True" or "op_False")
+        {
             ReportUnsupportedSyntax(function.Syntax.Node);
+        }
 
         if ((function.Symbol.IsGenericMethod &&
              function.Symbol.TypeArguments.Any(static type =>
@@ -1499,7 +1635,7 @@ internal sealed class CudaEmissionPlan
             ReportUnsupportedSyntax(syntax.Node);
         }
 
-        if (!function.IsExternal && syntax.Body is null && syntax.ExpressionBody is null)
+        if (!function.IsExternal && syntax.Body is null && syntax.ExpressionBodyExpression is null)
         {
             ReportUnsupportedSyntax(syntax.Node);
         }
@@ -1508,6 +1644,17 @@ internal sealed class CudaEmissionPlan
             function.IsConstructor ? function.Symbol.ContainingType : function.Symbol.ReturnType,
             false,
             syntax.ReturnType?.GetLocation() ?? syntax.Identifier.GetLocation());
+        if ((function.Kind == CudaFunctionKind.Global || function.IsExternal) &&
+            (ContainsDeviceInternalAbiType(
+                 function.Symbol.ReturnType,
+                 new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default)) ||
+             function.IsExternal && IsArrayViewType(function.Symbol.ReturnType)))
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InvalidPortableAbiType,
+                syntax.ReturnType?.GetLocation() ?? syntax.Identifier.GetLocation(),
+                function.Symbol.ReturnType.ToDisplayString()));
+        }
         foreach (var parameter in function.Symbol.Parameters)
             ValidateParameter(function, parameter);
 
@@ -1528,61 +1675,986 @@ internal sealed class CudaEmissionPlan
                          .OfType<LocalDeclarationStatementSyntax>())
             {
                 ValidateLocalDeclaration(declaration, function.Model);
+                if (fixedLocalArrays.TryGetValue(declaration, out var fixedArray))
+                    ValidateFixedLocalArrayEscape(function, fixedArray);
+            }
+        }
+        if (!function.IsExternal)
+        {
+            ValidateArrayRangeEscapes(function);
+            ValidateExpandedParamsEscapes(function);
+        }
+    }
+
+    private void ValidateArrayRangeEscapes(CudaFunctionPlan function)
+    {
+        var root = GetFunctionOperation(function);
+        if (root is null)
+            return;
+        var ranges = EnumerateOperations(root)
+            .Where(IsArrayRangeOperation)
+            .ToArray();
+        foreach (var range in ranges)
+        {
+            var aliases = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            var referenceAliases = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            bool changed;
+            do
+            {
+                changed = false;
+                foreach (var operation in EnumerateOperations(root))
+                {
+                    switch (operation)
+                    {
+                        case IVariableDeclaratorOperation
+                        {
+                            Symbol: ILocalSymbol local,
+                            Initializer.Value: { } value
+                        }:
+                            if (local.RefKind != RefKind.None &&
+                                IsArrayRangeReferenceDerived(
+                                    value,
+                                    range,
+                                    aliases,
+                                    referenceAliases,
+                                    function))
+                            {
+                                changed |= referenceAliases.Add(local);
+                            }
+                            else if (local.RefKind == RefKind.None &&
+                                IsStorageHandleType(local.Type) &&
+                                IsArrayRangeDerived(value, range, aliases, function))
+                            {
+                                changed |= aliases.Add(local);
+                            }
+                            break;
+                        case ISimpleAssignmentOperation
+                        {
+                            Target: ILocalReferenceOperation target,
+                            Value: { } value
+                        }:
+                            if (target.Local.RefKind != RefKind.None &&
+                                IsArrayRangeReferenceDerived(
+                                    value,
+                                    range,
+                                    aliases,
+                                    referenceAliases,
+                                    function))
+                            {
+                                changed |= referenceAliases.Add(target.Local);
+                            }
+                            else if (target.Local.RefKind == RefKind.None &&
+                                IsStorageHandleType(target.Local.Type) &&
+                                IsArrayRangeDerived(value, range, aliases, function))
+                            {
+                                changed |= aliases.Add(target.Local);
+                            }
+                            break;
+                    }
+                }
+            }
+            while (changed);
+
+            if (function.Syntax.Body is null &&
+                (IsStorageHandleType(function.Symbol.ReturnType) &&
+                    IsArrayRangeDerived(root, range, aliases, function) ||
+                 (function.Symbol.ReturnsByRef || function.Symbol.ReturnsByRefReadonly) &&
+                    IsArrayRangeReferenceDerived(
+                        root,
+                        range,
+                        aliases,
+                        referenceAliases,
+                        function)))
+            {
+                ReportArrayRangeEscape(range.Syntax);
+                continue;
+            }
+
+            foreach (var operation in EnumerateOperations(root))
+            {
+                var escapes = operation switch
+                {
+                    IReturnOperation { ReturnedValue: { } returned }
+                        when (function.Symbol.ReturnsByRef ||
+                              function.Symbol.ReturnsByRefReadonly) &&
+                             IsArrayRangeReferenceDerived(
+                                 returned,
+                                 range,
+                                 aliases,
+                                 referenceAliases,
+                                 function) => true,
+                    IReturnOperation { ReturnedValue: { } returned }
+                        when IsArrayRangeDerived(returned, range, aliases, function) => true,
+                    ISimpleAssignmentOperation assignment
+                        when assignment.Target is IFieldReferenceOperation or
+                                IPropertyReferenceOperation &&
+                             IsArrayRangeDerived(
+                                 assignment.Value,
+                                 range,
+                                 aliases,
+                                 function) => true,
+                    IConversionOperation conversion
+                        when conversion.Type?.IsReferenceType == true &&
+                             !IsArrayViewType(conversion.Type) &&
+                             IsArrayRangeDerived(
+                                 conversion.Operand,
+                                 range,
+                                 aliases,
+                                 function) => true,
+                    IArgumentOperation argument
+                        when IsArrayRangeDerived(
+                                 argument.Value,
+                                 range,
+                                 aliases,
+                                 function) &&
+                             ArgumentMayEscape(argument, function) => true,
+                    _ => false
+                };
+                if (!escapes)
+                    continue;
+                ReportArrayRangeEscape(operation.Syntax);
+                break;
             }
         }
     }
 
-    private static bool HasCapturedState(CudaFunctionPlan function)
+    private static bool IsArrayRangeOperation(IOperation operation) => operation switch
     {
-        IOperation? root = function.Syntax.Body is not null
-            ? function.Model.GetOperation(function.Syntax.Body)
-            : function.Syntax.ExpressionBody is not null
-                ? function.Model.GetOperation(function.Syntax.ExpressionBody.Expression)
-                : null;
-        if (root is null)
-            return false;
-
-        foreach (var operation in EnumerateOperations(root))
+        IArrayElementReferenceOperation
         {
-            ISymbol? symbol = operation switch
-            {
-                ILocalReferenceOperation local => local.Local,
-                IParameterReferenceOperation parameter => parameter.Parameter,
-                _ => null
-            };
-            if (symbol is not null &&
-                !SymbolEqualityComparer.Default.Equals(symbol.ContainingSymbol, function.Symbol))
+            ArrayReference.Type: IArrayTypeSymbol { Rank: 1 },
+            Indices: [IRangeOperation]
+        } => true,
+        IImplicitIndexerReferenceOperation
+        {
+            Instance.Type: IArrayTypeSymbol { Rank: 1 },
+            Argument: IRangeOperation
+        } => true,
+        _ => false
+    };
+
+    private bool IsArrayRangeDerived(
+        IOperation operation,
+        IOperation range,
+        ISet<ISymbol> aliases,
+        CudaFunctionPlan function)
+    {
+        while (operation is IConversionOperation conversion &&
+            IsStorageHandleType(conversion.Type))
+        {
+            operation = conversion.Operand;
+        }
+        if (ReferenceEquals(operation, range))
+            return true;
+        if (!IsStorageHandleType(operation.Type))
+            return false;
+        if (operation is ILocalReferenceOperation local)
+            return aliases.Contains(local.Local);
+        if (operation is IConditionalOperation conditional)
+        {
+            return IsArrayRangeDerived(conditional.WhenTrue, range, aliases, function) ||
+                conditional.WhenFalse is not null &&
+                IsArrayRangeDerived(conditional.WhenFalse, range, aliases, function);
+        }
+        if (operation is IInvocationOperation invocation)
+        {
+            if (invocation.Instance is not null &&
+                IsArrayRangeDerived(invocation.Instance, range, aliases, function))
             {
                 return true;
+            }
+            return invocation.Arguments.Any(argument =>
+                IsArrayRangeDerived(argument.Value, range, aliases, function));
+        }
+        return false;
+    }
+
+    private bool IsArrayRangeReferenceDerived(
+        IOperation operation,
+        IOperation range,
+        ISet<ISymbol> aliases,
+        ISet<ISymbol> referenceAliases,
+        CudaFunctionPlan function)
+    {
+        while (operation is IConversionOperation conversion)
+            operation = conversion.Operand;
+        if (operation is ILocalReferenceOperation local)
+            return referenceAliases.Contains(local.Local);
+        if (operation is IArrayElementReferenceOperation element)
+            return IsArrayRangeDerived(element.ArrayReference, range, aliases, function);
+        if (operation is IImplicitIndexerReferenceOperation indexer)
+            return IsArrayRangeDerived(indexer.Instance, range, aliases, function);
+        if (operation is IPropertyReferenceOperation
+            {
+                Property.IsIndexer: true,
+                Instance: { } instance
+            })
+        {
+            return IsArrayRangeDerived(instance, range, aliases, function);
+        }
+        if (operation is IFieldReferenceOperation { Instance: { } fieldInstance })
+        {
+            return IsArrayRangeReferenceDerived(
+                fieldInstance,
+                range,
+                aliases,
+                referenceAliases,
+                function);
+        }
+        if (operation is IInvocationOperation invocation &&
+            (invocation.TargetMethod.ReturnsByRef || invocation.TargetMethod.ReturnsByRefReadonly))
+        {
+            if (invocation.Instance is not null &&
+                (IsArrayRangeReferenceDerived(
+                     invocation.Instance,
+                     range,
+                     aliases,
+                     referenceAliases,
+                     function) ||
+                 IsArrayRangeDerived(invocation.Instance, range, aliases, function)))
+            {
+                return true;
+            }
+            return invocation.Arguments.Any(argument =>
+                IsArrayRangeReferenceDerived(
+                    argument.Value,
+                    range,
+                    aliases,
+                    referenceAliases,
+                    function) ||
+                IsArrayRangeDerived(argument.Value, range, aliases, function));
+        }
+        return false;
+    }
+
+    private void ReportArrayRangeEscape(SyntaxNode syntax) =>
+        diagnostics.Add(Diagnostic.Create(
+            CudaDiagnostics.UnsupportedRangeOperation,
+            syntax.GetLocation(),
+            syntax.ToString()));
+
+    private void ValidateExpandedParamsEscapes(CudaFunctionPlan function)
+    {
+        var root = GetFunctionOperation(function);
+        if (root is null)
+            return;
+        var expandedArguments = EnumerateOperations(root)
+            .OfType<IArgumentOperation>()
+            .Where(static argument =>
+                argument.ArgumentKind is ArgumentKind.ParamArray or ArgumentKind.ParamCollection)
+            .Where(static argument => argument.Value switch
+            {
+                IArrayCreationOperation { Initializer.ElementValues.Length: > 0 } => true,
+                ICollectionExpressionOperation { Elements.Length: > 0 } => true,
+                _ => false
+            })
+            .ToArray();
+        foreach (var expanded in expandedArguments)
+        {
+            var aliases = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            bool changed;
+            do
+            {
+                changed = false;
+                foreach (var operation in EnumerateOperations(root))
+                {
+                    switch (operation)
+                    {
+                        case IVariableDeclaratorOperation
+                        {
+                            Symbol: ILocalSymbol local,
+                            Initializer.Value: { } value
+                        } when IsStorageHandleType(local.Type) &&
+                            IsArrayRangeDerived(value, expanded.Value, aliases, function):
+                            changed |= aliases.Add(local);
+                            break;
+                        case ISimpleAssignmentOperation
+                        {
+                            Target: ILocalReferenceOperation target,
+                            Value: { } value
+                        } when IsStorageHandleType(target.Local.Type) &&
+                            IsArrayRangeDerived(value, expanded.Value, aliases, function):
+                            changed |= aliases.Add(target.Local);
+                            break;
+                    }
+                }
+            }
+            while (changed);
+
+            if (function.Syntax.Body is null &&
+                IsStorageHandleType(function.Symbol.ReturnType) &&
+                IsArrayRangeDerived(
+                    root,
+                    expanded.Value,
+                    aliases,
+                    function))
+            {
+                diagnostics.Add(Diagnostic.Create(
+                    CudaDiagnostics.LocalStorageEscape,
+                    root.Syntax.GetLocation(),
+                    expanded.Parameter?.Name ?? "params"));
+                continue;
+            }
+
+            foreach (var operation in EnumerateOperations(root))
+            {
+                var escapes = operation switch
+                {
+                    IReturnOperation { ReturnedValue: { } returned }
+                        when IsArrayRangeDerived(
+                            returned,
+                            expanded.Value,
+                            aliases,
+                            function) => true,
+                    ISimpleAssignmentOperation assignment
+                        when assignment.Target is IFieldReferenceOperation or
+                                IPropertyReferenceOperation &&
+                             IsArrayRangeDerived(
+                                 assignment.Value,
+                                 expanded.Value,
+                                 aliases,
+                                 function) => true,
+                    IConversionOperation conversion
+                        when conversion.Type?.IsReferenceType == true &&
+                             !IsArrayViewType(conversion.Type) &&
+                             IsArrayRangeDerived(
+                                 conversion.Operand,
+                                 expanded.Value,
+                                 aliases,
+                                 function) => true,
+                    IArgumentOperation argument
+                        when IsArrayRangeDerived(
+                                 argument.Value,
+                                 expanded.Value,
+                                 aliases,
+                                 function) &&
+                             ExpandedArgumentMayEscape(argument, function) => true,
+                    _ => false
+                };
+                if (!escapes)
+                    continue;
+                diagnostics.Add(Diagnostic.Create(
+                    CudaDiagnostics.LocalStorageEscape,
+                    operation.Syntax.GetLocation(),
+                    expanded.Parameter?.Name ?? "params"));
+                break;
+            }
+        }
+    }
+
+    private bool ExpandedArgumentMayEscape(
+        IArgumentOperation argument,
+        CudaFunctionPlan caller)
+    {
+        if (argument.Parent is IInvocationOperation invocation)
+        {
+            var target = ResolveMethod(invocation.TargetMethod, caller);
+            if (target.ReturnsByRef || target.ReturnsByRefReadonly)
+                return true;
+        }
+        return ArgumentMayEscape(argument, caller);
+    }
+
+    private void ValidateFixedLocalArrayEscape(
+        CudaFunctionPlan function,
+        CudaFixedLocalArrayPlan fixedArray)
+    {
+        var root = GetFunctionOperation(function);
+        if (root is null)
+            return;
+        var aliases = new HashSet<ISymbol>(SymbolEqualityComparer.Default)
+        {
+            fixedArray.Symbol
+        };
+        var referenceAliases = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        DiscoverStorageAliases(function, root, aliases, referenceAliases);
+        if (ValidateStorageOperations(
+                function,
+                root,
+                fixedArray.Symbol,
+                aliases,
+                referenceAliases,
+                allowUnknownExternalArguments: fixedArray.IsPointer))
+        {
+            return;
+        }
+
+        foreach (var closure in functionPlans.Values.Where(candidate =>
+                     candidate.IsClosureFunction &&
+                     candidate.Captures.Any(capture => aliases.Contains(capture.Symbol))))
+        {
+            var closureRoot = GetFunctionOperation(closure);
+            if (closureRoot is null)
+                continue;
+            var closureAliases = new HashSet<ISymbol>(aliases, SymbolEqualityComparer.Default);
+            var closureReferenceAliases = new HashSet<ISymbol>(
+                referenceAliases,
+                SymbolEqualityComparer.Default);
+            DiscoverStorageAliases(
+                closure,
+                closureRoot,
+                closureAliases,
+                closureReferenceAliases);
+            if (ValidateStorageOperations(
+                    closure,
+                    closureRoot,
+                    fixedArray.Symbol,
+                    closureAliases,
+                    closureReferenceAliases,
+                    allowUnknownExternalArguments: fixedArray.IsPointer))
+            {
+                return;
+            }
+        }
+    }
+
+    private void DiscoverStorageAliases(
+        CudaFunctionPlan function,
+        IOperation root,
+        ISet<ISymbol> aliases,
+        ISet<ISymbol> referenceAliases)
+    {
+        bool changed;
+        do
+        {
+            changed = false;
+            foreach (var operation in EnumerateOperations(root))
+            {
+                switch (operation)
+                {
+                    case IVariableDeclaratorOperation
+                    {
+                        Symbol: ILocalSymbol local,
+                        Initializer.Value: { } value
+                    }:
+                        if (local.RefKind != RefKind.None &&
+                            IsStorageReferenceDerived(
+                                value,
+                                function,
+                                aliases,
+                                referenceAliases) &&
+                            referenceAliases.Add(local))
+                        {
+                            changed = true;
+                        }
+                        else if (local.RefKind == RefKind.None &&
+                            IsStorageHandleType(local.Type) &&
+                            IsDerivedStorageValue(value, function, aliases) &&
+                            aliases.Add(local))
+                        {
+                            changed = true;
+                        }
+                        break;
+                    case ISimpleAssignmentOperation
+                    {
+                        Target: ILocalReferenceOperation target,
+                        Value: { } value
+                    }:
+                        if (target.Local.RefKind != RefKind.None &&
+                            IsStorageReferenceDerived(
+                                value,
+                                function,
+                                aliases,
+                                referenceAliases) &&
+                            referenceAliases.Add(target.Local))
+                        {
+                            changed = true;
+                        }
+                        else if (target.Local.RefKind == RefKind.None &&
+                            IsStorageHandleType(target.Local.Type) &&
+                            IsDerivedStorageValue(value, function, aliases) &&
+                            aliases.Add(target.Local))
+                        {
+                            changed = true;
+                        }
+                        break;
+                }
+            }
+        }
+        while (changed);
+    }
+
+    private bool ValidateStorageOperations(
+        CudaFunctionPlan function,
+        IOperation root,
+        ISymbol storage,
+        ISet<ISymbol> aliases,
+        ISet<ISymbol> referenceAliases,
+        bool allowUnknownExternalArguments)
+    {
+        foreach (var operation in EnumerateOperations(root))
+        {
+            if (operation is IReturnOperation { ReturnedValue: { } returned })
+            {
+                if ((function.Symbol.ReturnsByRef || function.Symbol.ReturnsByRefReadonly) &&
+                    IsStorageReferenceDerived(
+                        returned,
+                        function,
+                        aliases,
+                        referenceAliases))
+                {
+                    diagnostics.Add(Diagnostic.Create(
+                        CudaDiagnostics.InvalidReferenceEscape,
+                        operation.Syntax.GetLocation(),
+                        operation.Syntax.ToString()));
+                    return true;
+                }
+                if (IsDerivedStorageValue(returned, function, aliases))
+                {
+                    ReportLocalStorageEscape(operation.Syntax, storage);
+                    return true;
+                }
+            }
+
+            SyntaxNode? offending = operation switch
+            {
+                ISimpleAssignmentOperation assignment
+                    when assignment.Target is IFieldReferenceOperation or
+                            IPropertyReferenceOperation &&
+                         IsDerivedStorageValue(assignment.Value, function, aliases) =>
+                    operation.Syntax,
+                IConversionOperation conversion
+                    when IsDerivedStorageValue(conversion.Operand, function, aliases) &&
+                         conversion.Type?.IsReferenceType == true &&
+                         !IsArrayViewType(conversion.Type) => operation.Syntax,
+                IBinaryOperation binary
+                    when binary.OperatorKind is BinaryOperatorKind.Equals or
+                            BinaryOperatorKind.NotEquals &&
+                         (IsManagedArrayIdentity(binary.LeftOperand, function, aliases) ||
+                          IsManagedArrayIdentity(binary.RightOperand, function, aliases)) =>
+                    operation.Syntax,
+                IArgumentOperation argument
+                    when IsDerivedStorageValue(argument.Value, function, aliases) &&
+                         ArgumentMayEscape(
+                             argument,
+                             function,
+                             allowUnknownExternalArguments) => operation.Syntax,
+                _ => null
+            };
+            if (offending is null)
+                continue;
+            ReportLocalStorageEscape(offending, storage);
+            return true;
+        }
+        return false;
+    }
+
+    private void ReportLocalStorageEscape(SyntaxNode syntax, ISymbol storage) =>
+        diagnostics.Add(Diagnostic.Create(
+            CudaDiagnostics.LocalStorageEscape,
+            syntax.GetLocation(),
+            storage.Name));
+
+    private bool ArgumentMayEscape(
+        IArgumentOperation argument,
+        CudaFunctionPlan caller,
+        bool allowUnknownExternal = false)
+    {
+        if (argument.Parent is not IInvocationOperation invocation ||
+            argument.Parameter is null)
+        {
+            return true;
+        }
+        var target = ResolveMethod(invocation.TargetMethod, caller);
+        var call = GetCallPlan(target);
+        if (call is { Kind: not CudaCallKind.PlannedFunction })
+        {
+            return TryGetFunction(target, out var directFunction) &&
+                directFunction.IsExternal &&
+                !allowUnknownExternal;
+        }
+        if (!TryGetFunction(target, out var function))
+            return !allowUnknownExternal;
+        if (function.IsExternal)
+            return !allowUnknownExternal;
+        if (function.Symbol.ReturnsByRef || function.Symbol.ReturnsByRefReadonly)
+            return false;
+        var ordinal = argument.Parameter.Ordinal;
+        if (invocation.TargetMethod.ReducedFrom is not null)
+            ordinal++;
+        if ((uint)ordinal >= (uint)function.Symbol.Parameters.Length)
+            return true;
+        return ParameterEscapes(
+            function,
+            function.Symbol.Parameters[ordinal],
+            new HashSet<string>(StringComparer.Ordinal),
+            allowUnknownExternal);
+    }
+
+    private bool ParameterEscapes(
+        CudaFunctionPlan function,
+        IParameterSymbol parameter,
+        ISet<string> visited,
+        bool allowUnknownExternal)
+    {
+        var key = function.Symbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) +
+            "#" + parameter.Ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (!visited.Add(key))
+            return false;
+        var root = GetFunctionOperation(function);
+        if (root is null)
+            return true;
+        var parameterAliases = new HashSet<ISymbol>(SymbolEqualityComparer.Default) { parameter };
+        var referenceAliases = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+        DiscoverStorageAliases(function, root, parameterAliases, referenceAliases);
+        foreach (var operation in EnumerateOperations(root))
+        {
+            if (operation is ISimpleAssignmentOperation assignment &&
+                assignment.Target is IFieldReferenceOperation or IPropertyReferenceOperation &&
+                IsDerivedStorageValue(assignment.Value, function, parameterAliases))
+            {
+                return true;
+            }
+            if (operation is IArgumentOperation argument &&
+                IsDerivedStorageValue(argument.Value, function, parameterAliases) &&
+                argument.Parent is IInvocationOperation invocation &&
+                argument.Parameter is { } targetParameter)
+            {
+                var target = ResolveMethod(invocation.TargetMethod, function);
+                if (GetCallPlan(target) is { Kind: not CudaCallKind.PlannedFunction })
+                {
+                    if (TryGetFunction(target, out var directFunction) &&
+                        directFunction.IsExternal &&
+                        !allowUnknownExternal)
+                    {
+                        return true;
+                    }
+                    continue;
+                }
+                if (!TryGetFunction(target, out var targetFunction))
+                    return !allowUnknownExternal;
+                if (targetFunction.IsExternal)
+                    return !allowUnknownExternal;
+                var ordinal = targetParameter.Ordinal +
+                    (invocation.TargetMethod.ReducedFrom is not null ? 1 : 0);
+                if ((uint)ordinal >= (uint)targetFunction.Symbol.Parameters.Length ||
+                    ParameterEscapes(
+                        targetFunction,
+                        targetFunction.Symbol.Parameters[ordinal],
+                        visited,
+                        allowUnknownExternal))
+                {
+                    return true;
+                }
             }
         }
         return false;
     }
+
+    private bool IsDerivedStorageValue(
+        IOperation operation,
+        CudaFunctionPlan function,
+        ISet<ISymbol> symbols)
+    {
+        while (operation is IConversionOperation conversion &&
+            IsStorageHandleType(conversion.Type))
+        {
+            operation = conversion.Operand;
+        }
+        if (!IsStorageHandleType(operation.Type))
+            return false;
+        if (operation is ILocalReferenceOperation local)
+            return symbols.Contains(local.Local);
+        if (operation is IParameterReferenceOperation parameter)
+            return symbols.Contains(parameter.Parameter);
+        if (operation is IBinaryOperation binary && operation.Type is IPointerTypeSymbol)
+        {
+            return IsDerivedStorageValue(binary.LeftOperand, function, symbols) ||
+                IsDerivedStorageValue(binary.RightOperand, function, symbols);
+        }
+        if (operation is IConditionalOperation conditional)
+        {
+            return IsDerivedStorageValue(conditional.WhenTrue, function, symbols) ||
+                conditional.WhenFalse is not null &&
+                IsDerivedStorageValue(conditional.WhenFalse, function, symbols);
+        }
+        if (operation is IInvocationOperation invocation)
+        {
+            var target = ResolveMethod(invocation.TargetMethod, function);
+            if (TryGetFunction(target, out var targetFunction) &&
+                targetFunction.Captures.Any(capture => symbols.Contains(capture.Symbol)))
+            {
+                return true;
+            }
+            if (invocation.Instance is not null &&
+                IsDerivedStorageValue(invocation.Instance, function, symbols))
+            {
+                return true;
+            }
+            return invocation.Arguments.Any(argument =>
+                IsDerivedStorageValue(argument.Value, function, symbols));
+        }
+        return false;
+    }
+
+    private bool IsStorageReferenceDerived(
+        IOperation operation,
+        CudaFunctionPlan function,
+        ISet<ISymbol> aliases,
+        ISet<ISymbol> referenceAliases)
+    {
+        while (operation is IConversionOperation conversion)
+            operation = conversion.Operand;
+        if (operation is ILocalReferenceOperation local)
+            return referenceAliases.Contains(local.Local);
+        if (operation is IArrayElementReferenceOperation element)
+            return IsDerivedStorageValue(element.ArrayReference, function, aliases);
+        if (operation is IImplicitIndexerReferenceOperation indexer)
+            return IsDerivedStorageValue(indexer.Instance, function, aliases);
+        if (operation is IPropertyReferenceOperation
+            {
+                Property.IsIndexer: true,
+                Instance: { } instance
+            })
+        {
+            return IsDerivedStorageValue(instance, function, aliases);
+        }
+        if (operation is IFieldReferenceOperation { Instance: { } fieldInstance })
+        {
+            return IsStorageReferenceDerived(
+                fieldInstance,
+                function,
+                aliases,
+                referenceAliases);
+        }
+        if (operation is IInvocationOperation invocation &&
+            (invocation.TargetMethod.ReturnsByRef || invocation.TargetMethod.ReturnsByRefReadonly))
+        {
+            var target = ResolveMethod(invocation.TargetMethod, function);
+            if (TryGetFunction(target, out var targetFunction) &&
+                targetFunction.Captures.Any(capture => aliases.Contains(capture.Symbol)))
+            {
+                return true;
+            }
+            if (invocation.Instance is not null &&
+                (IsStorageReferenceDerived(
+                     invocation.Instance,
+                     function,
+                     aliases,
+                     referenceAliases) ||
+                 IsDerivedStorageValue(invocation.Instance, function, aliases)))
+            {
+                return true;
+            }
+            return invocation.Arguments.Any(argument =>
+                IsDerivedStorageValue(argument.Value, function, aliases));
+        }
+        if (operation.Syntax.IsKind(SyntaxKind.PointerIndirectionExpression) ||
+            operation.Syntax.IsKind(SyntaxKind.ElementAccessExpression))
+        {
+            return operation.ChildOperations.Any(child =>
+                IsDerivedStorageValue(child, function, aliases));
+        }
+        return false;
+    }
+
+    private bool IsManagedArrayIdentity(
+        IOperation operation,
+        CudaFunctionPlan function,
+        ISet<ISymbol> aliases)
+    {
+        while (operation is IConversionOperation conversion)
+            operation = conversion.Operand;
+        return operation.Type is IArrayTypeSymbol &&
+            IsDerivedStorageValue(operation, function, aliases);
+    }
+
+    private bool IsStorageHandleType(ITypeSymbol? type) =>
+        type is IPointerTypeSymbol || IsArrayViewType(type);
+
+    private void AnalyzeCaptures(IEnumerable<CudaFunctionPlan> functions)
+    {
+        var localFunctions = functions.Where(static function =>
+            function.IsClosureFunction && !function.IsExternal).ToArray();
+        var captures = localFunctions.ToDictionary(
+            static function => function,
+            static _ => new Dictionary<ISymbol, bool>(SymbolEqualityComparer.Default));
+
+        foreach (var localFunction in localFunctions)
+        {
+            var root = GetFunctionOperation(localFunction);
+            if (root is null)
+                continue;
+            foreach (var operation in EnumerateOperations(root))
+            {
+                ISymbol? symbol = operation switch
+                {
+                    ILocalReferenceOperation local => local.Local,
+                    IParameterReferenceOperation parameter => parameter.Parameter,
+                    _ => null
+                };
+                if (symbol is null ||
+                    SymbolEqualityComparer.Default.Equals(
+                        symbol.ContainingSymbol,
+                        localFunction.Symbol))
+                {
+                    continue;
+                }
+                var byReference = RequiresReferenceCapture(operation);
+                if (symbol is IParameterSymbol { RefKind: not RefKind.None } ||
+                    symbol is ILocalSymbol { RefKind: not RefKind.None })
+                {
+                    byReference = true;
+                }
+                if (captures[localFunction].TryGetValue(symbol, out var existing))
+                    captures[localFunction][symbol] = existing || byReference;
+                else
+                    captures[localFunction].Add(symbol, byReference);
+            }
+        }
+
+        bool changed;
+        do
+        {
+            changed = false;
+            foreach (var caller in localFunctions)
+            {
+                foreach (var callSite in EnumerateCallSites(caller))
+                {
+                    var target = ResolveMethod(callSite.Target, caller);
+                    if (!functionPlans.TryGetValue(target, out var callee) ||
+                        !captures.TryGetValue(callee, out var calleeCaptures))
+                    {
+                        continue;
+                    }
+                    foreach (var capture in calleeCaptures)
+                    {
+                        if (SymbolEqualityComparer.Default.Equals(
+                                capture.Key.ContainingSymbol,
+                                caller.Symbol))
+                        {
+                            continue;
+                        }
+                        if (captures[caller].TryGetValue(capture.Key, out var existing))
+                        {
+                            if (!existing && capture.Value)
+                            {
+                                captures[caller][capture.Key] = true;
+                                changed = true;
+                            }
+                        }
+                        else
+                        {
+                            captures[caller].Add(capture.Key, capture.Value);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        while (changed);
+
+        foreach (var function in localFunctions)
+        {
+            var ordered = captures[function]
+                .OrderBy(static capture =>
+                    capture.Key.Locations.FirstOrDefault()?.SourceSpan.Start ?? int.MaxValue)
+                .ThenBy(static capture => capture.Key.Name, StringComparer.Ordinal)
+                .Select((capture, index) => new CudaCapturePlan(
+                    capture.Key,
+                    GetCaptureType(capture.Key),
+                    $"csharp2cuda_capture_{NormalizeIdentifierPart(capture.Key.Name)}_{index}",
+                    capture.Value,
+                    capture.Key is IParameterSymbol { RefKind: RefKind.In } ||
+                    capture.Key is ILocalSymbol { RefKind: RefKind.RefReadOnly }))
+                .ToImmutableArray();
+            function.Captures = ordered;
+            foreach (var capture in ordered)
+            {
+                FormatType(
+                    capture.Type,
+                    false,
+                    capture.Symbol.Locations.FirstOrDefault() ?? function.Syntax.GetLocation());
+            }
+        }
+    }
+
+    private static IOperation? GetFunctionOperation(CudaFunctionPlan function) =>
+        function.Syntax.Body is not null
+            ? function.Model.GetOperation(function.Syntax.Body)
+            : function.Syntax.ExpressionBodyExpression is not null
+                ? function.Model.GetOperation(function.Syntax.ExpressionBodyExpression)
+                : null;
+
+    private static ITypeSymbol GetCaptureType(ISymbol symbol) => symbol switch
+    {
+        ILocalSymbol local => local.Type,
+        IParameterSymbol parameter => parameter.Type,
+        _ => throw new InvalidOperationException($"Unsupported capture symbol '{symbol.Kind}'.")
+    };
+
+    private static bool RequiresReferenceCapture(IOperation reference)
+    {
+        for (var current = reference; current.Parent is { } parent; current = parent)
+        {
+            if (parent is ISimpleAssignmentOperation assignment &&
+                ContainsOperation(assignment.Target, current) ||
+                parent is ICompoundAssignmentOperation compound &&
+                ContainsOperation(compound.Target, current) ||
+                parent is IIncrementOrDecrementOperation increment &&
+                ContainsOperation(increment.Target, current) ||
+                parent is IArgumentOperation argument &&
+                argument.Parameter?.RefKind is RefKind.Ref or RefKind.Out ||
+                parent is IAddressOfOperation ||
+                parent is IInvocationOperation invocation &&
+                ReferenceEquals(invocation.Instance, current) &&
+                !invocation.TargetMethod.IsReadOnly)
+            {
+                return true;
+            }
+            if (parent is ILocalFunctionOperation)
+                break;
+        }
+        return false;
+    }
+
+    private static bool ContainsOperation(IOperation root, IOperation candidate) =>
+        ReferenceEquals(root, candidate) ||
+        root.ChildOperations.Any(child => ContainsOperation(child, candidate));
 
     private void ValidateParameter(CudaFunctionPlan function, IParameterSymbol parameter)
     {
         var syntax = function.Syntax.ParameterList.Parameters[parameter.Ordinal];
         var readOnly = HasAttribute(parameter, ReadOnlyAttributeName);
         if (!HasOnlyAttributes(syntax.AttributeLists, ReadOnlyAttributeName) ||
-            syntax.Type is null ||
-            parameter.IsParams ||
+            syntax.Type is null && !function.IsAnonymousFunction ||
             parameter.IsThis && !function.IsInferred ||
             syntax.Modifiers.Any(modifier =>
                 modifier.Kind() is not SyntaxKind.InKeyword and
                     not SyntaxKind.RefKeyword and
                     not SyntaxKind.OutKeyword and
+                    not SyntaxKind.ParamsKeyword and
+                    not SyntaxKind.ScopedKeyword and
                     not SyntaxKind.ThisKeyword))
         {
             ReportUnsupportedSyntax(syntax);
         }
 
-        if (function.Kind == CudaFunctionKind.Global &&
+        var isAbiBoundary = function.Kind == CudaFunctionKind.Global || function.IsExternal;
+        if (isAbiBoundary && ContainsDeviceInternalAbiType(
+                parameter.Type,
+                new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default)))
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InvalidPortableAbiType,
+                syntax.GetLocation(),
+                parameter.Type.ToDisplayString()));
+        }
+        else if (function.Kind == CudaFunctionKind.Global &&
             (parameter.RefKind != RefKind.None || IsArrayViewType(parameter.Type)))
         {
             diagnostics.Add(Diagnostic.Create(
                 CudaDiagnostics.InvalidKernelParameter,
                 syntax.GetLocation(),
                 parameter.Name,
+                parameter.Type.ToDisplayString()));
+        }
+        else if (function.IsExternal &&
+            (parameter.RefKind != RefKind.None || IsArrayViewType(parameter.Type)))
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InvalidPortableAbiType,
+                syntax.GetLocation(),
                 parameter.Type.ToDisplayString()));
         }
 
@@ -1603,19 +2675,46 @@ internal sealed class CudaEmissionPlan
         FormatType(parameter.Type, readOnly, syntax.Type?.GetLocation() ?? syntax.GetLocation());
     }
 
+    private bool ContainsDeviceInternalAbiType(
+        ITypeSymbol type,
+        ISet<ITypeSymbol> visited)
+    {
+        while (type is IPointerTypeSymbol pointer)
+            type = pointer.PointedAtType;
+        if (type is IArrayTypeSymbol array)
+            return ContainsDeviceInternalAbiType(array.ElementType, visited);
+        if (type is INamedTypeSymbol { IsTupleType: true } tuple)
+            return true;
+        if (type is not INamedTypeSymbol named || !visited.Add(named))
+            return false;
+        if (TryGetStruct(named, out var structure) && structure.IsPositionalRecord)
+            return true;
+        if (!TryGetStruct(named, out structure))
+            return false;
+        return structure.Fields.Any(field => ContainsDeviceInternalAbiType(
+                field.InlineArrayLength > 0 && field.Symbol.Type is IPointerTypeSymbol inline
+                    ? inline.PointedAtType
+                    : field.Symbol.Type,
+                visited)) ||
+            structure.Properties.Any(property => ContainsDeviceInternalAbiType(
+                property.Symbol.Type,
+                visited));
+    }
+
     private void ValidateLocalDeclaration(
         LocalDeclarationStatementSyntax declaration,
         SemanticModel model)
     {
         if (declaration.Modifiers.Any(modifier =>
-                !modifier.IsKind(SyntaxKind.ConstKeyword)) ||
+                modifier.Kind() is not SyntaxKind.ConstKeyword and
+                    not SyntaxKind.ScopedKeyword) ||
             declaration.UsingKeyword != default ||
             declaration.AwaitKeyword != default)
         {
             ReportUnsupportedSyntax(declaration);
         }
 
-        if (fixedLocalArrays.Contains(declaration) ||
+        if (fixedLocalArrays.ContainsKey(declaration) ||
             recognizedStorageDeclarations.Contains(declaration))
             return;
 
@@ -1712,8 +2811,8 @@ internal sealed class CudaEmissionPlan
         {
             var root = function.Syntax.Body is not null
                 ? function.Model.GetOperation(function.Syntax.Body)
-                : function.Syntax.ExpressionBody is not null
-                    ? function.Model.GetOperation(function.Syntax.ExpressionBody.Expression)
+                : function.Syntax.ExpressionBodyExpression is not null
+                    ? function.Model.GetOperation(function.Syntax.ExpressionBodyExpression)
                     : null;
             if (root is null)
                 continue;
@@ -1727,6 +2826,9 @@ internal sealed class CudaEmissionPlan
                     IIncrementOrDecrementOperation increment => increment.Target,
                     IArgumentOperation argument when argument.Parameter?.RefKind is
                         RefKind.Ref or RefKind.Out => argument.Value,
+                    IReturnOperation returned when
+                        (function.Symbol.ReturnsByRef ||
+                         function.Symbol.ReturnsByRefReadonly) => returned.ReturnedValue,
                     _ => null
                 };
                 if (target is null)
@@ -1751,8 +2853,13 @@ internal sealed class CudaEmissionPlan
 
     private bool IsFunctionPure(CudaFunctionPlan function)
     {
-        if (function.Syntax.Body is null)
+        if (function.Syntax.Body is null ||
+            IsStorageHandleType(function.Symbol.ReturnType) ||
+            function.Symbol.Parameters.Any(parameter =>
+                parameter.RefKind != RefKind.None || IsStorageHandleType(parameter.Type)))
+        {
             return false;
+        }
         foreach (var node in function.Syntax.Body.DescendantNodes())
         {
             if (node is InvocationExpressionSyntax invocation)
@@ -1805,7 +2912,7 @@ internal sealed class CudaEmissionPlan
                 VariableDeclaratorSyntax variable &&
             variable.Parent?.Parent is LocalDeclarationStatementSyntax declaration)
         {
-            return fixedLocalArrays.Contains(declaration);
+            return fixedLocalArrays.ContainsKey(declaration);
         }
         return false;
     }
@@ -1855,10 +2962,12 @@ internal sealed class CudaEmissionPlan
         }
     }
 
-    private bool IsValidFixedLocalArray(
+    private bool TryCreateFixedLocalArrayPlan(
         LocalDeclarationStatementSyntax declaration,
-        SemanticModel model)
+        SemanticModel model,
+        out CudaFixedLocalArrayPlan plan)
     {
+        plan = null!;
         if (declaration.Declaration.Variables.Count != 1 ||
             declaration.Declaration.Type is IdentifierNameSyntax { Identifier.ValueText: "var" })
         {
@@ -1866,24 +2975,113 @@ internal sealed class CudaEmissionPlan
         }
 
         var variable = declaration.Declaration.Variables[0];
-        if (variable.Initializer?.Value is not StackAllocArrayCreationExpressionSyntax stack ||
-            stack.Type is not ArrayTypeSyntax arrayType ||
-            arrayType.RankSpecifiers is not [var rank] ||
-            rank.Sizes is not [var size] ||
-            size is OmittedArraySizeExpressionSyntax ||
+        if (variable.Initializer?.Value is not { } initializer ||
             model.GetDeclaredSymbol(variable) is not ILocalSymbol local ||
-            model.GetTypeInfo(arrayType.ElementType).Type is not { } elementType ||
-            !TryGetFixedArrayElementType(local.Type, out var localElementType, out var readOnly) ||
-            !SymbolEqualityComparer.Default.Equals(localElementType, elementType))
+            !TryGetFixedArrayElementType(local.Type, out var elementType, out var readOnly))
         {
             return false;
         }
 
-        var constant = model.GetConstantValue(size);
-        return constant is { HasValue: true, Value: int length } &&
-            length > 0 &&
-            (!readOnly || stack.Initializer is not null) &&
-            (stack.Initializer is null || stack.Initializer.Expressions.Count == length);
+        ExpressionSyntax? size = null;
+        IEnumerable<ExpressionSyntax>? expressions = null;
+        var zeroInitialize = false;
+        var allowsEmpty = false;
+        switch (initializer)
+        {
+            case StackAllocArrayCreationExpressionSyntax
+            {
+                Type: ArrayTypeSyntax
+                {
+                    ElementType: var stackElement,
+                    RankSpecifiers: [{ Sizes: [var stackSize] }]
+                },
+                Initializer: var stackInitializer
+            }:
+                if (!SymbolEqualityComparer.Default.Equals(
+                        model.GetTypeInfo(stackElement).Type,
+                        elementType) ||
+                    stackSize is OmittedArraySizeExpressionSyntax)
+                {
+                    return false;
+                }
+                size = stackSize;
+                expressions = stackInitializer?.Expressions;
+                if (readOnly && stackInitializer is null)
+                    return false;
+                break;
+            case ArrayCreationExpressionSyntax
+            {
+                Type:
+                {
+                    ElementType: var arrayElement,
+                    RankSpecifiers: [{ Sizes: [var arraySize] }]
+                },
+                Initializer: var arrayInitializer
+            }:
+                if (!SymbolEqualityComparer.Default.Equals(
+                        model.GetTypeInfo(arrayElement).Type,
+                        elementType))
+                {
+                    return false;
+                }
+                size = arraySize is OmittedArraySizeExpressionSyntax ? null : arraySize;
+                expressions = arrayInitializer?.Expressions;
+                zeroInitialize = arrayInitializer is null;
+                allowsEmpty = arrayInitializer is not null;
+                break;
+            case ImplicitArrayCreationExpressionSyntax { Initializer: var implicitInitializer }:
+                expressions = implicitInitializer.Expressions;
+                allowsEmpty = true;
+                break;
+            case CollectionExpressionSyntax collection:
+                if (collection.Elements.Any(static item => item is not ExpressionElementSyntax))
+                    return false;
+                expressions = collection.Elements
+                    .Cast<ExpressionElementSyntax>()
+                    .Select(static item => item.Expression);
+                allowsEmpty = true;
+                break;
+            default:
+                return false;
+        }
+
+        var initializerExpressions = expressions?.ToImmutableArray() ?? [];
+        int length;
+        if (size is not null)
+        {
+            if (model.GetConstantValue(size) is not { HasValue: true, Value: int value })
+                return false;
+            length = value;
+        }
+        else
+        {
+            length = initializerExpressions.Length;
+        }
+        if (length < 0 ||
+            length == 0 && (!allowsEmpty || local.Type is IPointerTypeSymbol) ||
+            (!initializerExpressions.IsEmpty && initializerExpressions.Length != length))
+        {
+            return false;
+        }
+
+        plan = new CudaFixedLocalArrayPlan(
+            local,
+            elementType,
+            length,
+            readOnly,
+            local.Type is IPointerTypeSymbol,
+            zeroInitialize,
+            initializerExpressions);
+        if (length > MaximumFixedLocalElementCount && !plan.IsPointer)
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.FixedLocalStorageLimit,
+                initializer.GetLocation(),
+                local.Name,
+                length,
+                MaximumFixedLocalElementCount));
+        }
+        return true;
     }
 
     private bool TryGetFixedArrayElementType(
@@ -1894,6 +3092,13 @@ internal sealed class CudaEmissionPlan
         if (localType is IPointerTypeSymbol pointer)
         {
             elementType = pointer.PointedAtType;
+            readOnly = false;
+            return true;
+        }
+
+        if (localType is IArrayTypeSymbol { Rank: 1 } array)
+        {
+            elementType = array.ElementType;
             readOnly = false;
             return true;
         }
@@ -2108,6 +3313,25 @@ internal sealed class CudaEmissionPlan
                 {
                     if (!TryGetSourceFunction(target, out var syntax, out var model))
                     {
+                        if (target.MethodKind is MethodKind.UserDefinedOperator or
+                            MethodKind.Conversion)
+                        {
+                            diagnostics.Add(Diagnostic.Create(
+                                CudaDiagnostics.UnsupportedOperator,
+                                invocation.Syntax.GetLocation(),
+                                target.ToDisplayString(
+                                    SymbolDisplayFormat.CSharpErrorMessageFormat)));
+                            continue;
+                        }
+                        if (symbols.IsSpanType(target.ContainingType, out _) ||
+                            symbols.IsMemoryExtensionsType(target.ContainingType))
+                        {
+                            diagnostics.Add(Diagnostic.Create(
+                                CudaDiagnostics.UnsupportedRangeOperation,
+                                invocation.Syntax.GetLocation(),
+                                invocation.Syntax.ToString()));
+                            continue;
+                        }
                         var callPath = BuildCallPath(function.Symbol, target, parents);
                         diagnostics.Add(Diagnostic.Create(
                             CudaDiagnostics.MissingReachableBody,
@@ -2125,7 +3349,8 @@ internal sealed class CudaEmissionPlan
 
                     var containingType = syntax.Node.Ancestors().OfType<TypeDeclarationSyntax>()
                         .FirstOrDefault();
-                    if (containingType is not (ClassDeclarationSyntax or StructDeclarationSyntax))
+                    if (containingType is not (ClassDeclarationSyntax or
+                        StructDeclarationSyntax or RecordDeclarationSyntax))
                     {
                         var callPath = BuildCallPath(function.Symbol, target, parents);
                         diagnostics.Add(Diagnostic.Create(
@@ -2176,13 +3401,13 @@ internal sealed class CudaEmissionPlan
         ValidateNoRecursion(roots, edges);
     }
 
-    private static IEnumerable<CudaCallSite> EnumerateCallSites(
+    private IEnumerable<CudaCallSite> EnumerateCallSites(
         CudaFunctionPlan function)
     {
         IOperation? operation = function.Syntax.Body is not null
             ? function.Model.GetOperation(function.Syntax.Body)
-            : function.Syntax.ExpressionBody is not null
-                ? function.Model.GetOperation(function.Syntax.ExpressionBody.Expression)
+            : function.Syntax.ExpressionBodyExpression is not null
+                ? function.Model.GetOperation(function.Syntax.ExpressionBodyExpression)
                 : null;
         if (operation is null)
             return [];
@@ -2193,12 +3418,32 @@ internal sealed class CudaEmissionPlan
             .ToArray();
     }
 
-    private static IEnumerable<CudaCallSite> GetOperationCallSites(IOperation operation)
+    private IEnumerable<CudaCallSite> GetOperationCallSites(IOperation operation)
     {
         switch (operation)
         {
+            case IDelegateCreationOperation creation
+                when !IsDirectlyInvokedDelegate(creation):
+                diagnostics.Add(Diagnostic.Create(
+                    CudaDiagnostics.ClosureEscape,
+                    creation.Syntax.GetLocation(),
+                    creation.Syntax.ToString()));
+                break;
+            case IInvocationOperation invocation
+                when TryGetDirectAnonymousFunction(invocation.Instance, out var anonymous):
+                yield return new CudaCallSite(anonymous.Symbol, invocation.Syntax);
+                break;
+            case IInvocationOperation invocation
+                when invocation.TargetMethod.ContainingType.TypeKind == TypeKind.Delegate:
+                break;
+            case IInvocationOperation invocation
+                when IsGeneratedPositionalRecordMember(invocation.TargetMethod):
+                break;
             case IInvocationOperation invocation:
                 yield return new CudaCallSite(invocation.TargetMethod, invocation.Syntax);
+                break;
+            case IObjectCreationOperation { Constructor: { } constructor }
+                when IsGeneratedPositionalRecordMember(constructor):
                 break;
             case IObjectCreationOperation { Constructor: { } constructor } creation:
                 yield return new CudaCallSite(constructor, creation.Syntax);
@@ -2209,7 +3454,86 @@ internal sealed class CudaEmissionPlan
                 if (property.Property.SetMethod is { } setter && HasSourceBody(setter))
                     yield return new CudaCallSite(setter, property.Syntax);
                 break;
+            case IBinaryOperation { OperatorMethod: { } method }
+                when symbols.IsCudaInt32Type(method.ContainingType):
+                break;
+            case IBinaryOperation { OperatorMethod: { } method }
+                when IsGeneratedPositionalRecordMember(method):
+                break;
+            case IBinaryOperation { OperatorMethod: { } method } binary:
+                yield return new CudaCallSite(method, binary.Syntax);
+                break;
+            case IUnaryOperation { OperatorMethod: { } method }
+                when symbols.IsCudaInt32Type(method.ContainingType):
+                break;
+            case IUnaryOperation { OperatorMethod: { } method } unary:
+                yield return new CudaCallSite(method, unary.Syntax);
+                break;
+            case IConversionOperation { OperatorMethod: { } method } conversion
+                when !symbols.IsIndexType(method.ContainingType) &&
+                    !symbols.IsCudaInt32Type(method.ContainingType):
+                yield return new CudaCallSite(method, conversion.Syntax);
+                break;
+            case ICompoundAssignmentOperation compound:
+                if (compound.OperatorMethod is { } compoundOperator &&
+                    !symbols.IsCudaInt32Type(compoundOperator.ContainingType))
+                {
+                    yield return new CudaCallSite(compoundOperator, compound.Syntax);
+                }
+                if (compound.InConversion.MethodSymbol is { } inConversion &&
+                    !symbols.IsCudaInt32Type(inConversion.ContainingType))
+                {
+                    yield return new CudaCallSite(inConversion, compound.Syntax);
+                }
+                if (compound.OutConversion.MethodSymbol is { } outConversion &&
+                    !symbols.IsCudaInt32Type(outConversion.ContainingType))
+                {
+                    yield return new CudaCallSite(outConversion, compound.Syntax);
+                }
+                break;
+            case IIncrementOrDecrementOperation { OperatorMethod: { } method }
+                when symbols.IsCudaInt32Type(method.ContainingType):
+                break;
+            case IIncrementOrDecrementOperation { OperatorMethod: { } method } increment:
+                yield return new CudaCallSite(method, increment.Syntax);
+                break;
         }
+    }
+
+    internal static bool IsGeneratedPositionalRecordMember(IMethodSymbol method) =>
+        method.DeclaringSyntaxReferences.Any(reference =>
+            reference.GetSyntax() is RecordDeclarationSyntax
+            {
+                ParameterList: not null,
+                ClassOrStructKeyword.RawKind: (int)SyntaxKind.StructKeyword
+            } record &&
+            record.Modifiers.Any(SyntaxKind.ReadOnlyKeyword));
+
+    private static bool TryGetDirectAnonymousFunction(
+        IOperation? operation,
+        out IAnonymousFunctionOperation anonymous)
+    {
+        while (operation is IConversionOperation conversion)
+            operation = conversion.Operand;
+        if (operation is IDelegateCreationOperation { Target: IAnonymousFunctionOperation value })
+        {
+            anonymous = value;
+            return true;
+        }
+        anonymous = null!;
+        return false;
+    }
+
+    private static bool IsDirectlyInvokedDelegate(IDelegateCreationOperation creation)
+    {
+        IOperation current = creation;
+        while (current.Parent is IConversionOperation conversion &&
+            ReferenceEquals(conversion.Operand, current))
+        {
+            current = conversion;
+        }
+        return current.Parent is IInvocationOperation invocation &&
+            ReferenceEquals(invocation.Instance, current);
     }
 
     private static bool HasSourceBody(IMethodSymbol method) =>
@@ -2225,7 +3549,7 @@ internal sealed class CudaEmissionPlan
     private static IEnumerable<IOperation> EnumerateOperations(IOperation operation)
     {
         yield return operation;
-        if (operation is ILocalFunctionOperation)
+        if (operation is ILocalFunctionOperation or IAnonymousFunctionOperation)
             yield break;
         foreach (var child in operation.ChildOperations)
         {
@@ -2250,6 +3574,12 @@ internal sealed class CudaEmissionPlan
                 MethodDeclarationSyntax declaration => CudaFunctionSource.Create(declaration),
                 LocalFunctionStatementSyntax declaration => CudaFunctionSource.Create(declaration),
                 ConstructorDeclarationSyntax declaration => CudaFunctionSource.Create(declaration),
+                OperatorDeclarationSyntax declaration => CudaFunctionSource.Create(declaration),
+                ConversionOperatorDeclarationSyntax declaration =>
+                    CudaFunctionSource.Create(declaration),
+                AnonymousFunctionExpressionSyntax declaration => CudaFunctionSource.Create(
+                    declaration,
+                    method.OriginalDefinition),
                 AccessorDeclarationSyntax declaration => CudaFunctionSource.Create(
                     declaration,
                     method.OriginalDefinition),
@@ -2260,7 +3590,7 @@ internal sealed class CudaEmissionPlan
                 _ => null
             };
             if (candidate is null ||
-                candidate.Body is null && candidate.ExpressionBody is null)
+                candidate.Body is null && candidate.ExpressionBodyExpression is null)
                 continue;
             syntax = candidate;
             model = GetSemanticModel(candidate.Node);
@@ -2437,19 +3767,20 @@ internal sealed record CudaUnitPlan(
     SemanticModel Model);
 
 internal sealed class CudaStructPlan(
-    StructDeclarationSyntax syntax,
+    TypeDeclarationSyntax syntax,
     INamedTypeSymbol symbol,
     INamedTypeSymbol definitionSymbol,
     SemanticModel model,
     string emittedName,
     bool isExternal)
 {
-    public StructDeclarationSyntax Syntax { get; } = syntax;
+    public TypeDeclarationSyntax Syntax { get; } = syntax;
     public INamedTypeSymbol Symbol { get; } = symbol;
     public INamedTypeSymbol DefinitionSymbol { get; } = definitionSymbol;
     public SemanticModel Model { get; } = model;
     public string EmittedName { get; } = emittedName;
     public bool IsExternal { get; } = isExternal;
+    public bool IsPositionalRecord => Syntax is RecordDeclarationSyntax { ParameterList: not null };
     public List<CudaFieldPlan> Fields { get; } = [];
     public List<CudaPropertyPlan> Properties { get; } = [];
     public CudaStructLayout? Layout { get; set; }
@@ -2462,7 +3793,8 @@ internal sealed record CudaFieldPlan(
     int InlineArrayLength);
 
 internal sealed record CudaPropertyPlan(
-    PropertyDeclarationSyntax Declaration,
+    SyntaxNode Declaration,
+    TypeSyntax TypeSyntax,
     IPropertySymbol Symbol);
 
 internal sealed record CudaConstantArrayPlan(
@@ -2479,6 +3811,15 @@ internal sealed record CudaStoragePlan(
     ITypeSymbol ElementType,
     int Length,
     int Alignment);
+
+internal sealed record CudaFixedLocalArrayPlan(
+    ILocalSymbol Symbol,
+    ITypeSymbol ElementType,
+    int Length,
+    bool IsReadOnly,
+    bool IsPointer,
+    bool ZeroInitialize,
+    ImmutableArray<ExpressionSyntax> Initializers);
 
 internal enum CudaStorageKind
 {
@@ -2504,13 +3845,38 @@ internal sealed record CudaFunctionPlan(
     bool IsInferred)
 {
     public CudaFunctionBodyIr? Body { get; set; }
+    public ImmutableArray<CudaCapturePlan> Captures { get; set; } = [];
     public bool HasInstance => !Syntax.IsConstructor &&
         !Syntax.IsLocalFunction &&
+        !Syntax.IsAnonymousFunction &&
         !Symbol.IsStatic;
     public bool IsConstructor => Syntax.IsConstructor;
     public bool IsLocalFunction => Syntax.IsLocalFunction;
+    public bool IsAnonymousFunction => Syntax.IsAnonymousFunction;
+    public bool IsClosureFunction => IsLocalFunction || IsAnonymousFunction;
     public bool IsReadOnlyInstance => Symbol.IsReadOnly;
+
+    public bool TryGetCapture(ISymbol symbol, out CudaCapturePlan capture)
+    {
+        foreach (var candidate in Captures)
+        {
+            if (SymbolEqualityComparer.Default.Equals(candidate.Symbol, symbol))
+            {
+                capture = candidate;
+                return true;
+            }
+        }
+        capture = null!;
+        return false;
+    }
 }
+
+internal sealed record CudaCapturePlan(
+    ISymbol Symbol,
+    ITypeSymbol Type,
+    string EmittedName,
+    bool ByReference,
+    bool IsReadOnly);
 
 internal sealed class CudaFunctionSource
 {
@@ -2527,7 +3893,9 @@ internal sealed class CudaFunctionSource
         ExplicitInterfaceSpecifierSyntax? explicitInterfaceSpecifier,
         bool isConstructor,
         bool isLocalFunction,
-        bool isAccessor)
+        bool isAccessor,
+        bool isAnonymousFunction = false,
+        ExpressionSyntax? directExpressionBody = null)
     {
         Node = node;
         Identifier = identifier;
@@ -2542,6 +3910,8 @@ internal sealed class CudaFunctionSource
         IsConstructor = isConstructor;
         IsLocalFunction = isLocalFunction;
         IsAccessor = isAccessor;
+        IsAnonymousFunction = isAnonymousFunction;
+        DirectExpressionBody = directExpressionBody;
     }
 
     public SyntaxNode Node { get; }
@@ -2549,6 +3919,9 @@ internal sealed class CudaFunctionSource
     public ParameterListSyntax ParameterList { get; }
     public BlockSyntax? Body { get; }
     public ArrowExpressionClauseSyntax? ExpressionBody { get; }
+    public ExpressionSyntax? DirectExpressionBody { get; }
+    public ExpressionSyntax? ExpressionBodyExpression =>
+        DirectExpressionBody ?? ExpressionBody?.Expression;
     public TypeSyntax? ReturnType { get; }
     public SyntaxTokenList Modifiers { get; }
     public SyntaxList<AttributeListSyntax> AttributeLists { get; }
@@ -2557,6 +3930,7 @@ internal sealed class CudaFunctionSource
     public bool IsConstructor { get; }
     public bool IsLocalFunction { get; }
     public bool IsAccessor { get; }
+    public bool IsAnonymousFunction { get; }
 
     public Location GetLocation() => Node.GetLocation();
 
@@ -2604,6 +3978,69 @@ internal sealed class CudaFunctionSource
         true,
         false,
         false);
+
+    public static CudaFunctionSource Create(OperatorDeclarationSyntax syntax) => new(
+        syntax,
+        syntax.OperatorToken,
+        syntax.ParameterList,
+        syntax.Body,
+        syntax.ExpressionBody,
+        syntax.ReturnType,
+        syntax.Modifiers,
+        syntax.AttributeLists,
+        null,
+        null,
+        false,
+        false,
+        false);
+
+    public static CudaFunctionSource Create(ConversionOperatorDeclarationSyntax syntax) => new(
+        syntax,
+        syntax.ImplicitOrExplicitKeyword,
+        syntax.ParameterList,
+        syntax.Body,
+        syntax.ExpressionBody,
+        syntax.Type,
+        syntax.Modifiers,
+        syntax.AttributeLists,
+        null,
+        null,
+        false,
+        false,
+        false);
+
+    public static CudaFunctionSource Create(
+        AnonymousFunctionExpressionSyntax syntax,
+        IMethodSymbol method)
+    {
+        var parameters = syntax switch
+        {
+            ParenthesizedLambdaExpressionSyntax parenthesized => parenthesized.ParameterList,
+            SimpleLambdaExpressionSyntax simple => SyntaxFactory.ParameterList(
+                SyntaxFactory.SingletonSeparatedList(simple.Parameter)),
+            AnonymousMethodExpressionSyntax anonymous => anonymous.ParameterList ??
+                SyntaxFactory.ParameterList(),
+            _ => SyntaxFactory.ParameterList()
+        };
+        var identifier = parameters.Parameters.FirstOrDefault()?.Identifier ??
+            syntax.GetFirstToken();
+        return new CudaFunctionSource(
+            syntax,
+            identifier,
+            parameters,
+            syntax.Body as BlockSyntax,
+            null,
+            null,
+            default,
+            default,
+            null,
+            null,
+            false,
+            false,
+            false,
+            true,
+            syntax.Body as ExpressionSyntax);
+    }
 
     public static CudaFunctionSource Create(
         AccessorDeclarationSyntax syntax,
@@ -2745,7 +4182,12 @@ internal enum CudaCallKind
     Unwrap,
     ArrayView,
     ReadOnlyArrayView,
-    SliceView
+    SliceView,
+    AsSpanView,
+    ClearView,
+    FillView,
+    CopyView,
+    TryCopyView
 }
 
 internal static class CudaIdentifier

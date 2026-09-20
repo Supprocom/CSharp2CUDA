@@ -10,7 +10,7 @@ Install the .NET 10 SDK. Use Visual Studio 2026 or the `dotnet` command when you
 You do not need the CUDA toolkit to translate C# source. You need a CUDA toolchain later when you compile and run the generated `.cu` file.
 
 Add the `Supprocom.CSharp2CUDA` package to a .NET 10 project.
-Version 0.3.0 supplies the file APIs and build integration in this guide.
+Version 0.3.1 supplies the file APIs and build integration in this guide.
 
 Add the package directly to each project that uses automatic build transpilation.
 
@@ -31,7 +31,7 @@ Set `TranspileToCUDA` to select the complete project for CUDA emission.
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Supprocom.CSharp2CUDA" Version="0.3.0" />
+    <PackageReference Include="Supprocom.CSharp2CUDA" Version="0.3.1" />
   </ItemGroup>
 </Project>
 ```
@@ -350,11 +350,23 @@ include the producer unit that defines `external_device_operation`.
 
 ## Follow the source rules
 
-Use static methods with block bodies. Use `CudaDeviceAttribute` or `CudaGlobalAttribute` on every emitted method.
+Use `[CudaGlobal]` for a kernel entry point and `[CudaDevice]` when a method
+must be an explicitly named device entry. Ordinary static methods reached from
+those roots do not need CUDA attributes; CSharp2CUDA follows their calls and
+emits device helpers.
 
-Do not use optional parameters, `params`, `ref`, or `out` parameters. Use `in` for a read-only value reference. Pointer parameters cannot use `in`.
+Helper methods may use optional arguments, expanded `params`, `in`, `ref`, and
+`out` when their values and lifetimes stay in the portable profile. The
+`[CudaGlobal]` launch boundary is deliberately stricter: arrays, spans,
+references, tuples, and positional record structs cannot be kernel parameters.
+Use primitive values, pointers, or an ABI-approved structure there, then adapt
+to ordinary C# views inside the kernel.
 
-Use only supported C# types and members. The transpiler rejects enums, `System.Char`, managed allocation, dynamic stack allocation, unsupported .NET members, and syntax without an explicit CUDA rule.
+Portable code can use enums and `char`, supported unmanaged structures, and
+the bounded framework and language features listed in the
+[portable C# profile](portable-csharp.md). Managed heap allocation, strings,
+ordinary reference types, exceptions, dynamic dispatch, and unlisted .NET
+members remain unsupported.
 
 Keep every emitted identifier within the CUDA identifier rules. Avoid C++ keywords, CUDA runtime names, double underscores, and names that start with `csharp2cuda_`.
 
@@ -386,4 +398,7 @@ The package is written to `artifacts/packages`. The package ID is `Supprocom.CSh
 
 Read the public API in `Supprocom.CSharp2CUDA/Cuda.cs` and `Supprocom.CSharp2CUDA/CudaAttributes.cs`. Read `Supprocom.CSharp2CUDA.Tests/Golden` for larger translation units.
 
-Read [README.md](../README.md) for the project overview, semantic limits, and contribution links.
+Read [README.md](../README.md) for the project overview,
+[portable-csharp.md](portable-csharp.md) for the language boundary,
+[cuda-interop.md](cuda-interop.md) for CUDA-specific facilities, and
+[tool.md](tool.md) for the optional global tool.

@@ -4,7 +4,7 @@
     <AssemblyName>Supprocom.CSharp2CUDA.Tool</AssemblyName>
     <RootNamespace>Supprocom.CSharp2CUDA.Tool</RootNamespace>
     <PackageId>Supprocom.CSharp2CUDA.Tool</PackageId>
-    <Description>Project compatibility checks and CUDA adapter scaffolding for Supprocom.CSharp2CUDA.</Description>
+    <Description>Check ordinary C# methods and scaffold thin CUDA adapters for Supprocom.CSharp2CUDA.</Description>
     <Authors>Supprocom</Authors>
     <Company>Supprocom</Company>
     <Copyright>Copyright (C) 2026 mkn8rn</Copyright>
@@ -17,7 +17,7 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>csharp2cuda</ToolCommandName>
     <PackageTags>cuda;csharp;roslyn;transpiler;scaffold;dotnet-tool</PackageTags>
-    <PackageReleaseNotes>Add compatibility checks and compile-checked CUDA adapter scaffolding for ordinary C# algorithms.</PackageReleaseNotes>
+    <PackageReleaseNotes>Target the 0.3.1 portable C# profile when checking methods and generating compile-checked CUDA adapter projects.</PackageReleaseNotes>
     <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
@@ -45,6 +45,15 @@
     <None Include="..\docs\getting-started.md"
           Pack="true"
           PackagePath="docs\getting-started.md" />
+    <None Include="..\docs\portable-csharp.md"
+          Pack="true"
+          PackagePath="docs\portable-csharp.md" />
+    <None Include="..\docs\cuda-interop.md"
+          Pack="true"
+          PackagePath="docs\cuda-interop.md" />
+    <None Include="..\docs\tool.md"
+          Pack="true"
+          PackagePath="docs\tool.md" />
     <None Include="..\LICENSE.md" Pack="true" PackagePath="LICENSE.md" />
     <None Include="..\THIRD-PARTY-NOTICES.md"
           Pack="true"

@@ -70,7 +70,51 @@ internal sealed class CudaCppBodyEmitter(
                     }
                     output.Append(" }");
                 }
+                else if (array.ZeroInitialize)
+                {
+                    output.Append(" = {}");
+                }
                 WriteLine(";");
+                if (array.BindingName is not null)
+                {
+                    WriteIndent();
+                    switch (array.BindingKind)
+                    {
+                        case CudaFixedArrayBindingKind.Pointer:
+                            output.Append(array.ElementTypeName)
+                                .Append("* ")
+                                .Append(array.BindingName)
+                                .Append(" = ")
+                                .Append(array.Name);
+                            break;
+                        case CudaFixedArrayBindingKind.WritableView:
+                            output.Append("csharp2cuda_array_view<")
+                                .Append(array.ElementTypeName)
+                                .Append("> ")
+                                .Append(array.BindingName)
+                                .Append('(')
+                                .Append(array.Name)
+                                .Append(", ")
+                                .Append(array.Length.ToString(CultureInfo.InvariantCulture))
+                                .Append(", false)");
+                            break;
+                        case CudaFixedArrayBindingKind.ReadOnlyView:
+                            output.Append("csharp2cuda_readonly_array_view<")
+                                .Append(array.ElementTypeName)
+                                .Append("> ")
+                                .Append(array.BindingName)
+                                .Append('(')
+                                .Append(array.Name)
+                                .Append(", ")
+                                .Append(array.Length.ToString(CultureInfo.InvariantCulture))
+                                .Append(", false)");
+                            break;
+                        default:
+                            throw new InvalidOperationException(
+                                $"Unknown fixed-array binding '{array.BindingKind}'.");
+                    }
+                    WriteLine(";");
+                }
                 break;
             case CudaStorageDeclarationStatementIr storage:
                 EmitStorage(storage);
@@ -101,6 +145,12 @@ internal sealed class CudaCppBodyEmitter(
                 break;
             case CudaBreakStatementIr:
                 WriteIndentedLine("break;");
+                break;
+            case CudaGotoStatementIr branch:
+                WriteIndentedLine($"goto {branch.Label};");
+                break;
+            case CudaLabelStatementIr label:
+                WriteIndentedLine($"{label.Label}:;");
                 break;
             case CudaContinueStatementIr:
                 EmitContinue();

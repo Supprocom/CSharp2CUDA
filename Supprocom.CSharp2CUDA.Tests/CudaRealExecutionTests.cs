@@ -5,6 +5,19 @@ namespace Supprocom.CSharp2CUDA.Tests;
 
 public sealed class CudaRealExecutionTests
 {
+    [Fact]
+    public void Transpile_ProducesCombinedPortableProfileExpansionKernel()
+    {
+        var result = CudaTestCompiler.Transpile(IntegrationSource);
+
+        Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
+        Assert.Contains("portable_profile_expansion", result.Source, StringComparison.Ordinal);
+        Assert.DoesNotContain("PortableScore score = seed;", result.Source, StringComparison.Ordinal);
+        Assert.Contains("PortableScore score = cs2cuda_", result.Source, StringComparison.Ordinal);
+        Assert.Contains("csharp2cuda_copy_array", result.Source, StringComparison.Ordinal);
+        Assert.DoesNotContain("csharp2cuda_invalid", result.Source, StringComparison.Ordinal);
+    }
+
     [CudaFact]
     public void Nvrtc_CompilesEveryAcceptedAdvancedProbe()
     {
@@ -183,6 +196,22 @@ public sealed class CudaRealExecutionTests
         }
     }
 
+    [CudaFact]
+    public void Cuda_ExecutesCombinedPortableProfileExpansion()
+    {
+        using var runtime = CreateRuntime();
+        var output = runtime.Allocate<int>([0]);
+        try
+        {
+            runtime.Launch("portable_profile_expansion", 1, 1, 0, 5, output);
+            Assert.Equal(47, runtime.Read<int>(output, 1)[0]);
+        }
+        finally
+        {
+            runtime.Free(output);
+        }
+    }
+
     private static CudaTestRuntime CreateRuntime()
     {
         var result = CudaTestCompiler.Transpile(IntegrationSource);
@@ -195,7 +224,70 @@ public sealed class CudaRealExecutionTests
             diagnostic.ToString()));
 
     private const string IntegrationSource = """
+        using System;
         using Supprocom.CSharp2CUDA;
+
+        internal readonly record struct PortableScore(int Value)
+        {
+            public static PortableScore operator +(PortableScore left, int right) =>
+                new(left.Value + right);
+
+            public static implicit operator PortableScore(int value) => new(value);
+
+            public static explicit operator int(PortableScore value) => value.Value;
+        }
+
+        internal static class PortableAlgorithm
+        {
+            private static int Sum(params ReadOnlySpan<int> values)
+            {
+                int result = 0;
+                foreach (int value in values)
+                    result += value;
+                return result;
+            }
+
+            private static int Relay(ReadOnlySpan<int> values) => Sum(values);
+
+            public static int Calculate(int seed)
+            {
+                int[] values = [seed, 2, 3, 4];
+                int captured = 0;
+
+                void Add(ref int value)
+                {
+                    captured += value;
+                    value++;
+                }
+
+                foreach (ref int value in values.AsSpan()[1..^1])
+                    Add(ref value);
+
+                Span<int> source = values.AsSpan()[1..];
+                source.CopyTo(values.AsSpan()[..source.Length]);
+                int sum = Relay(values.AsSpan()[..]);
+                PortableScore score = seed;
+                score += 2;
+                bool sameScore = score == new PortableScore(seed + 2);
+                (PortableScore Score, (int Captured, int Sum)) result =
+                    (score, (captured, sum));
+                var (selectedScore, (selectedCaptured, selectedSum)) = result;
+                int selected = seed switch
+                {
+                    var value when value > 0 => (int)selectedScore,
+                    _ => 0
+                };
+                ref int alias = ref values[0];
+                alias++;
+                alias = ref values[1];
+                alias++;
+                ref readonly int observed = ref values[2];
+                int[] copy = values[1..3];
+                copy[0] = 10;
+                return selected + selectedCaptured + selectedSum + copy[0] +
+                    values[1] + observed + (sameScore ? 1 : 0);
+            }
+        }
 
         [TranspileToCUDA]
         internal static unsafe class RuntimeModule
@@ -347,6 +439,12 @@ public sealed class CudaRealExecutionTests
                 int lane = Cuda.ThreadIdx.X;
                 if (lane < 3)
                     output[lane] = ConstantValues[lane];
+            }
+
+            [CudaGlobal(Name = "portable_profile_expansion")]
+            private static void PortableProfileExpansion(int seed, int* output)
+            {
+                output[0] = PortableAlgorithm.Calculate(seed);
             }
         }
         """;

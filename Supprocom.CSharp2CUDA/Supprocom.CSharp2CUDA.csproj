@@ -3,8 +3,8 @@
     <AssemblyName>Supprocom.CSharp2CUDA</AssemblyName>
     <RootNamespace>Supprocom.CSharp2CUDA</RootNamespace>
     <PackageId>Supprocom.CSharp2CUDA</PackageId>
-    <Description>Strict Roslyn-based C# to CUDA source transpilation.</Description>
-    <PackageDescription>Strict Roslyn-based translation from valid C# source to deterministic CUDA C++ source.</PackageDescription>
+    <Description>Translate selected regular C# static methods into deterministic CUDA C++.</Description>
+    <PackageDescription>Roslyn-based translation for selectively accelerating portable C# algorithms with CUDA.</PackageDescription>
     <Authors>Supprocom</Authors>
     <Company>Supprocom</Company>
     <Copyright>Copyright (C) 2026 mkn8rn</Copyright>
@@ -16,7 +16,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageTags>cuda;csharp;roslyn;transpiler;source-translation;gpu</PackageTags>
-    <PackageReleaseNotes>Add reachable ordinary C# translation, typed semantic lowering, deterministic source maps, and compile-checked CUDA scaffolding.</PackageReleaseNotes>
+    <PackageReleaseNotes>Broaden the portable C# profile with ranges and Span operations, fixed local collections and params, operators, patterns, tuples, nonescaping captures, references, positional readonly record structs, and additional scalar framework mappings.</PackageReleaseNotes>
     <PackageOutputPath>$(MSBuildThisFileDirectory)..\artifacts\packages\</PackageOutputPath>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
@@ -33,6 +33,9 @@
     <AdditionalFiles Include="AnalyzerReleases.Unshipped.md" />
     <None Include="..\README.md" Pack="true" PackagePath="README.md" />
     <None Include="..\docs\getting-started.md" Pack="true" PackagePath="docs\getting-started.md" />
+    <None Include="..\docs\portable-csharp.md" Pack="true" PackagePath="docs\portable-csharp.md" />
+    <None Include="..\docs\cuda-interop.md" Pack="true" PackagePath="docs\cuda-interop.md" />
+    <None Include="..\docs\tool.md" Pack="true" PackagePath="docs\tool.md" />
     <None Include="..\LICENSE.md" Pack="true" PackagePath="LICENSE.md" />
     <None Include="..\THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="THIRD-PARTY-NOTICES.md" />
     <None Include="build\Supprocom.CSharp2CUDA.targets"
