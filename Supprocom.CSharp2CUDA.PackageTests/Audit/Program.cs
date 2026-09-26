@@ -52,9 +52,9 @@ ValidateEntries(nupkg, "nupkg");
 ValidateEntries(snupkg, "snupkg");
 ValidateEntries(toolNupkg, "tool nupkg");
 ValidateEntries(toolSnupkg, "tool snupkg");
-Require(nupkg.Entries.Count == 21, "The nupkg entry count is incorrect.");
+Require(nupkg.Entries.Count == 22, "The nupkg entry count is incorrect.");
 Require(snupkg.Entries.Count == 7, "The snupkg entry count is incorrect.");
-Require(toolNupkg.Entries.Count == 127, "The tool nupkg entry count is incorrect.");
+Require(toolNupkg.Entries.Count == 128, "The tool nupkg entry count is incorrect.");
 Require(toolSnupkg.Entries.Count == 8, "The tool snupkg entry count is incorrect.");
 
 RequireEntry(nupkg, "build/Supprocom.CSharp2CUDA.targets");
@@ -105,7 +105,8 @@ Require(
     "The Roslyn dependency is incorrect.");
 
 CompareEntry(nupkg, "README.md", Path.Combine(repositoryDirectory, "README.md"));
-CompareEntry(nupkg, "LICENSE.md", Path.Combine(repositoryDirectory, "LICENSE.md"));
+CompareEntry(nupkg, "LICENSE", Path.Combine(repositoryDirectory, "LICENSE"));
+CompareEntry(nupkg, "NOTICE", Path.Combine(repositoryDirectory, "NOTICE"));
 CompareEntry(
     nupkg,
     "THIRD-PARTY-NOTICES.md",
@@ -246,7 +247,8 @@ Require(
         .Attribute("name")?.Value == "DotnetTool",
     "The tool package type is incorrect.");
 CompareEntry(toolNupkg, "README.md", Path.Combine(repositoryDirectory, "README.md"));
-CompareEntry(toolNupkg, "LICENSE.md", Path.Combine(repositoryDirectory, "LICENSE.md"));
+CompareEntry(toolNupkg, "LICENSE", Path.Combine(repositoryDirectory, "LICENSE"));
+CompareEntry(toolNupkg, "NOTICE", Path.Combine(repositoryDirectory, "NOTICE"));
 CompareEntry(
     toolNupkg,
     "THIRD-PARTY-NOTICES.md",

@@ -36,7 +36,8 @@
     <None Include="..\docs\portable-csharp.md" Pack="true" PackagePath="docs\portable-csharp.md" />
     <None Include="..\docs\cuda-interop.md" Pack="true" PackagePath="docs\cuda-interop.md" />
     <None Include="..\docs\tool.md" Pack="true" PackagePath="docs\tool.md" />
-    <None Include="..\LICENSE.md" Pack="true" PackagePath="LICENSE.md" />
+    <None Include="..\LICENSE" Pack="true" PackagePath="LICENSE" />
+    <None Include="..\NOTICE" Pack="true" PackagePath="NOTICE" />
     <None Include="..\THIRD-PARTY-NOTICES.md" Pack="true" PackagePath="THIRD-PARTY-NOTICES.md" />
     <None Include="build\Supprocom.CSharp2CUDA.targets"
           Pack="true"
