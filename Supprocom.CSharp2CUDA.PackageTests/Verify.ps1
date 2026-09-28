@@ -71,6 +71,9 @@ $nugetConfiguration = @"
     <packageSource key="nuget.org">
       <package pattern="Microsoft.*" />
       <package pattern="System.*" />
+      <package pattern="Meziantou.Analyzer" />
+      <package pattern="Roslynator.Analyzers" />
+      <package pattern="NetFabric.Hyperlinq.Analyzer" />
     </packageSource>
   </packageSourceMapping>
 </configuration>
