@@ -54,8 +54,9 @@
     <None Include="..\docs\tool.md"
           Pack="true"
           PackagePath="docs\tool.md" />
-    <None Include="..\LICENSE" Pack="true" PackagePath="LICENSE" />
-    <None Include="..\NOTICE" Pack="true" PackagePath="NOTICE" />
+    <!-- NuGet treats extensionless PackagePath values as directories. -->
+    <None Include="..\LICENSE" Pack="true" PackagePath="" />
+    <None Include="..\NOTICE" Pack="true" PackagePath="" />
     <None Include="..\THIRD-PARTY-NOTICES.md"
           Pack="true"
           PackagePath="THIRD-PARTY-NOTICES.md" />
