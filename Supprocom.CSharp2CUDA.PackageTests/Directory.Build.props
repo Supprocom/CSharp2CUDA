@@ -1,0 +1,8 @@
+<Project>
+  <!-- These projects model downstream package consumers. Keep their SDK defaults
+       instead of inheriting the repository-only analyzer package references. The
+       installed CSharp2CUDA package analyzer still runs in each applicable case. -->
+  <PropertyGroup>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+</Project>
