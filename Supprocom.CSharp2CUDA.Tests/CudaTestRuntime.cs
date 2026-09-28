@@ -353,7 +353,7 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
         bool relocatable = false)
     {
         Require(
-            nvrtcCreateProgram(out var program, source, programName, 0, null, null),
+            nvrtcCreateProgram(out var program, source, programName, 0, 0, 0),
             "nvrtcCreateProgram");
         try
         {
@@ -380,7 +380,8 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
             };
             if (relocatable)
                 options.Add("--relocatable-device-code=true");
-            var result = nvrtcCompileProgram(program, options.Count, [.. options]);
+            var result = WithUtf8StringArray(options, (pointers, count) =>
+                nvrtcCompileProgram(program, count, pointers));
             if (result != 0)
             {
                 throw new InvalidOperationException(
@@ -436,6 +437,29 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
         return Encoding.UTF8.GetString(bytes).TrimEnd('\0');
     }
 
+    internal static TResult WithUtf8StringArray<TResult>(
+        IReadOnlyList<string> values,
+        Func<nint, int, TResult> invoke)
+    {
+        var nativeStrings = new nint[values.Count];
+        try
+        {
+            for (var index = 0; index < nativeStrings.Length; index++)
+                nativeStrings[index] = Marshal.StringToCoTaskMemUTF8(values[index]);
+
+            fixed (nint* pointers = nativeStrings)
+                return invoke((nint)pointers, nativeStrings.Length);
+        }
+        finally
+        {
+            foreach (var pointer in nativeStrings)
+            {
+                if (pointer != 0)
+                    Marshal.FreeCoTaskMem(pointer);
+            }
+        }
+    }
+
     private void SetCurrent() => Require(cuCtxSetCurrent(context), "cuCtxSetCurrent");
 
     private static void Require(int result, string operation)
@@ -452,8 +476,8 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
         [MarshalAs(UnmanagedType.LPUTF8Str)] string source,
         [MarshalAs(UnmanagedType.LPUTF8Str)] string name,
         int headerCount,
-        [MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.LPUTF8Str)] string[]? headers,
-        [MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.LPUTF8Str)] string[]? includeNames);
+        nint headers,
+        nint includeNames);
 #pragma warning restore CA2101
 
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
@@ -461,7 +485,7 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
     private static extern int nvrtcCompileProgram(
         nint program,
         int optionCount,
-        [MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.LPUTF8Str)] string[] options);
+        nint options);
 
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvrtc64_120_0.dll", CallingConvention = CallingConvention.Cdecl)]
