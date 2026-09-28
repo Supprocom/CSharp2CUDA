@@ -8,7 +8,7 @@ using System.Xml.Linq;
 if (args.Length != 5)
 {
     throw new ArgumentException(
-        "Specify the package directory, repository directory, commit, branch, and version.");
+        "Specify the package directory, repository directory, commit, branch, and version.", nameof(args));
 }
 
 var packageDirectory = Path.GetFullPath(args[0]);
@@ -24,7 +24,7 @@ Require(
     "The expected repository branch is invalid.");
 Require(
     Version.TryParse(expectedVersion, out var parsedVersion) &&
-    parsedVersion.ToString(3) == expectedVersion,
+string.Equals(parsedVersion.ToString(3), expectedVersion, StringComparison.Ordinal),
     "The expected package version is invalid.");
 
 var nupkgPath = Path.Combine(
@@ -75,33 +75,39 @@ Require(
         !entry.FullName.StartsWith("buildTransitive/", StringComparison.Ordinal)),
     "The package contains a transitive build target.");
 
-var nuspecEntry = nupkg.Entries.Single(entry => entry.FullName.EndsWith(".nuspec"));
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
+var nuspecEntry = nupkg.Entries.Single(entry => entry.FullName.EndsWith(".nuspec", StringComparison.Ordinal));
+#pragma warning restore HLQ005
 var nuspec = XDocument.Parse(
     Encoding.UTF8.GetString(ReadEntry(nuspecEntry)).TrimStart('\uFEFF'));
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
 var metadata = nuspec.Root!.Elements().Single().Elements().ToDictionary(
     element => element.Name.LocalName,
-    element => element);
-Require(metadata["id"].Value == "Supprocom.CSharp2CUDA", "The package ID is incorrect.");
-Require(metadata["version"].Value == expectedVersion, "The package version is incorrect.");
+    element => element, StringComparer.Ordinal);
+#pragma warning restore HLQ005
+Require(string.Equals(metadata["id"].Value, "Supprocom.CSharp2CUDA", StringComparison.Ordinal), "The package ID is incorrect.");
+Require(string.Equals(metadata["version"].Value, expectedVersion, StringComparison.Ordinal), "The package version is incorrect.");
 Require(
-    metadata["license"].Value == "AGPL-3.0-only" &&
-    metadata["license"].Attribute("type")?.Value == "expression",
+string.Equals(metadata["license"].Value, "AGPL-3.0-only", StringComparison.Ordinal) &&
+string.Equals(metadata["license"].Attribute("type")?.Value, "expression", StringComparison.Ordinal),
     "The package license is incorrect.");
 var repository = metadata["repository"];
 Require(
-    repository.Attribute("url")?.Value == "https://github.com/Supprocom/CSharp2CUDA",
+string.Equals(repository.Attribute("url")?.Value, "https://github.com/Supprocom/CSharp2CUDA", StringComparison.Ordinal),
     "The repository URL is incorrect.");
 Require(
-    repository.Attribute("branch")?.Value == expectedBranch,
+string.Equals(repository.Attribute("branch")?.Value, expectedBranch, StringComparison.Ordinal),
     "The repository branch is incorrect.");
 Require(
-    repository.Attribute("commit")?.Value == expectedCommit,
+string.Equals(repository.Attribute("commit")?.Value, expectedCommit, StringComparison.Ordinal),
     "The repository commit is incorrect.");
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
 var dependency = metadata["dependencies"].Descendants()
-    .Single(element => element.Name.LocalName == "dependency");
+    .Single(element => string.Equals(element.Name.LocalName, "dependency", StringComparison.Ordinal));
+#pragma warning restore HLQ005
 Require(
-    dependency.Attribute("id")?.Value == "Microsoft.CodeAnalysis.CSharp" &&
-    dependency.Attribute("version")?.Value == "[5.6.0]",
+string.Equals(dependency.Attribute("id")?.Value, "Microsoft.CodeAnalysis.CSharp", StringComparison.Ordinal) &&
+string.Equals(dependency.Attribute("version")?.Value, "[5.6.0]", StringComparison.Ordinal),
     "The Roslyn dependency is incorrect.");
 
 CompareEntry(nupkg, "README.md", Path.Combine(repositoryDirectory, "README.md"));
@@ -218,34 +224,39 @@ ValidatePdb(
     "/Supprocom.CSharp2CUDA/CudaTranspiler.cs",
     expectedCommit);
 
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
 var toolNuspecEntry = toolNupkg.Entries.Single(entry =>
     entry.FullName.EndsWith(".nuspec", StringComparison.Ordinal));
+#pragma warning restore HLQ005
 var toolNuspec = XDocument.Parse(
     Encoding.UTF8.GetString(ReadEntry(toolNuspecEntry)).TrimStart('\uFEFF'));
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
 var toolMetadata = toolNuspec.Root!.Elements().Single().Elements().ToDictionary(
     element => element.Name.LocalName,
-    element => element);
+    element => element, StringComparer.Ordinal);
+#pragma warning restore HLQ005
 Require(
-    toolMetadata["id"].Value == "Supprocom.CSharp2CUDA.Tool",
+string.Equals(toolMetadata["id"].Value, "Supprocom.CSharp2CUDA.Tool", StringComparison.Ordinal),
     "The tool package ID is incorrect.");
 Require(
-    toolMetadata["version"].Value == expectedVersion,
+string.Equals(toolMetadata["version"].Value, expectedVersion, StringComparison.Ordinal),
     "The tool package version is incorrect.");
 Require(
-    toolMetadata["license"].Value == "AGPL-3.0-only" &&
-    toolMetadata["license"].Attribute("type")?.Value == "expression",
+string.Equals(toolMetadata["license"].Value, "AGPL-3.0-only", StringComparison.Ordinal) &&
+string.Equals(toolMetadata["license"].Attribute("type")?.Value, "expression", StringComparison.Ordinal),
     "The tool package license is incorrect.");
 var toolRepository = toolMetadata["repository"];
 Require(
-    toolRepository.Attribute("url")?.Value ==
-        "https://github.com/Supprocom/CSharp2CUDA" &&
-    toolRepository.Attribute("branch")?.Value == expectedBranch &&
-    toolRepository.Attribute("commit")?.Value == expectedCommit,
+string.Equals(toolRepository.Attribute("url")?.Value, "https://github.com/Supprocom/CSharp2CUDA", StringComparison.Ordinal) &&
+string.Equals(toolRepository.Attribute("branch")?.Value, expectedBranch, StringComparison.Ordinal) &&
+string.Equals(toolRepository.Attribute("commit")?.Value, expectedCommit, StringComparison.Ordinal),
     "The tool repository provenance is incorrect.");
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
 Require(
-    toolMetadata["packageTypes"].Descendants().Single()
-        .Attribute("name")?.Value == "DotnetTool",
+string.Equals(toolMetadata["packageTypes"].Descendants().Single()
+        .Attribute("name")?.Value, "DotnetTool", StringComparison.Ordinal),
     "The tool package type is incorrect.");
+#pragma warning restore HLQ005
 CompareEntry(toolNupkg, "README.md", Path.Combine(repositoryDirectory, "README.md"));
 CompareEntry(toolNupkg, "LICENSE", Path.Combine(repositoryDirectory, "LICENSE"));
 CompareEntry(toolNupkg, "NOTICE", Path.Combine(repositoryDirectory, "NOTICE"));
@@ -280,9 +291,11 @@ Console.WriteLine($"NupkgEntryCount={nupkg.Entries.Count}");
 Console.WriteLine($"SnupkgEntryCount={snupkg.Entries.Count}");
 Console.WriteLine($"ToolNupkgEntryCount={toolNupkg.Entries.Count}");
 Console.WriteLine($"ToolSnupkgEntryCount={toolSnupkg.Entries.Count}");
-Console.WriteLine("ArchiveSafety=passed");
-Console.WriteLine("PackedDocumentation=matched");
-Console.WriteLine("SourceLink=matched");
+ReportMachineResult("ArchiveSafety=passed");
+ReportMachineResult("PackedDocumentation=matched");
+ReportMachineResult("SourceLink=matched");
+
+static void ReportMachineResult(string value) => Console.WriteLine(value);
 
 static void ValidateEntries(ZipArchive archive, string name)
 {
@@ -291,9 +304,9 @@ static void ValidateEntries(ZipArchive archive, string name)
     {
         Require(names.Add(entry.FullName), $"The {name} contains a duplicate path.");
         Require(!Path.IsPathRooted(entry.FullName), $"The {name} contains a rooted path.");
-        Require(!entry.FullName.Contains('\\'), $"The {name} contains a backslash path.");
+        Require(!entry.FullName.Contains('\\', StringComparison.Ordinal), $"The {name} contains a backslash path.");
         Require(
-            !entry.FullName.Split('/').Any(segment => segment == ".."),
+            !entry.FullName.Split('/').Any(segment => string.Equals(segment, "..", StringComparison.Ordinal)),
             $"The {name} contains a parent path.");
     }
 }
@@ -313,7 +326,7 @@ static void CompareEntry(ZipArchive archive, string entryName, string sourcePath
 static void ValidatePdb(byte[] bytes, string sourceSuffix, string expectedCommit)
 {
     Require(
-        Encoding.ASCII.GetString(bytes, 0, 4) == "BSJB",
+string.Equals(Encoding.ASCII.GetString(bytes, 0, 4), "BSJB", StringComparison.Ordinal),
         "A portable PDB header is invalid.");
     using var stream = new MemoryStream(bytes, writable: false);
     using var provider = MetadataReaderProvider.FromPortablePdbStream(stream);

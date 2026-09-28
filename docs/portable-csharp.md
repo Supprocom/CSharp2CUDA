@@ -1,6 +1,6 @@
 # Portable C# profile
 
-CSharp2CUDA 0.3.1 translates a deliberately bounded, value-oriented subset of
+CSharp2CUDA 0.3.2 translates a deliberately bounded, value-oriented subset of
 regular C#. Start with an ordinary static algorithm and call it from a small
 `[CudaGlobal]` adapter. Only the adapter needs to know about thread indexes,
 pointers, and the CUDA launch boundary.

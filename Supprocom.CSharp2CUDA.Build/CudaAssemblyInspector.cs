@@ -13,7 +13,7 @@ internal static class CudaAssemblyInspector
         using var stream = File.OpenRead(assemblyPath);
         using var peReader = new PEReader(stream);
         if (!peReader.HasMetadata)
-            throw new BadImageFormatException("The managed compiler output has no metadata.");
+            throw new InvalidDataException("The managed compiler output has no metadata.");
 
         var reader = peReader.GetMetadataReader();
         foreach (var typeHandle in reader.TypeDefinitions)

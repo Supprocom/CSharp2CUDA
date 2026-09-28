@@ -7,7 +7,7 @@ namespace Supprocom.CSharp2CUDA.Tests;
 public sealed class CudaInputApiTests
 {
     [Fact]
-    public void TranspileFile_ReadsACompileCheckedCSharpFile()
+    public void TranspileFileReadsACompileCheckedCSharpFile()
     {
         Assert.Equal(6, ManualKernel.Double(3));
         var path = GetInputPath("ManualKernel.cs");
@@ -20,7 +20,7 @@ public sealed class CudaInputApiTests
     }
 
     [Fact]
-    public void TranspileFiles_CombinesSelectedCompileCheckedFiles()
+    public void TranspileFilesCombinesSelectedCompileCheckedFiles()
     {
         var paths = new[]
         {
@@ -37,7 +37,7 @@ public sealed class CudaInputApiTests
     }
 
     [Fact]
-    public void Transpile_UsesTheManuallySelectedCompilationWithoutAMarker()
+    public void TranspileUsesTheManuallySelectedCompilationWithoutAMarker()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -60,7 +60,7 @@ public sealed class CudaInputApiTests
     }
 
     [Fact]
-    public void Transpile_UsesManualSelectionInsteadOfClassMarkerSelection()
+    public void TranspileUsesManualSelectionInsteadOfClassMarkerSelection()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -84,7 +84,7 @@ public sealed class CudaInputApiTests
     }
 
     [Fact]
-    public void Transpile_RejectsAnUnsupportedSelectedTopLevelDeclaration()
+    public void TranspileRejectsAnUnsupportedSelectedTopLevelDeclaration()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -106,16 +106,18 @@ public sealed class CudaInputApiTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA005");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA005", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void PublicApi_DoesNotAcceptRawSourceText()
+    public void PublicApiDoesNotAcceptRawSourceText()
     {
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
         var rawSourceOverload = typeof(CudaTranspiler).GetMethods()
-            .Where(method => method.Name == nameof(CudaTranspiler.Transpile))
+            .Where(method => string.Equals(method.Name, nameof(CudaTranspiler.Transpile), StringComparison.Ordinal))
             .SingleOrDefault(method => method.GetParameters().FirstOrDefault()?.ParameterType ==
                 typeof(string));
+#pragma warning restore HLQ005
 
         Assert.Null(rawSourceOverload);
         Assert.Null(typeof(CudaTranspiler).Assembly.GetType(
@@ -127,7 +129,7 @@ public sealed class CudaInputApiTests
     }
 
     [Fact]
-    public void TranspileFile_RejectsANonCSharpPath()
+    public void TranspileFileRejectsANonCSharpPath()
     {
         var exception = Assert.Throws<ArgumentException>(() =>
             CudaTranspiler.TranspileFile(GetInputPath("ManualKernel.cs") + ".txt"));
@@ -136,7 +138,7 @@ public sealed class CudaInputApiTests
     }
 
     [Fact]
-    public void TranspileFile_RejectsAMissingFile()
+    public void TranspileFileRejectsAMissingFile()
     {
         var path = Path.Combine(AppContext.BaseDirectory, "FileInputs", "Missing.cs");
 
@@ -144,7 +146,7 @@ public sealed class CudaInputApiTests
     }
 
     [Fact]
-    public void TranspileFiles_RejectsDuplicatePaths()
+    public void TranspileFilesRejectsDuplicatePaths()
     {
         var path = GetInputPath("ManualKernel.cs");
 
@@ -152,7 +154,7 @@ public sealed class CudaInputApiTests
     }
 
     [Fact]
-    public void TranspileFile_ReturnsEmptySourceForACompilerError()
+    public void TranspileFileReturnsEmptySourceForACompilerError()
     {
         var path = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.cs");
         try
@@ -165,7 +167,7 @@ public sealed class CudaInputApiTests
 
             Assert.False(result.Succeeded);
             Assert.Empty(result.Source);
-            Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS0103");
+            Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS0103", StringComparison.Ordinal));
         }
         finally
         {
@@ -174,7 +176,7 @@ public sealed class CudaInputApiTests
     }
 
     [Fact]
-    public void ClassMarker_SelectsOnlyTheMarkedClassAndReturnsItsPath()
+    public void ClassMarkerSelectsOnlyTheMarkedClassAndReturnsItsPath()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -204,7 +206,7 @@ public sealed class CudaInputApiTests
     }
 
     [Fact]
-    public void ClassMarker_UsesTheDefaultPathForAnEmptyArgument()
+    public void ClassMarkerUsesTheDefaultPathForAnEmptyArgument()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -227,7 +229,7 @@ public sealed class CudaInputApiTests
     }
 
     [Fact]
-    public void ClassMarker_RejectsANullOutputPath()
+    public void ClassMarkerRejectsANullOutputPath()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -247,7 +249,7 @@ public sealed class CudaInputApiTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA021");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA021", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -258,7 +260,7 @@ public sealed class CudaInputApiTests
     [InlineData("cuda/CON.cu")]
     [InlineData("cuda/COM¹.cu")]
     [InlineData("cuda/ kernel.cu")]
-    public void ClassMarker_RejectsAnInvalidOutputPath(string path)
+    public void ClassMarkerRejectsAnInvalidOutputPath(string path)
     {
         var source = $$"""
             using Supprocom.CSharp2CUDA;
@@ -278,11 +280,11 @@ public sealed class CudaInputApiTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA021");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA021", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void ClassMarker_NormalizesPortableDirectorySeparators()
+    public void ClassMarkerNormalizesPortableDirectorySeparators()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -305,7 +307,7 @@ public sealed class CudaInputApiTests
     }
 
     [Fact]
-    public void ClassMarker_AcceptsEquivalentPortableOutputPaths()
+    public void ClassMarkerAcceptsEquivalentPortableOutputPaths()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -340,7 +342,7 @@ public sealed class CudaInputApiTests
     }
 
     [Fact]
-    public void ClassMarker_RejectsConflictingOutputPaths()
+    public void ClassMarkerRejectsConflictingOutputPaths()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -370,11 +372,11 @@ public sealed class CudaInputApiTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA022");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA022", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void ClassMarker_RequiresTheExactRoslynSymbol()
+    public void ClassMarkerRequiresTheExactRoslynSymbol()
     {
         const string source = """
             using System;
@@ -402,7 +404,7 @@ public sealed class CudaInputApiTests
     }
 
     [Fact]
-    public void ClassMarker_RejectsAMarkedRecord()
+    public void ClassMarkerRejectsAMarkedRecord()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -415,11 +417,11 @@ public sealed class CudaInputApiTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA002");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA002", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void ClassMarker_RejectsANestedMarkedClass()
+    public void ClassMarkerRejectsANestedMarkedClass()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -442,7 +444,7 @@ public sealed class CudaInputApiTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA002");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA002", StringComparison.Ordinal));
     }
 
     private static string GetInputPath(string name) =>

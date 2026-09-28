@@ -6,9 +6,11 @@ using Microsoft.CodeAnalysis.Diagnostics;
 
 namespace Supprocom.CSharp2CUDA.Compiler;
 
+#pragma warning disable RS1041 // This product targets the .NET 10 Roslyn host exclusively.
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class CudaTranspilationAnalyzer : DiagnosticAnalyzer
 {
+#pragma warning restore RS1041
     private const string PropertyPrefix = "build_property.";
     private const string EnabledProperty = PropertyPrefix + "SupprocomCSharp2CUDAEnabled";
     private const string EntireProjectProperty = PropertyPrefix + "TranspileToCUDA";
@@ -26,6 +28,7 @@ public sealed class CudaTranspilationAnalyzer : DiagnosticAnalyzer
 
     public override void Initialize(AnalysisContext context)
     {
+        ArgumentNullException.ThrowIfNull(context);
         context.EnableConcurrentExecution();
         context.ConfigureGeneratedCodeAnalysis(
             GeneratedCodeAnalysisFlags.Analyze |
@@ -33,6 +36,7 @@ public sealed class CudaTranspilationAnalyzer : DiagnosticAnalyzer
         context.RegisterCompilationAction(AnalyzeCompilation);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "The analyzer boundary must report CS2CUDA023 instead of an unhandled AD0001 compiler crash.")]
     private static void AnalyzeCompilation(CompilationAnalysisContext context)
     {
         var globalOptions = context.Options.AnalyzerConfigOptionsProvider.GlobalOptions;
@@ -106,6 +110,7 @@ public sealed class CudaTranspilationAnalyzer : DiagnosticAnalyzer
         WritePayload(payloadPath, normalizedPath, result.Source);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("MicrosoftCodeAnalysisCorrectness", "RS1035:Do not use APIs banned for analyzers", Justification = "The build-only analyzer intentionally atomically stages an MSBuild-owned payload; the design-time gate returns before this method.")]
     private static void WritePayload(string payloadPath, string relativePath, string source)
     {
         payloadPath = Path.GetFullPath(payloadPath);

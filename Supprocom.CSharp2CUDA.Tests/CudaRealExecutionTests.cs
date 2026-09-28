@@ -6,7 +6,7 @@ namespace Supprocom.CSharp2CUDA.Tests;
 public sealed class CudaRealExecutionTests
 {
     [Fact]
-    public void Transpile_ProducesCombinedPortableProfileExpansionKernel()
+    public void TranspileProducesCombinedPortableProfileExpansionKernel()
     {
         var result = CudaTestCompiler.Transpile(IntegrationSource);
 
@@ -40,14 +40,14 @@ public sealed class CudaRealExecutionTests
     }
 
     [CudaFact]
-    public void Nvrtc_CompilesEveryAcceptedAdvancedProbe()
+    public void NvrtcCompilesEveryAcceptedAdvancedProbe()
     {
         using var runtime = CreateRuntime();
         Assert.NotNull(runtime);
     }
 
     [CudaFact]
-    public void Cuda_ExecutesFixedAndLaunchSizedSharedStorage()
+    public void CudaExecutesFixedAndLaunchSizedSharedStorage()
     {
         using var runtime = CreateRuntime();
         var fixedOutput = runtime.Allocate<int>([0]);
@@ -68,7 +68,7 @@ public sealed class CudaRealExecutionTests
     }
 
     [CudaFact]
-    public void Cuda_ExecutesAtomicContentionForEveryAcceptedTypeAndOperation()
+    public void CudaExecutesAtomicContentionForEveryAcceptedTypeAndOperation()
     {
         using var runtime = CreateRuntime();
         var signed32 = runtime.Allocate<int>([0, 0, 0, 0, int.MaxValue]);
@@ -94,7 +94,7 @@ public sealed class CudaRealExecutionTests
     }
 
     [CudaFact]
-    public void Cuda_PublishesMappedCheckpointsForBothFenceScopes()
+    public void CudaPublishesMappedCheckpointsForBothFenceScopes()
     {
         using var runtime = CreateRuntime();
         using var deviceFence = runtime.AllocateMappedInt32(2);
@@ -104,14 +104,14 @@ public sealed class CudaRealExecutionTests
         Assert.Equal(42, deviceFence.Read(0));
         Assert.Equal(1, deviceFence.Read(1));
 
-        runtime.LaunchAsync("system_checkpoint", 1, 1, 0, systemFence.DevicePointer);
+        runtime.LaunchOnStream("system_checkpoint", 1, 1, 0, systemFence.DevicePointer);
         Assert.True(systemFence.WaitForValue(1, 1, TimeSpan.FromSeconds(5)));
         Assert.Equal(84, systemFence.Read(0));
         runtime.Synchronize();
     }
 
     [CudaFact]
-    public void Cuda_ExecutesPartialMaskWarpOperations()
+    public void CudaExecutesPartialMaskWarpOperations()
     {
         using var runtime = CreateRuntime();
         var output = runtime.Allocate<int>(new int[32]);
@@ -131,7 +131,7 @@ public sealed class CudaRealExecutionTests
     }
 
     [CudaFact]
-    public void Cuda_ExactDoubleOperationsMatchManagedBits()
+    public void CudaExactDoubleOperationsMatchManagedBits()
     {
         const double left = 1.0000000000000002;
         const double right = 1.0000000000000002;
@@ -173,7 +173,7 @@ public sealed class CudaRealExecutionTests
     }
 
     [CudaFact]
-    public void Cuda_ExecutesNamedMathWithoutConsumerWrappers()
+    public void CudaExecutesNamedMathWithoutConsumerWrappers()
     {
         const double value = 0.5;
         using var runtime = CreateRuntime();
@@ -202,7 +202,7 @@ public sealed class CudaRealExecutionTests
     }
 
     [CudaFact]
-    public void Cuda_ReadsDeviceConstantArrayInitializers()
+    public void CudaReadsDeviceConstantArrayInitializers()
     {
         using var runtime = CreateRuntime();
         var output = runtime.Allocate<int>(new int[3]);
@@ -218,7 +218,7 @@ public sealed class CudaRealExecutionTests
     }
 
     [CudaFact]
-    public void Cuda_ExecutesCombinedPortableProfileExpansion()
+    public void CudaExecutesCombinedPortableProfileExpansion()
     {
         using var runtime = CreateRuntime();
         var output = runtime.Allocate<int>([0]);
@@ -249,7 +249,7 @@ public sealed class CudaRealExecutionTests
     }
 
     [CudaFact]
-    public void Cuda_ExecutesWritableViewClosureCaptures()
+    public void CudaExecutesWritableViewClosureCaptures()
     {
         using var runtime = CreateRuntime();
         var values = runtime.Allocate<int>([10, 20, 30, 40]);

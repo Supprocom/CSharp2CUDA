@@ -35,7 +35,7 @@ public sealed class PortabilityCorpusTests
     ];
 
     [Fact]
-    public void OrdinaryAlgorithms_ExecuteAsManagedCode()
+    public void OrdinaryAlgorithmsExecuteAsManagedCode()
     {
         Assert.Equal(7, AbsDifference.Calculate(3, 10));
         Assert.Equal(4.0, ClampValue.Calculate(8.0, -2.0, 4.0));
@@ -69,17 +69,17 @@ public sealed class PortabilityCorpusTests
     }
 
     [Fact]
-    public void TranspileFiles_FollowsAllOrdinaryAlgorithmsFromSeparateAdapter()
+    public void TranspileFilesFollowsAllOrdinaryAlgorithmsFromSeparateAdapter()
     {
         var result = TranspileCorpus();
 
         Assert.True(result.Succeeded, FormatDiagnostics(result));
         Assert.DoesNotContain(
             result.Diagnostics,
-            static diagnostic => diagnostic.Id == "CS0436");
+            static diagnostic => string.Equals(diagnostic.Id, "CS0436", StringComparison.Ordinal));
         Assert.Equal(
-            ExpectedEntryPoints.Order().ToArray(),
-            result.EntryPoints.Select(static entry => entry.CudaName).Order().ToArray());
+            ExpectedEntryPoints.Order(StringComparer.Ordinal).ToArray(),
+            result.EntryPoints.Select(static entry => entry.CudaName).Order(StringComparer.Ordinal).ToArray());
         Assert.Contains("AbsDifference_Calculate_", result.Source, StringComparison.Ordinal);
         Assert.Contains("BinarySearchValue_Find_", result.Source, StringComparison.Ordinal);
         Assert.Contains("GenericSelect_Choose_", result.Source, StringComparison.Ordinal);
@@ -89,7 +89,7 @@ public sealed class PortabilityCorpusTests
     }
 
     [CudaFact]
-    public void Nvrtc_CompilesCompleteOrdinaryAlgorithmCorpus()
+    public void NvrtcCompilesCompleteOrdinaryAlgorithmCorpus()
     {
         var result = TranspileCorpus();
         Assert.True(result.Succeeded, FormatDiagnostics(result));
@@ -100,7 +100,7 @@ public sealed class PortabilityCorpusTests
     }
 
     [CudaFact]
-    public void Cuda_ExecutesCompleteOrdinaryAlgorithmCorpus()
+    public void CudaExecutesCompleteOrdinaryAlgorithmCorpus()
     {
         var result = TranspileCorpus();
         Assert.True(result.Succeeded, FormatDiagnostics(result));

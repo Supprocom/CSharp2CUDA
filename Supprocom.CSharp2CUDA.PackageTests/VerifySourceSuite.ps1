@@ -70,9 +70,11 @@ $originalTestRoot = Join-Path $repositoryRoot 'Supprocom.CSharp2CUDA.Tests'
 Get-ChildItem -LiteralPath $originalTestRoot -Force |
     Where-Object { $_.Name -notin @('bin', 'obj', 'TestResults') } |
     Copy-Item -Destination $testSourceRoot -Recurse -Force
-Copy-Item -LiteralPath (Join-Path $repositoryRoot 'Directory.Build.props') `
-    -Destination (Join-Path $sourceRoot 'Directory.Build.props') `
-    -Force
+foreach ($policyFile in @('Directory.Build.props', 'Directory.Build.targets',
+        'BannedSymbols.txt', '.editorconfig')) {
+    Copy-Item -LiteralPath (Join-Path $repositoryRoot $policyFile) `
+        -Destination (Join-Path $sourceRoot $policyFile) -Force
+}
 
 $escapedPackageRoot = [System.Security.SecurityElement]::Escape($packageRoot)
 $nugetConfiguration = @"
@@ -90,6 +92,9 @@ $nugetConfiguration = @"
     <packageSource key="nuget.org">
       <package pattern="Microsoft.*" />
       <package pattern="System.*" />
+      <package pattern="Meziantou.Analyzer" />
+      <package pattern="Roslynator.Analyzers" />
+      <package pattern="NetFabric.Hyperlinq.Analyzer" />
       <package pattern="xunit" />
       <package pattern="xunit.*" />
       <package pattern="Newtonsoft.Json" />

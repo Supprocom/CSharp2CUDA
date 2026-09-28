@@ -6,27 +6,6 @@ using Xunit;
 
 namespace Supprocom.CSharp2CUDA.Tests;
 
-public sealed class CudaFactAttribute : FactAttribute
-{
-    public CudaFactAttribute()
-    {
-        if (!CudaTestRuntime.IsAvailable(out var reason))
-            Skip = reason;
-    }
-}
-
-public sealed class ExactPackageCudaFactAttribute : FactAttribute
-{
-    public ExactPackageCudaFactAttribute()
-    {
-        if (!CudaTestRuntime.IsAvailable(out var reason))
-            Skip = reason;
-        else if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(
-                     "CSHARP2CUDA_EXACT_PACKAGE_CUDA")))
-            Skip = "The exact-package CUDA source is not available.";
-    }
-}
-
 internal sealed unsafe class CudaTestRuntime : IDisposable
 {
     private const int ComputeCapabilityMajorAttribute = 75;
@@ -34,7 +13,7 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
     private const uint ContextMapHost = 8;
     private const uint HostAllocatePortable = 1;
     private const uint HostAllocateDeviceMap = 2;
-    private static readonly object InitializationLock = new();
+    private static readonly Lock InitializationLock = new();
     private static bool initialized;
     private static nint nvrtcHandle;
     private static string unavailableReason = "CUDA initialization did not run.";
@@ -75,7 +54,7 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
 
     public static CudaTestRuntime CreateLinked(params string[] cudaSources)
     {
-        ArgumentOutOfRangeException.ThrowIfLessThan(cudaSources.Length, 2);
+        ArgumentOutOfRangeException.ThrowIfLessThan(cudaSources.Length, 2, nameof(cudaSources));
         EnsureInitialized();
         if (!IsAvailable(out var reason))
             throw new InvalidOperationException(reason);
@@ -175,11 +154,11 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
         uint dynamicSharedBytes,
         params ulong[] arguments)
     {
-        LaunchAsync(functionName, gridSize, blockSize, dynamicSharedBytes, arguments);
+        LaunchOnStream(functionName, gridSize, blockSize, dynamicSharedBytes, arguments);
         Synchronize();
     }
 
-    public void LaunchAsync(
+    public void LaunchOnStream(
         string functionName,
         uint gridSize,
         uint blockSize,
@@ -227,6 +206,7 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
         _ = cuCtxDestroy(context);
     }
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "Hardware discovery reports optional CUDA runtime unavailability to the test attributes; required hardware runs independently enforce zero skips.")]
     private static void EnsureInitialized()
     {
         lock (InitializationLock)
@@ -309,7 +289,7 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
     private static void AddPackageCandidates(
         string packageRoot,
         string fileName,
-        ICollection<string> candidates)
+        List<string> candidates)
     {
         if (!Directory.Exists(packageRoot))
             return;
@@ -364,7 +344,7 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
     {
         _ = assembly;
         _ = searchPath;
-        return libraryName == "nvrtc64_120_0.dll" ? nvrtcHandle : 0;
+        return string.Equals(libraryName, "nvrtc64_120_0.dll", StringComparison.Ordinal) ? nvrtcHandle : 0;
     }
 
     private static byte[] CompilePtx(
@@ -417,12 +397,12 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
         }
     }
 
-    private static byte[] LinkPtx(IReadOnlyList<byte[]> units)
+    private static byte[] LinkPtx(byte[][] units)
     {
         Require(cuLinkCreate(0, 0, 0, out var state), "cuLinkCreate");
         try
         {
-            for (var index = 0; index < units.Count; index++)
+            for (var index = 0; index < units.Length; index++)
             {
                 fixed (byte* data = units[index])
                 {
@@ -464,66 +444,88 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
             throw new InvalidOperationException($"{operation} failed with result {result}.");
     }
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvrtc64_120_0.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+#pragma warning disable CA2101 // NVRTC's UTF-8 parameters are explicitly marshaled; CA2101 does not recognize LPUTF8Str.
     private static extern int nvrtcCreateProgram(
         out nint program,
-        string source,
-        string name,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string source,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string name,
         int headerCount,
-        string[]? headers,
-        string[]? includeNames);
+        [MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.LPUTF8Str)] string[]? headers,
+        [MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.LPUTF8Str)] string[]? includeNames);
+#pragma warning restore CA2101
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvrtc64_120_0.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int nvrtcCompileProgram(
         nint program,
         int optionCount,
-        [MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.LPStr)] string[] options);
+        [MarshalAs(UnmanagedType.LPArray, ArraySubType = UnmanagedType.LPUTF8Str)] string[] options);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvrtc64_120_0.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int nvrtcGetPTXSize(nint program, out nuint size);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvrtc64_120_0.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int nvrtcGetPTX(nint program, byte[] ptx);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvrtc64_120_0.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int nvrtcGetProgramLogSize(nint program, out nuint size);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvrtc64_120_0.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int nvrtcGetProgramLog(nint program, byte[] log);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvrtc64_120_0.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int nvrtcDestroyProgram(ref nint program);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuInit(uint flags);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuDeviceGet(out int device, int ordinal);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuDeviceGetAttribute(out int value, int attribute, int device);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", EntryPoint = "cuCtxCreate_v2", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuCtxCreate(out nint context, uint flags, int device);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", EntryPoint = "cuCtxDestroy_v2", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuCtxDestroy(nint context);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuCtxSetCurrent(nint context);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuCtxSynchronize();
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuModuleLoadData(out nint module, byte[] image);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
-    private static extern int cuModuleGetFunction(out nint function, nint module, string name);
+#pragma warning disable CA2101 // CUDA names are UTF-8 and carry explicit LPUTF8Str marshaling.
+    private static extern int cuModuleGetFunction(out nint function, nint module, [MarshalAs(UnmanagedType.LPUTF8Str)] string name);
+#pragma warning restore CA2101
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuModuleUnload(nint module);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", EntryPoint = "cuLinkCreate_v2", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuLinkCreate(
         uint optionCount,
@@ -531,47 +533,60 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
         nint optionValues,
         out nint state);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", EntryPoint = "cuLinkAddData_v2", CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+#pragma warning disable CA2101 // CUDA names are UTF-8 and carry explicit LPUTF8Str marshaling.
     private static extern int cuLinkAddData(
         nint state,
         int inputType,
         nint data,
         nuint size,
-        string name,
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string name,
         uint optionCount,
         nint options,
         nint optionValues);
+#pragma warning restore CA2101
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuLinkComplete(nint state, out nint image, out nuint size);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuLinkDestroy(nint state);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", EntryPoint = "cuMemAlloc_v2", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuMemAlloc(out ulong devicePointer, nuint bytes);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", EntryPoint = "cuMemFree_v2", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuMemFree(ulong devicePointer);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", EntryPoint = "cuMemcpyHtoD_v2", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuMemcpyHtoD(ulong destination, nint source, nuint bytes);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", EntryPoint = "cuMemcpyDtoH_v2", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuMemcpyDtoH(nint destination, ulong source, nuint bytes);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuMemHostAlloc(out nint pointer, nuint bytes, uint flags);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", EntryPoint = "cuMemHostGetDevicePointer_v2", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuMemHostGetDevicePointer(
         out ulong devicePointer,
         nint hostPointer,
         uint flags);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuMemFreeHost(nint pointer);
 
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int cuLaunchKernel(
         nint function,

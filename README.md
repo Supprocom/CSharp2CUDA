@@ -56,7 +56,7 @@ from ordinary managed code.
 </PropertyGroup>
 
 <ItemGroup>
-  <PackageReference Include="Supprocom.CSharp2CUDA" Version="0.3.1" />
+  <PackageReference Include="Supprocom.CSharp2CUDA" Version="0.3.2" />
 </ItemGroup>
 ```
 
@@ -72,7 +72,7 @@ toolchain, owns device memory, and launches kernels.
 - [Getting started](docs/getting-started.md) explains project selection,
   generated files, diagnostics, and manual Roslyn APIs.
 - [Portable C# profile](docs/portable-csharp.md) lists supported C# features,
-  restrictions, traps, lifetime rules, and 0.3.1 examples.
+  restrictions, traps, lifetime rules, and examples.
 - [CUDA interop](docs/cuda-interop.md) covers intrinsics, shared and constant
   storage, ABI rules, and external CUDA linkage.
 - [Tool package](docs/tool.md) explains when to use

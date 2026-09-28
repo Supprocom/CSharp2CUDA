@@ -4,7 +4,7 @@ using Xunit;
 
 namespace Supprocom.CSharp2CUDA.Tool.Tests;
 
-[Collection(ToolCollection.Name)]
+[Collection(ToolSuite.Name)]
 public sealed class ToolApplicationTests : IDisposable
 {
     private readonly string testRoot = Path.Combine(
@@ -13,7 +13,7 @@ public sealed class ToolApplicationTests : IDisposable
         Guid.NewGuid().ToString("N"));
 
     [Fact]
-    public async Task Check_ReportsCompatibleMappingsForOrdinaryMethod()
+    public async Task CheckReportsCompatibleMappingsForOrdinaryMethod()
     {
         var project = CreateProject("""
             namespace Algorithms;
@@ -38,7 +38,7 @@ public sealed class ToolApplicationTests : IDisposable
     }
 
     [Fact]
-    public async Task Scaffold_CreatesNormalProjectWithoutChangingSource()
+    public async Task ScaffoldCreatesNormalProjectWithoutChangingSource()
     {
         var project = CreateProject("""
             namespace Algorithms;
@@ -65,10 +65,10 @@ public sealed class ToolApplicationTests : IDisposable
 
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(sourceHash, ComputeHash(sourcePath));
-        var projectText = File.ReadAllText(Path.Combine(output, "Algorithms.Cuda.csproj"));
-        var adapter = File.ReadAllText(Path.Combine(output, "CudaAdapter.cs"));
+        var projectText = (await File.ReadAllTextAsync(Path.Combine(output, "Algorithms.Cuda.csproj")).ConfigureAwait(true));
+        var adapter = (await File.ReadAllTextAsync(Path.Combine(output, "CudaAdapter.cs")).ConfigureAwait(true));
         Assert.Contains(
-            "PackageReference Include=\"Supprocom.CSharp2CUDA\" Version=\"0.3.1\"",
+            "PackageReference Include=\"Supprocom.CSharp2CUDA\" Version=\"0.3.2\"",
             projectText,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -81,7 +81,7 @@ public sealed class ToolApplicationTests : IDisposable
     }
 
     [Fact]
-    public async Task Refresh_UpdatesLinksWhenOwnedFilesAreUnchanged()
+    public async Task RefreshUpdatesLinksWhenOwnedFilesAreUnchanged()
     {
         var project = CreateProject("""
             namespace Algorithms;
@@ -94,22 +94,22 @@ public sealed class ToolApplicationTests : IDisposable
         var output = Path.Combine(testRoot, "scaffold");
         var create = await ScaffoldAsync(project, output);
         Assert.Equal(0, create.ExitCode);
-        File.WriteAllText(
+        await File.WriteAllTextAsync(
             Path.Combine(Path.GetDirectoryName(project)!, "Helper.cs"),
             "namespace Algorithms; internal static class Helper { public static int One => 1; }\n",
-            new UTF8Encoding(false));
+            new UTF8Encoding(false)).ConfigureAwait(true);
 
-        var refresh = await RunAsync("refresh", "--output", output);
+        var refresh = await RunAsync("refresh", "--output", output).ConfigureAwait(true);
 
         Assert.Equal(0, refresh.ExitCode);
         Assert.Contains(
             Path.Combine("Imported", "Helper.cs"),
-            File.ReadAllText(Path.Combine(output, "Algorithms.Cuda.csproj")),
+            (await File.ReadAllTextAsync(Path.Combine(output, "Algorithms.Cuda.csproj")).ConfigureAwait(true)),
             StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Refresh_RefusesAChangedOwnedFile()
+    public async Task RefreshRefusesAChangedOwnedFile()
     {
         var project = CreateProject("""
             namespace Algorithms;
@@ -122,23 +122,23 @@ public sealed class ToolApplicationTests : IDisposable
         var output = Path.Combine(testRoot, "scaffold");
         var create = await ScaffoldAsync(project, output);
         Assert.Equal(0, create.ExitCode);
-        File.AppendAllText(
+        await File.AppendAllTextAsync(
             Path.Combine(output, "CudaAdapter.cs"),
             "// user change\n",
-            new UTF8Encoding(false));
+            new UTF8Encoding(false)).ConfigureAwait(true);
 
-        var refresh = await RunAsync("refresh", "--output", output);
+        var refresh = await RunAsync("refresh", "--output", output).ConfigureAwait(true);
 
         Assert.Equal(2, refresh.ExitCode);
         Assert.Contains("CS2CUDA114", refresh.Error, StringComparison.Ordinal);
         Assert.Contains(
             "// user change",
-            File.ReadAllText(Path.Combine(output, "CudaAdapter.cs")),
+            (await File.ReadAllTextAsync(Path.Combine(output, "CudaAdapter.cs")).ConfigureAwait(true)),
             StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Scaffold_RefusesNonemptyOutputAndPreservesUserFile()
+    public async Task ScaffoldRefusesNonemptyOutputAndPreservesUserFile()
     {
         var project = CreateProject("""
             namespace Algorithms;
@@ -151,17 +151,17 @@ public sealed class ToolApplicationTests : IDisposable
         var output = Path.Combine(testRoot, "scaffold");
         Directory.CreateDirectory(output);
         var userFile = Path.Combine(output, "keep.txt");
-        File.WriteAllText(userFile, "keep\n", new UTF8Encoding(false));
+        await File.WriteAllTextAsync(userFile, "keep\n", new UTF8Encoding(false)).ConfigureAwait(true);
 
-        var result = await ScaffoldAsync(project, output);
+        var result = await ScaffoldAsync(project, output).ConfigureAwait(true);
 
         Assert.Equal(2, result.ExitCode);
         Assert.Contains("CS2CUDA112", result.Error, StringComparison.Ordinal);
-        Assert.Equal("keep\n", File.ReadAllText(userFile));
+        Assert.Equal("keep\n", (await File.ReadAllTextAsync(userFile).ConfigureAwait(true)));
     }
 
     [Fact]
-    public async Task Check_AcceptsArrayAlgorithmOnlyForSingleThreadMapping()
+    public async Task CheckAcceptsArrayAlgorithmOnlyForSingleThreadMapping()
     {
         var project = CreateProject("""
             namespace Algorithms;
@@ -191,7 +191,7 @@ public sealed class ToolApplicationTests : IDisposable
     }
 
     [Fact]
-    public async Task Check_UsesSourceGeneratorOutputFromAcceptedCompilation()
+    public async Task CheckUsesSourceGeneratorOutputFromAcceptedCompilation()
     {
         var project = CreateProject("""
             using System.Text.RegularExpressions;
@@ -225,7 +225,7 @@ public sealed class ToolApplicationTests : IDisposable
     }
 
     [Fact]
-    public async Task Refresh_RejectsManifestPathTraversal()
+    public async Task RefreshRejectsManifestPathTraversal()
     {
         var project = CreateProject("""
             namespace Algorithms;
@@ -239,14 +239,14 @@ public sealed class ToolApplicationTests : IDisposable
         var create = await ScaffoldAsync(project, output);
         Assert.Equal(0, create.ExitCode);
         var manifestPath = Path.Combine(output, "csharp2cuda.json");
-        var manifest = File.ReadAllText(manifestPath)
+        var manifest = (await File.ReadAllTextAsync(manifestPath).ConfigureAwait(true))
             .Replace(
                 "\"path\": \"CudaAdapter.cs\"",
                 "\"path\": \"../outside.cs\"",
                 StringComparison.Ordinal);
-        File.WriteAllText(manifestPath, manifest, new UTF8Encoding(false));
+        await File.WriteAllTextAsync(manifestPath, manifest, new UTF8Encoding(false)).ConfigureAwait(true);
 
-        var refresh = await RunAsync("refresh", "--output", output);
+        var refresh = await RunAsync("refresh", "--output", output).ConfigureAwait(true);
 
         Assert.Equal(2, refresh.ExitCode);
         Assert.Contains("CS2CUDA113", refresh.Error, StringComparison.Ordinal);
@@ -283,7 +283,7 @@ public sealed class ToolApplicationTests : IDisposable
         return projectPath;
     }
 
-    private Task<ToolRunResult> ScaffoldAsync(string project, string output) => RunAsync(
+    private static Task<ToolRunResult> ScaffoldAsync(string project, string output) => RunAsync(
         "scaffold",
         "--project",
         project,
@@ -297,21 +297,16 @@ public sealed class ToolApplicationTests : IDisposable
     private static async Task<ToolRunResult> RunAsync(params string[] arguments)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(45));
-        var output = new StringWriter();
-        var error = new StringWriter();
+        using var output = new StringWriter();
+        using var error = new StringWriter();
         var exitCode = await ToolApplication.RunAsync(
             arguments,
             output,
             error,
-            timeout.Token);
+            timeout.Token).ConfigureAwait(true);
         return new ToolRunResult(exitCode, output.ToString(), error.ToString());
     }
 
     private static string ComputeHash(string path) => Convert.ToHexString(
         SHA256.HashData(File.ReadAllBytes(path)));
 }
-
-internal sealed record ToolRunResult(
-    int ExitCode,
-    string Output,
-    string Error);

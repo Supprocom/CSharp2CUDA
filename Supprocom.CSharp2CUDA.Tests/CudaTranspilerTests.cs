@@ -21,7 +21,7 @@ public sealed class CudaTranspilerTests
     [InlineData("Statistics")]
     [InlineData("Transport")]
     [InlineData("Vector")]
-    public void Transpile_ProducesDeterministicCatalog(string catalog)
+    public void TranspileProducesDeterministicCatalog(string catalog)
     {
         var goldenDirectory = Path.Combine(AppContext.BaseDirectory, "Golden");
         var sourcePath = Path.Combine(goldenDirectory, $"{catalog}Module.cs");
@@ -36,7 +36,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_ProducesExactReferenceDeviceModule()
+    public void TranspileProducesExactReferenceDeviceModule()
     {
         (string Catalog, string EntryPoint)[] catalogs =
         [
@@ -54,7 +54,7 @@ public sealed class CudaTranspilerTests
         ];
         var goldenDirectory = Path.Combine(AppContext.BaseDirectory, "Golden");
         var modules = new string[2];
-        for (var pass = 0; pass < modules.Length; pass++)
+        foreach (ref var module in modules.AsSpan())
         {
             var builder = new StringBuilder();
             foreach (var (catalog, entryPoint) in catalogs)
@@ -70,7 +70,7 @@ public sealed class CudaTranspilerTests
                 Path.Combine(goldenDirectory, "DeviceDispatchModule.cs"));
             Assert.True(dispatch.Succeeded, FormatDiagnostics(dispatch.Diagnostics));
             builder.Append('\n').Append(dispatch.Source);
-            modules[pass] = builder.ToString();
+            module = builder.ToString();
         }
 
         Assert.Equal(modules[0], modules[1]);
@@ -80,10 +80,7 @@ public sealed class CudaTranspilerTests
             SHA256.HashData(Encoding.UTF8.GetBytes(modules[1])));
     }
 
-    [Fact]
-    public void Transpile_ProducesExactReferenceNumericHelpers()
-    {
-        const string source = """
+    private const string TranspileProducesExactReferenceNumericHelpersSource1 = """
             using System;
             using Supprocom.CSharp2CUDA;
 
@@ -141,6 +138,11 @@ public sealed class CudaTranspilerTests
             }
             """;
 
+    [Fact]
+    public void TranspileProducesExactReferenceNumericHelpers()
+    {
+        const string source = TranspileProducesExactReferenceNumericHelpersSource1;
+
         var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
@@ -157,7 +159,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_ProducesExactKernelIntrinsics()
+    public void TranspileProducesExactKernelIntrinsics()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -197,7 +199,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_RejectsManagedAllocation()
+    public void TranspileRejectsManagedAllocation()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -217,11 +219,11 @@ public sealed class CudaTranspilerTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA030");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA030", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Transpile_AcceptsMutableReferenceParameter()
+    public void TranspileAcceptsMutableReferenceParameter()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -245,7 +247,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_RejectsDynamicStackAllocation()
+    public void TranspileRejectsDynamicStackAllocation()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -266,11 +268,11 @@ public sealed class CudaTranspilerTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA005");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA005", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Transpile_RejectsUninitializedReadOnlyStackAllocation()
+    public void TranspileRejectsUninitializedReadOnlyStackAllocation()
     {
         const string source = """
             using System;
@@ -292,11 +294,11 @@ public sealed class CudaTranspilerTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA005");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA005", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Transpile_RewritesCallsToValidatedCudaName()
+    public void TranspileRewritesCallsToValidatedCudaName()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -338,7 +340,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_RewritesNamedCallAcrossTranslationUnits()
+    public void TranspileRewritesNamedCallAcrossTranslationUnits()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -371,7 +373,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_RejectsConstantCudaNameInjection()
+    public void TranspileRejectsConstantCudaNameInjection()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -404,7 +406,7 @@ public sealed class CudaTranspilerTests
         Assert.Empty(result.Source);
         Assert.Equal(
             2,
-            result.Diagnostics.Count(diagnostic => diagnostic.Id == "CS2CUDA010"));
+            result.Diagnostics.Count(diagnostic => string.Equals(diagnostic.Id, "CS2CUDA010", StringComparison.Ordinal)));
     }
 
     [Theory]
@@ -412,7 +414,7 @@ public sealed class CudaTranspilerTests
     [InlineData("9invalid")]
     [InlineData("_invalid")]
     [InlineData("invalid.name")]
-    public void Transpile_RejectsInvalidCudaName(string name)
+    public void TranspileRejectsInvalidCudaName(string name)
     {
         var source = $$"""
             using Supprocom.CSharp2CUDA;
@@ -432,12 +434,12 @@ public sealed class CudaTranspilerTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA010");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA010", StringComparison.Ordinal));
     }
 
     [Theory]
     [InlineData("int", "int value", "return checked(value + 1);")]
-    public void Transpile_RejectsUnsafeExpression(
+    public void TranspileRejectsUnsafeExpression(
         string returnType,
         string parameters,
         string statements)
@@ -446,11 +448,11 @@ public sealed class CudaTranspilerTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA005");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA005", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Transpile_AcceptsIntegralRemainder()
+    public void TranspileAcceptsIntegralRemainder()
     {
         var result = TranspileDeviceMethod(
             "int",
@@ -462,7 +464,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_UsesExactSystemCharWidth()
+    public void TranspileUsesExactSystemCharWidth()
     {
         var result = TranspileDeviceMethod(
             "char",
@@ -481,7 +483,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_RejectsInvalidIdentifiersAcrossDeclarations()
+    public void TranspileRejectsInvalidIdentifiersAcrossDeclarations()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -509,11 +511,11 @@ public sealed class CudaTranspilerTests
         Assert.Empty(result.Source);
         Assert.Equal(
             4,
-            result.Diagnostics.Count(diagnostic => diagnostic.Id == "CS2CUDA010"));
+            result.Diagnostics.Count(diagnostic => string.Equals(diagnostic.Id, "CS2CUDA010", StringComparison.Ordinal)));
     }
 
     [Fact]
-    public void Transpile_NormalizesEscapedSafeIdentifiers()
+    public void TranspileNormalizesEscapedSafeIdentifiers()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -539,7 +541,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_RejectsUnmappedRuntimeOverload()
+    public void TranspileRejectsUnmappedRuntimeOverload()
     {
         const string source = """
             using System;
@@ -560,11 +562,11 @@ public sealed class CudaTranspilerTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA026");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA026", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Transpile_PreservesPublicConversionIntrinsics()
+    public void TranspilePreservesPublicConversionIntrinsics()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -595,7 +597,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_DeclaresFunctionsBeforeDefinitions()
+    public void TranspileDeclaresFunctionsBeforeDefinitions()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -632,7 +634,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_RejectsDuplicateEmittedSignature()
+    public void TranspileRejectsDuplicateEmittedSignature()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -658,11 +660,11 @@ public sealed class CudaTranspilerTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA011");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA011", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Transpile_MaterializesOptionalParameter()
+    public void TranspileMaterializesOptionalParameter()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -691,7 +693,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_NormalizesNumericSeparators()
+    public void TranspileNormalizesNumericSeparators()
     {
         var result = TranspileDeviceMethod("int", "", "return 1_000;");
 
@@ -701,7 +703,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_LowersEnumToItsFixedUnderlyingType()
+    public void TranspileLowersEnumToItsFixedUnderlyingType()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -732,7 +734,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_RejectsStaticStructField()
+    public void TranspileRejectsStaticStructField()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -757,11 +759,11 @@ public sealed class CudaTranspilerTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA005");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA005", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Transpile_LowersSignedOverflowAndMaskedShift()
+    public void TranspileLowersSignedOverflowAndMaskedShift()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -792,7 +794,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_SequencesImpureCallArguments()
+    public void TranspileSequencesImpureCallArguments()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -831,7 +833,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_AcceptsExactUnqualifiedRuntimeConstant()
+    public void TranspileAcceptsExactUnqualifiedRuntimeConstant()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -855,7 +857,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_RejectsPointerSubtraction()
+    public void TranspileRejectsPointerSubtraction()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -875,14 +877,14 @@ public sealed class CudaTranspilerTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA005");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA005", StringComparison.Ordinal));
     }
 
     [Theory]
     [InlineData("threadIdx")]
     [InlineData("CSHARP2CUDA_GLOBAL_TIMER_0_1")]
     [InlineData("CSHARP2CUDA_VOLATILE_MAPPED_MEMORY_0_1")]
-    public void Transpile_RejectsReservedCudaRuntimeIdentifier(string identifier)
+    public void TranspileRejectsReservedCudaRuntimeIdentifier(string identifier)
     {
         var result = TranspileDeviceMethod(
             "int",
@@ -891,11 +893,11 @@ public sealed class CudaTranspilerTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA010");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA010", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Transpile_PromotesMixedConditionalNumericTypes()
+    public void TranspilePromotesMixedConditionalNumericTypes()
     {
         var result = TranspileDeviceMethod(
             "long",
@@ -907,7 +909,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_SequencesSimpleAssignmentTargetBeforeValue()
+    public void TranspileSequencesSimpleAssignmentTargetBeforeValue()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -943,7 +945,7 @@ public sealed class CudaTranspilerTests
     [Theory]
     [InlineData("uint")]
     [InlineData("double")]
-    public void Transpile_SequencesNativeBinaryOperands(string type)
+    public void TranspileSequencesNativeBinaryOperands(string type)
     {
         var source = $$"""
             using Supprocom.CSharp2CUDA;
@@ -972,13 +974,13 @@ public sealed class CudaTranspilerTests
             result.Source,
             "csharp2cuda_temp_0 = Next(state);",
             "csharp2cuda_temp_1 = Next(state);",
-            type == "double"
-                ? "__dsub_rn(csharp2cuda_temp_0, csharp2cuda_temp_1)"
+string.Equals(type, "double"
+, StringComparison.Ordinal) ? "__dsub_rn(csharp2cuda_temp_0, csharp2cuda_temp_1)"
                 : "csharp2cuda_temp_0) - (csharp2cuda_temp_1");
     }
 
     [Fact]
-    public void Transpile_SequencesCompoundAssignmentTargetAndRead()
+    public void TranspileSequencesCompoundAssignmentTargetAndRead()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -1013,7 +1015,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_SequencesExternalFunctionOperands()
+    public void TranspileSequencesExternalFunctionOperands()
     {
         const string source = """
             using System;
@@ -1044,7 +1046,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_AcceptsExplicitlyPureExternalFunctionOperands()
+    public void TranspileAcceptsExplicitlyPureExternalFunctionOperands()
     {
         const string source = """
             using System;
@@ -1074,7 +1076,7 @@ public sealed class CudaTranspilerTests
     }
 
     [Fact]
-    public void Transpile_RejectsPureExternalWritablePointer()
+    public void TranspileRejectsPureExternalWritablePointer()
     {
         const string source = """
             using System;
@@ -1098,11 +1100,11 @@ public sealed class CudaTranspilerTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA005");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA005", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Transpile_RejectsCheckedOverflowCompilation()
+    public void TranspileRejectsCheckedOverflowCompilation()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -1133,19 +1135,21 @@ public sealed class CudaTranspilerTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA012");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA012", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public void Transpile_AppliesEveryIntegralComparisonPromotion()
-    {
-        var source = new StringBuilder("""
+    private const string TranspileAppliesEveryIntegralComparisonPromotionSource1 = """
             using Supprocom.CSharp2CUDA;
 
             [TranspileToCUDA]
             internal static class ComparisonModule
             {
-            """);
+            """;
+
+    [Fact]
+    public void TranspileAppliesEveryIntegralComparisonPromotion()
+    {
+        var source = new StringBuilder(TranspileAppliesEveryIntegralComparisonPromotionSource1);
         var expectedDefinitions = new List<string>();
         var methodIndex = 0;
 
@@ -1169,7 +1173,7 @@ public sealed class CudaTranspilerTests
                             return {{expected}};
                         }
                         """);
-                    source.AppendLine($$"""
+                    source.AppendLine(System.Globalization.CultureInfo.InvariantCulture, $$"""
 
                             [CudaDevice]
                             private static bool {{methodName}}({{left.CSharpName}} left, {{right.CSharpName}} right)
@@ -1197,10 +1201,33 @@ public sealed class CudaTranspilerTests
         Assert.Contains("((unsigned long long)", result.Source, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void Transpile_PreservesExactMathMinMaxBits()
-    {
-        const string source = """
+    private const string TranspilePreservesExactMathMinMaxBitsSource3 = """
+            static __device__ __forceinline__ double csharp2cuda_f64_minimum(double left, double right)
+            {
+                if (left != right)
+                {
+                    if (!isnan(left))
+                        return left < right ? left : right;
+                    return left;
+                }
+                return signbit(left) ? left : right;
+            }
+            """;
+
+    private const string TranspilePreservesExactMathMinMaxBitsSource2 = """
+            static __device__ __forceinline__ double csharp2cuda_f64_maximum(double left, double right)
+            {
+                if (left != right)
+                {
+                    if (!isnan(left))
+                        return right < left ? left : right;
+                    return left;
+                }
+                return signbit(right) ? left : right;
+            }
+            """;
+
+    private const string TranspilePreservesExactMathMinMaxBitsSource1 = """
             using System;
             using Supprocom.CSharp2CUDA;
 
@@ -1220,30 +1247,13 @@ public sealed class CudaTranspilerTests
                 }
             }
             """;
-        const string maximumHelper = """
-            static __device__ __forceinline__ double csharp2cuda_f64_maximum(double left, double right)
-            {
-                if (left != right)
-                {
-                    if (!isnan(left))
-                        return right < left ? left : right;
-                    return left;
-                }
-                return signbit(right) ? left : right;
-            }
-            """;
-        const string minimumHelper = """
-            static __device__ __forceinline__ double csharp2cuda_f64_minimum(double left, double right)
-            {
-                if (left != right)
-                {
-                    if (!isnan(left))
-                        return left < right ? left : right;
-                    return left;
-                }
-                return signbit(left) ? left : right;
-            }
-            """;
+
+    [Fact]
+    public void TranspilePreservesExactMathMinMaxBits()
+    {
+        const string source = TranspilePreservesExactMathMinMaxBitsSource1;
+        const string maximumHelper = TranspilePreservesExactMathMinMaxBitsSource2;
+        const string minimumHelper = TranspilePreservesExactMathMinMaxBitsSource3;
 
         var result = CudaTestCompiler.Transpile(source);
 
@@ -1323,8 +1333,8 @@ public sealed class CudaTranspilerTests
             globalDeclaration,
             deviceDeclaration,
             StringComparison.Ordinal);
-        deviceSource = entryPoint == "mathblocks_scalar"
-            ? deviceSource.Replace("blockIdx.x != 0 || ", string.Empty, StringComparison.Ordinal)
+        deviceSource = string.Equals(entryPoint, "mathblocks_scalar"
+, StringComparison.Ordinal) ? deviceSource.Replace("blockIdx.x != 0 || ", string.Empty, StringComparison.Ordinal)
             : deviceSource.Replace("blockIdx.x != 0", "false", StringComparison.Ordinal);
         builder.Append(deviceSource).Append('\n');
     }
@@ -1350,7 +1360,7 @@ public sealed class CudaTranspilerTests
         return CudaTestCompiler.Transpile(source);
     }
 
-    private static IReadOnlyCollection<MetadataReference> GetCompilationReferences()
+    private static Dictionary<string, MetadataReference>.ValueCollection GetCompilationReferences()
     {
         var references = new Dictionary<string, MetadataReference>(
             StringComparer.OrdinalIgnoreCase);
@@ -1380,27 +1390,27 @@ public sealed class CudaTranspilerTests
 
     private static IntegralType? GetIntegralPromotion(IntegralType left, IntegralType right)
     {
-        if (left.CSharpName == "ulong" || right.CSharpName == "ulong")
+        if (string.Equals(left.CSharpName, "ulong", StringComparison.Ordinal) || string.Equals(right.CSharpName, "ulong", StringComparison.Ordinal))
         {
-            var other = left.CSharpName == "ulong" ? right : left;
+            var other = string.Equals(left.CSharpName, "ulong", StringComparison.Ordinal) ? right : left;
             return other.CSharpName is "sbyte" or "short" or "int" or "long"
                 ? null
-                : IntegralTypes.Single(type => type.CSharpName == "ulong");
+                : IntegralTypes.Single(type => string.Equals(type.CSharpName, "ulong", StringComparison.Ordinal));
         }
 
-        if (left.CSharpName == "long" || right.CSharpName == "long")
-            return IntegralTypes.Single(type => type.CSharpName == "long");
+        if (string.Equals(left.CSharpName, "long", StringComparison.Ordinal) || string.Equals(right.CSharpName, "long", StringComparison.Ordinal))
+            return IntegralTypes.Single(type => string.Equals(type.CSharpName, "long", StringComparison.Ordinal));
 
-        if (left.CSharpName == "uint" || right.CSharpName == "uint")
+        if (string.Equals(left.CSharpName, "uint", StringComparison.Ordinal) || string.Equals(right.CSharpName, "uint", StringComparison.Ordinal))
         {
-            var other = left.CSharpName == "uint" ? right : left;
+            var other = string.Equals(left.CSharpName, "uint", StringComparison.Ordinal) ? right : left;
             var promotedName = other.CSharpName is "sbyte" or "short" or "int"
                 ? "long"
                 : "uint";
-            return IntegralTypes.Single(type => type.CSharpName == promotedName);
+            return IntegralTypes.Single(type => string.Equals(type.CSharpName, promotedName, StringComparison.Ordinal));
         }
 
-        return IntegralTypes.Single(type => type.CSharpName == "int");
+        return IntegralTypes.Single(type => string.Equals(type.CSharpName, "int", StringComparison.Ordinal));
     }
 
     private static string FormatPromotedOperand(

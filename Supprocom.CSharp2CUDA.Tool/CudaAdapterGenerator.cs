@@ -267,8 +267,3 @@ internal static class CudaAdapterGenerator
                 .Select(line => prefix + line));
     }
 }
-
-internal sealed record CudaAdapterSource(
-    string Source,
-    string KernelName,
-    string CudaOutputPath);

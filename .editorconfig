@@ -11,3 +11,22 @@ indent_style = space
 indent_size = 4
 dotnet_sort_system_directives_first = true
 csharp_new_line_before_open_brace = all
+
+# Prefer the SDK diagnostic when another analyzer reports the same check.
+dotnet_diagnostic.MA0001.severity = none
+dotnet_diagnostic.MA0011.severity = none
+dotnet_diagnostic.MA0074.severity = none
+
+# Correctness and reliability rules that are suggestions by default.
+dotnet_diagnostic.MA0040.severity = warning
+dotnet_diagnostic.MA0050.severity = warning
+dotnet_diagnostic.MA0079.severity = warning
+dotnet_diagnostic.VSTHRD200.severity = warning
+
+# The emission graph and operation lowerer encode multi-stage compiler operations.
+# Keep a finite limit for these two files while allowing each semantic unit to stay together.
+[**/CudaEmissionPlan.cs]
+MA0051.maximum_lines_per_method = 120
+
+[**/CudaOperationLowerer.cs]
+MA0051.maximum_lines_per_method = 120

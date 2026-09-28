@@ -143,12 +143,15 @@ public static unsafe class Cuda
     public static CudaInt32 AtomicExchange(ref CudaInt32 location, int value) =>
         throw ManagedExecutionException();
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Naming", "CA1720:Identifier contains type name", Justification = "Cuda.Int is a published CUDA intrinsic spelling used by source translation.")]
     public static int Int(bool value) => value ? 1 : 0;
 
     public static bool Bool(int value) => value != 0;
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Naming", "CA1720:Identifier contains type name", Justification = "Cuda.Unsigned is a published CUDA intrinsic spelling used by source translation.")]
     public static ulong Unsigned(long value) => unchecked((ulong)value);
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Naming", "CA1720:Identifier contains type name", Justification = "The pointer parameter name is part of the published named-argument API and must remain source-compatible.")]
     public static T* ReadOnly<T>(T* pointer) where T : unmanaged => pointer;
 
     public static T[] Array<T>(T* address, int length) where T : unmanaged =>
@@ -190,45 +193,4 @@ public static unsafe class Cuda
 
     private static InvalidOperationException ManagedExecutionException() =>
         new("CUDA intrinsics are available only during C# to CUDA transpilation.");
-}
-
-public readonly struct CudaInt32 : IEquatable<CudaInt32>
-{
-    private readonly int value;
-
-    private CudaInt32(int value)
-    {
-        this.value = value;
-    }
-
-    public static implicit operator CudaInt32(int value) => new(value);
-
-    public static implicit operator int(CudaInt32 value) => value.value;
-
-    public static implicit operator CudaInt32(bool value) => new(value ? 1 : 0);
-
-    public static implicit operator bool(CudaInt32 value) => value.value != 0;
-
-    public static bool operator ==(CudaInt32 left, CudaInt32 right) =>
-        left.value == right.value;
-
-    public static bool operator !=(CudaInt32 left, CudaInt32 right) =>
-        left.value != right.value;
-
-    public bool Equals(CudaInt32 other) => value == other.value;
-
-    public override bool Equals(object? instance) =>
-        instance is CudaInt32 other && Equals(other);
-
-    public override int GetHashCode() => value;
-}
-
-public readonly struct CudaDimension
-{
-    public int X => throw ManagedExecutionException();
-    public int Y => throw ManagedExecutionException();
-    public int Z => throw ManagedExecutionException();
-
-    private static InvalidOperationException ManagedExecutionException() =>
-        new("CUDA dimensions are available only during C# to CUDA transpilation.");
 }

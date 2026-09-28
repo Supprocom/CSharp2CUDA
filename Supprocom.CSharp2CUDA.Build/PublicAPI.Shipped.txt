@@ -1,0 +1,21 @@
+#nullable enable
+Supprocom.CSharp2CUDA.Build.CudaOutputTask
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.CudaOutputTask() -> void
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.GeneratedFile.get -> string!
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.IntermediatePayloadPath.get -> string!
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.IntermediatePayloadPath.set -> void
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.ManagedAssemblyPath.get -> string!
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.ManagedAssemblyPath.set -> void
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.ManagedOutputFiles.get -> Microsoft.Build.Framework.ITaskItem![]!
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.ManagedOutputFiles.set -> void
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.ManifestPath.get -> string!
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.ManifestPath.set -> void
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.OutputDirectory.get -> string!
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.OutputDirectory.set -> void
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.Publish.get -> bool
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.Publish.set -> void
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.TranspileEntireProject.get -> bool
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.TranspileEntireProject.set -> void
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.ValidateAttributedPayload.get -> bool
+Supprocom.CSharp2CUDA.Build.CudaOutputTask.ValidateAttributedPayload.set -> void
+override Supprocom.CSharp2CUDA.Build.CudaOutputTask.Execute() -> bool

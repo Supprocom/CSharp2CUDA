@@ -12,37 +12,20 @@ namespace Supprocom.CSharp2CUDA.Tool;
 
 internal static class CudaProjectLoader
 {
-    private static readonly object RegistrationLock = new();
+    private static readonly Lock RegistrationLock = new();
 
     public static async Task<CudaProjectContext> LoadAsync(
         string projectPath,
         CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
-        projectPath = Path.GetFullPath(projectPath);
-        if (!File.Exists(projectPath))
-        {
-            throw new ToolException(
-                "CS2CUDA101",
-                $"Project '{projectPath}' does not exist.");
-        }
-        if (!string.Equals(
-                Path.GetExtension(projectPath),
-                ".csproj",
-                StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ToolException(
-                "CS2CUDA101",
-                $"Project '{projectPath}' is not a C# project.");
-        }
-
+        projectPath = ValidateProjectPath(projectPath);
         await EnsureRestoreAsync(projectPath, cancellationToken).ConfigureAwait(false);
         RegisterMSBuild();
         var model = CudaProjectModel.Load(projectPath);
         ValidateProject(model);
 
         var failures = new List<string>();
-        var workspace = MSBuildWorkspace.Create(new Dictionary<string, string>
+        var workspace = MSBuildWorkspace.Create(new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["Configuration"] = "Release"
         });
@@ -63,7 +46,7 @@ internal static class CudaProjectLoader
                     "CS2CUDA102",
                     $"Roslyn could not load the complete project: {failures[0]}");
             }
-            if (project.Language != LanguageNames.CSharp ||
+            if (!string.Equals(project.Language, LanguageNames.CSharp, StringComparison.Ordinal) ||
                 await project.GetCompilationAsync(cancellationToken).ConfigureAwait(false) is not
                     CSharpCompilation compilation)
             {
@@ -89,6 +72,29 @@ internal static class CudaProjectLoader
             workspace.Dispose();
             throw;
         }
+    }
+
+    private static string ValidateProjectPath(string projectPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
+        projectPath = Path.GetFullPath(projectPath);
+        if (!File.Exists(projectPath))
+        {
+            throw new ToolException(
+                "CS2CUDA101",
+                $"Project '{projectPath}' does not exist.");
+        }
+        if (!string.Equals(
+                Path.GetExtension(projectPath),
+                ".csproj",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ToolException(
+                "CS2CUDA101",
+                $"Project '{projectPath}' is not a C# project.");
+        }
+
+        return projectPath;
     }
 
     private static void RegisterMSBuild()
@@ -228,161 +234,3 @@ internal static class CudaProjectLoader
         }
     }
 }
-
-internal sealed class CudaProjectContext(
-    MSBuildWorkspace workspace,
-    Microsoft.CodeAnalysis.Project project,
-    CSharpCompilation compilation,
-    CudaProjectModel model) : IDisposable
-{
-    public Microsoft.CodeAnalysis.Project Project { get; } = project;
-    public CSharpCompilation Compilation { get; } = compilation;
-    public CudaProjectModel Model { get; } = model;
-
-    public void Dispose() => workspace.Dispose();
-}
-
-internal sealed record CudaProjectModel(
-    string ProjectPath,
-    string ProjectDirectory,
-    string ProjectName,
-    bool IsSdkStyle,
-    string TargetFramework,
-    string TargetFrameworks,
-    string OutputType,
-    string Nullable,
-    string ImplicitUsings,
-    string LangVersion,
-    string DefineConstants,
-    string CheckForOverflowUnderflow,
-    string Optimize,
-    ImmutableArray<string> SourceFiles,
-    ImmutableArray<CudaProjectItem> PackageReferences,
-    ImmutableArray<CudaProjectItem> ProjectReferences,
-    ImmutableArray<CudaProjectItem> AdditionalFiles,
-    ImmutableArray<CudaProjectItem> AnalyzerFiles)
-{
-    public static CudaProjectModel Load(string projectPath)
-    {
-        var projectDirectory = Path.GetDirectoryName(projectPath)!;
-        var document = XDocument.Load(projectPath, LoadOptions.None);
-        var root = document.Root;
-        var isSdkStyle = root?.Attribute("Sdk") is not null ||
-            root?.Elements().Any(static element => element.Name.LocalName == "Sdk") == true;
-
-        var globalProperties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["Configuration"] = "Release"
-        };
-        var collection = new ProjectCollection(globalProperties);
-        try
-        {
-            var project = collection.LoadProject(projectPath);
-            var intermediateRoot = GetFullDirectory(
-                projectDirectory,
-                FirstNonempty(
-                    project.GetPropertyValue("BaseIntermediateOutputPath"),
-                    "obj"));
-            var sourceFiles = project.GetItems("Compile")
-                .Where(static item => !GetBooleanMetadata(item, "AutoGen") &&
-                    !GetBooleanMetadata(item, "DesignTime") &&
-                    !GetBooleanMetadata(item, "Generated"))
-                .Select(item => GetItemFullPath(item, projectDirectory))
-                .Where(path => path is not null &&
-                    File.Exists(path) &&
-                    !IsBelow(path, intermediateRoot))
-                .Select(static path => path!)
-                .Distinct(PathComparer)
-                .OrderBy(static path => path, PathComparer)
-                .ToImmutableArray();
-
-            return new CudaProjectModel(
-                projectPath,
-                projectDirectory,
-                Path.GetFileNameWithoutExtension(projectPath),
-                isSdkStyle,
-                project.GetPropertyValue("TargetFramework"),
-                project.GetPropertyValue("TargetFrameworks"),
-                project.GetPropertyValue("OutputType"),
-                project.GetPropertyValue("Nullable"),
-                project.GetPropertyValue("ImplicitUsings"),
-                project.GetPropertyValue("LangVersion"),
-                project.GetPropertyValue("DefineConstants"),
-                project.GetPropertyValue("CheckForOverflowUnderflow"),
-                project.GetPropertyValue("Optimize"),
-                sourceFiles,
-                GetItems(project, "PackageReference", projectDirectory),
-                GetItems(project, "ProjectReference", projectDirectory),
-                GetItems(project, "AdditionalFiles", projectDirectory),
-                GetItems(
-                    project,
-                    "Analyzer",
-                    projectDirectory,
-                    item => string.Equals(
-                        item.Xml.ContainingProject.FullPath,
-                        projectPath,
-                        StringComparison.OrdinalIgnoreCase)));
-        }
-        finally
-        {
-            collection.UnloadAllProjects();
-            collection.Dispose();
-        }
-    }
-
-    private static ImmutableArray<CudaProjectItem> GetItems(
-        Microsoft.Build.Evaluation.Project project,
-        string itemType,
-        string projectDirectory,
-        Func<ProjectItem, bool>? predicate = null) => project.GetItems(itemType)
-        .Where(item => predicate?.Invoke(item) ?? true)
-        .Select(item => new CudaProjectItem(
-            item.EvaluatedInclude,
-            GetItemFullPath(item, projectDirectory),
-            item.Metadata
-                .Where(static metadata => !string.IsNullOrWhiteSpace(metadata.EvaluatedValue))
-                .ToImmutableDictionary(
-                    static metadata => metadata.Name,
-                    static metadata => metadata.EvaluatedValue,
-                    StringComparer.OrdinalIgnoreCase)))
-        .OrderBy(static item => item.Include, StringComparer.OrdinalIgnoreCase)
-        .ToImmutableArray();
-
-    private static string? GetItemFullPath(ProjectItem item, string projectDirectory)
-    {
-        var fullPath = item.GetMetadataValue("FullPath");
-        if (!string.IsNullOrWhiteSpace(fullPath))
-            return Path.GetFullPath(fullPath);
-        if (string.IsNullOrWhiteSpace(item.EvaluatedInclude))
-            return null;
-        return Path.GetFullPath(Path.Combine(projectDirectory, item.EvaluatedInclude));
-    }
-
-    private static bool GetBooleanMetadata(ProjectItem item, string name) =>
-        bool.TryParse(item.GetMetadataValue(name), out var value) && value;
-
-    private static string GetFullDirectory(string projectDirectory, string path) =>
-        Path.GetFullPath(Path.IsPathFullyQualified(path)
-            ? path
-            : Path.Combine(projectDirectory, path));
-
-    private static bool IsBelow(string path, string root)
-    {
-        var relative = Path.GetRelativePath(root, path);
-        return relative != ".." &&
-            !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
-            !Path.IsPathFullyQualified(relative);
-    }
-
-    private static string FirstNonempty(string value, string fallback) =>
-        string.IsNullOrWhiteSpace(value) ? fallback : value;
-
-    private static StringComparer PathComparer => OperatingSystem.IsWindows()
-        ? StringComparer.OrdinalIgnoreCase
-        : StringComparer.Ordinal;
-}
-
-internal sealed record CudaProjectItem(
-    string Include,
-    string? FullPath,
-    ImmutableDictionary<string, string> Metadata);

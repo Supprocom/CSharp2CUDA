@@ -1,9 +1,11 @@
+using System.Runtime.InteropServices;
 using Microsoft.CodeAnalysis;
 
 namespace Supprocom.CSharp2CUDA.Tool;
 
 internal static class ToolApplication
 {
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "The CLI boundary renders unexpected failures and returns a nonzero exit code instead of crashing the host.")]
     public static async Task<int> RunAsync(
         IReadOnlyList<string> arguments,
         TextWriter output,
@@ -64,15 +66,11 @@ internal static class ToolApplication
             command.ProjectPath!,
             cancellationToken).ConfigureAwait(false);
         var method = CudaMethodSelector.Select(project.Compilation, command.Method!);
-        var rows = new List<CudaCompatibilityRow>();
-        foreach (var mapping in new[]
-                 {
-                     CudaAdapterMapping.Elementwise,
-                     CudaAdapterMapping.SingleThread
-                 })
+        var rows = new[]
         {
-            rows.Add(CheckMapping(project, method, mapping));
-        }
+            CheckMapping(project, method, CudaAdapterMapping.Elementwise),
+            CheckMapping(project, method, CudaAdapterMapping.SingleThread)
+        };
 
         await output.WriteLineAsync($"Project: {project.Model.ProjectPath}").ConfigureAwait(false);
         await output.WriteLineAsync($"Method: {method.CanonicalName}").ConfigureAwait(false);
@@ -117,7 +115,9 @@ internal static class ToolApplication
                     "Not supported",
                     GetFirstError(result));
             }
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
             var entryPoint = result.EntryPoints.Single();
+#pragma warning restore HLQ005
             return new CudaCompatibilityRow(
                 mapping,
                 true,
@@ -235,9 +235,3 @@ internal static class ToolApplication
         return string.IsNullOrWhiteSpace(result) ? "CudaScaffold" : result;
     }
 }
-
-internal sealed record CudaCompatibilityRow(
-    CudaAdapterMapping Mapping,
-    bool Supported,
-    string Status,
-    string Detail);

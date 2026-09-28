@@ -6,27 +6,31 @@ namespace Supprocom.CSharp2CUDA.Tests;
 public sealed class CudaLogTests
 {
     [Fact]
-    public void Cuda_LogHasOneExactPublicContract()
+    public void CudaLogHasOneExactPublicContract()
     {
         var methods = typeof(Cuda).GetMethods()
-            .Where(method => method.Name == nameof(Cuda.Log))
+            .Where(method => string.Equals(method.Name, nameof(Cuda.Log), StringComparison.Ordinal))
             .ToArray();
 
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
         var method = Assert.Single(methods);
+#pragma warning restore HLQ005
         Assert.True(method.IsStatic);
         Assert.Equal(typeof(double), method.ReturnType);
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
         Assert.Equal(typeof(double), Assert.Single(method.GetParameters()).ParameterType);
+#pragma warning restore HLQ005
     }
 
     [Theory]
     [MemberData(nameof(RequiredLogInputs))]
-    public void ManagedLog_MatchesMathLog(double value)
+    public void ManagedLogMatchesMathLog(double value)
     {
         AssertPortableResult(Math.Log(value), Cuda.Log(value));
     }
 
     [Fact]
-    public void Transpile_EmitsDirectLogForExactCudaSymbol()
+    public void TranspileEmitsDirectLogForExactCudaSymbol()
     {
         var result = CudaTestCompiler.Transpile(GeneratedProbeSource);
 
@@ -38,7 +42,7 @@ public sealed class CudaLogTests
     }
 
     [Fact]
-    public void Transpile_InfersSourceLookalikeWithoutMappingItToCudaLog()
+    public void TranspileInfersSourceLookalikeWithoutMappingItToCudaLog()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -71,24 +75,24 @@ public sealed class CudaLogTests
 
     [Theory]
     [MemberData(nameof(InvalidLogSources))]
-    public void Transpile_RejectsInvalidLogUse(string source, string diagnosticId)
+    public void TranspileRejectsInvalidLogUse(string source, string diagnosticId)
     {
         var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == diagnosticId);
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, diagnosticId, StringComparison.Ordinal));
     }
 
     [CudaFact]
-    public void Nvrtc_CompilesGeneratedLogAndWeeklyFormulaModule()
+    public void NvrtcCompilesGeneratedLogAndWeeklyFormulaModule()
     {
         using var runtime = CreateRuntime();
         Assert.NotNull(runtime);
     }
 
     [CudaFact]
-    public void Cuda_LogMatchesDirectHandwrittenOracle()
+    public void CudaLogMatchesDirectHandwrittenOracle()
     {
         using var runtime = CreateRuntime();
         var output = runtime.Allocate<double>(new double[2]);
@@ -122,7 +126,7 @@ public sealed class CudaLogTests
     }
 
     [CudaFact]
-    public void Cuda_WeeklyProfitFormulaMatchesDirectHandwrittenOracleBits()
+    public void CudaWeeklyProfitFormulaMatchesDirectHandwrittenOracleBits()
     {
         using var runtime = CreateRuntime();
         var output = runtime.Allocate<double>(new double[2]);

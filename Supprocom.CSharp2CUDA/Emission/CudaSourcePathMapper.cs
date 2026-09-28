@@ -81,7 +81,3 @@ internal sealed class CudaSourcePathMapper(string? sourceRoot)
         return result.ToString();
     }
 }
-
-internal sealed record CudaMappedLocation(
-    string SourcePath,
-    int SourceLine);

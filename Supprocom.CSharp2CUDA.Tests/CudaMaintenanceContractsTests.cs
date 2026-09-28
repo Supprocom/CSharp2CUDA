@@ -6,7 +6,7 @@ namespace Supprocom.CSharp2CUDA.Tests;
 public sealed class CudaMaintenanceContractsTests
 {
     [Fact]
-    public void Transpile_EmitsVolatileMappedMemoryAndGlobalTimer()
+    public void TranspileEmitsVolatileMappedMemoryAndGlobalTimer()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -61,10 +61,7 @@ public sealed class CudaMaintenanceContractsTests
         Assert.DoesNotContain("atomicAdd", result.Source, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void Transpile_EmitsPrimitiveAndStructureInlineArrays()
-    {
-        const string source = """
+    private const string TranspileEmitsPrimitiveAndStructureInlineArraysSource1 = """
             using Supprocom.CSharp2CUDA;
 
             [TranspileToCUDA]
@@ -112,6 +109,11 @@ public sealed class CudaMaintenanceContractsTests
             }
             """;
 
+    [Fact]
+    public void TranspileEmitsPrimitiveAndStructureInlineArrays()
+    {
+        const string source = TranspileEmitsPrimitiveAndStructureInlineArraysSource1;
+
         var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
@@ -138,7 +140,7 @@ public sealed class CudaMaintenanceContractsTests
     [InlineData("[CudaInlineArray(3)] public void* values;")]
     [InlineData("[CudaInlineArray(3)] public int** values;")]
     [InlineData("[CudaInlineArray(3)] public decimal* values;")]
-    public void Transpile_RejectsInvalidInlineArrays(string field)
+    public void TranspileRejectsInvalidInlineArrays(string field)
     {
         var source = $$"""
             using Supprocom.CSharp2CUDA;
@@ -164,7 +166,7 @@ public sealed class CudaMaintenanceContractsTests
     }
 
     [Fact]
-    public void Transpile_RejectsAnExternalStructureInlineArray()
+    public void TranspileRejectsAnExternalStructureInlineArray()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -195,10 +197,7 @@ public sealed class CudaMaintenanceContractsTests
         AssertOnlyInlineArrayDiagnostic(result);
     }
 
-    [Fact]
-    public void Transpile_AcceptsSupportedInlineArrayElementTypes()
-    {
-        const string source = """
+    private const string TranspileAcceptsSupportedInlineArrayElementTypesSource1 = """
             using Supprocom.CSharp2CUDA;
 
             [TranspileToCUDA]
@@ -233,6 +232,11 @@ public sealed class CudaMaintenanceContractsTests
             }
             """;
 
+    [Fact]
+    public void TranspileAcceptsSupportedInlineArrayElementTypes()
+    {
+        const string source = TranspileAcceptsSupportedInlineArrayElementTypesSource1;
+
         var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
@@ -257,7 +261,7 @@ public sealed class CudaMaintenanceContractsTests
     }
 
     [Fact]
-    public void Transpile_EmitsExternalDevicePrototypeWithoutBody()
+    public void TranspileEmitsExternalDevicePrototypeWithoutBody()
     {
         const string source = """
             using System;
@@ -322,12 +326,14 @@ public sealed class CudaMaintenanceContractsTests
     }
 
     [Fact]
-    public void PublicApi_DoesNotRestoreRawSourceOrTranslationUnitContracts()
+    public void PublicApiDoesNotRestoreRawSourceOrTranslationUnitContracts()
     {
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
         var rawSourceOverload = typeof(CudaTranspiler).GetMethods()
-            .Where(method => method.Name == nameof(CudaTranspiler.Transpile))
+            .Where(method => string.Equals(method.Name, nameof(CudaTranspiler.Transpile), StringComparison.Ordinal))
             .SingleOrDefault(method => method.GetParameters().FirstOrDefault()?.ParameterType ==
                 typeof(string));
+#pragma warning restore HLQ005
 
         Assert.Null(rawSourceOverload);
         Assert.Null(typeof(CudaTranspiler).Assembly.GetType(
@@ -342,8 +348,10 @@ public sealed class CudaMaintenanceContractsTests
     {
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
         var diagnostic = Assert.Single(result.Diagnostics.Where(static diagnostic =>
             diagnostic.Severity == DiagnosticSeverity.Error));
+#pragma warning restore HLQ005
         Assert.Equal("CS2CUDA024", diagnostic.Id);
     }
 }

@@ -6,7 +6,7 @@ namespace Supprocom.CSharp2CUDA.Tests;
 public sealed class CudaAdvancedContractsTests
 {
     [Fact]
-    public void Assembly_UsesSupprocomIdentity()
+    public void AssemblyUsesSupprocomIdentity()
     {
         var assembly = typeof(Cuda).Assembly;
 
@@ -16,10 +16,7 @@ public sealed class CudaAdvancedContractsTests
             type.FullName));
     }
 
-    [Fact]
-    public void Transpile_EmitsAdvancedCudaContracts()
-    {
-        const string source = """
+    private const string TranspileEmitsAdvancedCudaContractsSource1 = """
             using Supprocom.CSharp2CUDA;
 
             [TranspileToCUDA]
@@ -89,6 +86,11 @@ public sealed class CudaAdvancedContractsTests
             }
             """;
 
+    [Fact]
+    public void TranspileEmitsAdvancedCudaContracts()
+    {
+        const string source = TranspileEmitsAdvancedCudaContractsSource1;
+
         var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
@@ -126,7 +128,7 @@ public sealed class CudaAdvancedContractsTests
 
     [Theory]
     [MemberData(nameof(InvalidSources))]
-    public void Transpile_RejectsInvalidAdvancedContract(string statements, string diagnosticId)
+    public void TranspileRejectsInvalidAdvancedContract(string statements, string diagnosticId)
     {
         var source = $$"""
             using Supprocom.CSharp2CUDA;
@@ -145,12 +147,12 @@ public sealed class CudaAdvancedContractsTests
         var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == diagnosticId);
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, diagnosticId, StringComparison.Ordinal));
     }
 
     [Theory]
     [MemberData(nameof(InvalidConstantSources))]
-    public void Transpile_RejectsInvalidConstantArray(string declaration, string diagnosticId)
+    public void TranspileRejectsInvalidConstantArray(string declaration, string diagnosticId)
     {
         var source = $$"""
             using Supprocom.CSharp2CUDA;
@@ -170,12 +172,12 @@ public sealed class CudaAdvancedContractsTests
         var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == diagnosticId);
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, diagnosticId, StringComparison.Ordinal));
     }
 
     [Theory]
     [MemberData(nameof(ConstantMutationSources))]
-    public void Transpile_RejectsConstantArrayMutation(string statement)
+    public void TranspileRejectsConstantArrayMutation(string statement)
     {
         var source = $$"""
             using Supprocom.CSharp2CUDA;
@@ -200,13 +202,15 @@ public sealed class CudaAdvancedContractsTests
             .ToArray();
 
         Assert.False(result.Succeeded);
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
         Assert.Single(errors);
+#pragma warning restore HLQ005
         Assert.Equal("CS2CUDA020", errors[0].Id);
         Assert.Empty(result.Source);
     }
 
     [Fact]
-    public void Transpile_RejectsSharedStorageInDeviceFunction()
+    public void TranspileRejectsSharedStorageInDeviceFunction()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -226,11 +230,11 @@ public sealed class CudaAdvancedContractsTests
         var result = CudaTestCompiler.Transpile(source);
 
         Assert.False(result.Succeeded);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA013");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA013", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void ManagedExactAndNamedMathContracts_KeepCSharpSemantics()
+    public void ManagedExactAndNamedMathContractsKeepCSharpSemantics()
     {
         Assert.Equal(
             BitConverter.DoubleToUInt64Bits(0.1 + 0.2),
@@ -252,7 +256,7 @@ public sealed class CudaAdvancedContractsTests
     }
 
     [Fact]
-    public void ManagedGpuOnlyContracts_RejectExecution()
+    public void ManagedGpuOnlyContractsRejectExecution()
     {
         Assert.Throws<InvalidOperationException>(Cuda.ThreadFence);
         Assert.Throws<InvalidOperationException>(Cuda.ThreadFenceSystem);

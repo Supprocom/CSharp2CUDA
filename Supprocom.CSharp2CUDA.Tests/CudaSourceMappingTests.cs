@@ -6,7 +6,7 @@ namespace Supprocom.CSharp2CUDA.Tests;
 public sealed class CudaSourceMappingTests
 {
     [Fact]
-    public void Transpile_ReportsEntryPointsAndNormalizedSourceMappings()
+    public void TranspileReportsEntryPointsAndNormalizedSourceMappings()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -32,7 +32,9 @@ public sealed class CudaSourceMappingTests
             sourcePath);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result));
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
         var entryPoint = Assert.Single(result.EntryPoints);
+#pragma warning restore HLQ005
         Assert.Contains("KernelModule.Run", entryPoint.ManagedName, StringComparison.Ordinal);
         Assert.Equal("run", entryPoint.CudaName);
         Assert.NotEmpty(result.SourceMap);
@@ -40,10 +42,12 @@ public sealed class CudaSourceMappingTests
             Assert.Equal("Algorithms/Kernel.cs", entry.SourcePath));
         Assert.Contains("\"Algorithms/Kernel.cs\"", result.Source, StringComparison.Ordinal);
 
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
         var sourceLine = source.Split('\n')
             .Select((line, index) => (line, index))
             .Single(item => item.line.Contains("output[0]", StringComparison.Ordinal))
             .index + 1;
+#pragma warning restore HLQ005
         var generatedLines = result.Source.Replace("\r\n", "\n", StringComparison.Ordinal)
             .Split('\n');
         Assert.Contains(result.SourceMap, entry =>
@@ -54,7 +58,7 @@ public sealed class CudaSourceMappingTests
     }
 
     [Fact]
-    public void Transpile_PreservesSourceMapWhenLineDirectivesAreDisabled()
+    public void TranspilePreservesSourceMapWhenLineDirectivesAreDisabled()
     {
         var result = CudaTestCompiler.Transpile(
             MinimalKernel,
@@ -63,11 +67,13 @@ public sealed class CudaSourceMappingTests
         Assert.True(result.Succeeded, FormatDiagnostics(result));
         Assert.DoesNotContain("#line", result.Source, StringComparison.Ordinal);
         Assert.NotEmpty(result.SourceMap);
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
         Assert.Single(result.EntryPoints);
+#pragma warning restore HLQ005
     }
 
     [Fact]
-    public void Transpile_SourceMapDoesNotDependOnNewLineStyle()
+    public void TranspileSourceMapDoesNotDependOnNewLineStyle()
     {
         var lineFeed = CudaTestCompiler.Transpile(
             MinimalKernel,
@@ -83,7 +89,7 @@ public sealed class CudaSourceMappingTests
     }
 
     [Fact]
-    public void Transpile_FailureReturnsNoEntryPointsOrSourceMap()
+    public void TranspileFailureReturnsNoEntryPointsOrSourceMap()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -105,7 +111,7 @@ public sealed class CudaSourceMappingTests
     }
 
     [Fact]
-    public void Transpile_RejectsRelativeSourceRoot()
+    public void TranspileRejectsRelativeSourceRoot()
     {
         var compilation = CudaTestCompiler.CreateCompilation(MinimalKernel);
 
@@ -117,7 +123,7 @@ public sealed class CudaSourceMappingTests
     }
 
     [Fact]
-    public void Transpile_OutputDoesNotDependOnSyntaxTreeOrder()
+    public void TranspileOutputDoesNotDependOnSyntaxTreeOrder()
     {
         const string firstSource = """
             using Supprocom.CSharp2CUDA;

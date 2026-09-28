@@ -41,6 +41,19 @@ internal sealed class CudaSymbolCatalog
         AddPackageAttribute(compilation, CudaEmissionPlan.GlobalAttributeName);
         AddPackageAttribute(compilation, CudaEmissionPlan.ReadOnlyAttributeName);
 
+        RegisterSystemMathAbsThroughSystemMathFusedMultiplyAdd(compilation);
+        RegisterDoubleMathExtended(compilation);
+        RegisterDoubleMathRemaining(compilation);
+        RegisterSystemMathTanhThroughSystemMathFTruncate(compilation);
+        RegisterSystemMathAbsThroughSystemMathSign(compilation);
+        RegisterSystemMathMinThroughSystemBitConverterInt64BitsToDouble(compilation);
+        RegisterSystemBitConverterSingleToInt32BitsThroughSystemMathFTau(compilation);
+        RegisterSystemDoublenameThroughSystemSinglename(compilation);
+        RegistertypeNameMinValueThroughtypeNameMaxValue(compilation);
+    }
+
+    private void RegisterSystemMathAbsThroughSystemMathFusedMultiplyAdd(CSharpCompilation compilation)
+    {
         AddRuntime(compilation, "System.Math", "Abs", "fabs", SpecialType.System_Double);
         AddRuntime(compilation, "System.Math", "Acos", "acos", SpecialType.System_Double);
         AddRuntime(compilation, "System.Math", "Acosh", "acosh", SpecialType.System_Double);
@@ -67,6 +80,10 @@ internal sealed class CudaSymbolCatalog
             SpecialType.System_Double,
             SpecialType.System_Double,
             SpecialType.System_Double);
+    }
+
+    private void RegisterDoubleMathExtended(CSharpCompilation compilation)
+    {
         AddRuntime(
             compilation,
             "System.Math",
@@ -102,6 +119,10 @@ internal sealed class CudaSymbolCatalog
             "csharp2cuda_f64_maximum",
             SpecialType.System_Double,
             SpecialType.System_Double);
+    }
+
+    private void RegisterDoubleMathRemaining(CSharpCompilation compilation)
+    {
         AddRuntime(
             compilation,
             "System.Math",
@@ -130,8 +151,11 @@ internal sealed class CudaSymbolCatalog
         AddRuntime(compilation, "System.Math", "Sinh", "sinh", SpecialType.System_Double);
         AddRuntime(compilation, "System.Math", "Sqrt", "sqrt", SpecialType.System_Double);
         AddRuntime(compilation, "System.Math", "Tan", "tan", SpecialType.System_Double);
-        AddRuntime(compilation, "System.Math", "Tanh", "tanh", SpecialType.System_Double);
+    }
 
+    private void RegisterSystemMathTanhThroughSystemMathFTruncate(CSharpCompilation compilation)
+    {
+        AddRuntime(compilation, "System.Math", "Tanh", "tanh", SpecialType.System_Double);
         AddRuntime(compilation, "System.MathF", "Abs", "fabsf", SpecialType.System_Single);
         AddRuntime(compilation, "System.MathF", "Acos", "acosf", SpecialType.System_Single);
         AddRuntime(compilation, "System.MathF", "Acosh", "acoshf", SpecialType.System_Single);
@@ -166,7 +190,10 @@ internal sealed class CudaSymbolCatalog
         AddRuntime(compilation, "System.MathF", "Tan", "tanf", SpecialType.System_Single);
         AddRuntime(compilation, "System.MathF", "Tanh", "tanhf", SpecialType.System_Single);
         AddRuntime(compilation, "System.MathF", "Truncate", "truncf", SpecialType.System_Single);
+    }
 
+    private void RegisterSystemMathAbsThroughSystemMathSign(CSharpCompilation compilation)
+    {
         foreach (var type in new[]
         {
             SpecialType.System_SByte,
@@ -178,6 +205,10 @@ internal sealed class CudaSymbolCatalog
             AddRuntime(compilation, "System.Math", "Abs", "csharp2cuda_integral_abs", type);
             AddRuntime(compilation, "System.Math", "Sign", "csharp2cuda_integral_sign", type);
         }
+    }
+
+    private void RegisterSystemMathMinThroughSystemBitConverterInt64BitsToDouble(CSharpCompilation compilation)
+    {
         foreach (var type in new[]
         {
             SpecialType.System_SByte,
@@ -201,7 +232,6 @@ internal sealed class CudaSymbolCatalog
                 type,
                 type);
         }
-
         AddRuntime(compilation, "System.Double", "IsFinite", "isfinite", SpecialType.System_Double);
         AddRuntime(
             compilation,
@@ -225,6 +255,10 @@ internal sealed class CudaSymbolCatalog
             "Int64BitsToDouble",
             "__longlong_as_double",
             SpecialType.System_Int64);
+    }
+
+    private void RegisterSystemBitConverterSingleToInt32BitsThroughSystemMathFTau(CSharpCompilation compilation)
+    {
         AddRuntime(
             compilation,
             "System.BitConverter",
@@ -237,7 +271,6 @@ internal sealed class CudaSymbolCatalog
             "Int32BitsToSingle",
             "__int_as_float",
             SpecialType.System_Int32);
-
         AddRuntime(compilation, "System.Numerics.BitOperations", "LeadingZeroCount", "__clz", SpecialType.System_UInt32);
         AddRuntime(compilation, "System.Numerics.BitOperations", "LeadingZeroCount", "__clzll", SpecialType.System_UInt64);
         AddRuntime(compilation, "System.Numerics.BitOperations", "PopCount", "__popc", SpecialType.System_UInt32);
@@ -256,13 +289,16 @@ internal sealed class CudaSymbolCatalog
         AddRuntime(compilation, "System.Numerics.BitOperations", "IsPow2", "csharp2cuda_is_pow2", SpecialType.System_UInt64);
         AddRuntime(compilation, "System.Numerics.BitOperations", "RoundUpToPowerOf2", "csharp2cuda_u32_round_up_to_power_of_two", SpecialType.System_UInt32);
         AddRuntime(compilation, "System.Numerics.BitOperations", "RoundUpToPowerOf2", "csharp2cuda_u64_round_up_to_power_of_two", SpecialType.System_UInt64);
-
         AddRuntimeField(compilation, "System.Math", "E");
         AddRuntimeField(compilation, "System.Math", "PI");
         AddRuntimeField(compilation, "System.Math", "Tau");
         AddRuntimeField(compilation, "System.MathF", "E");
         AddRuntimeField(compilation, "System.MathF", "PI");
         AddRuntimeField(compilation, "System.MathF", "Tau");
+    }
+
+    private void RegisterSystemDoublenameThroughSystemSinglename(CSharpCompilation compilation)
+    {
         foreach (var name in new[]
         {
             "Epsilon", "MaxValue", "MinValue", "NaN", "NegativeInfinity",
@@ -272,6 +308,10 @@ internal sealed class CudaSymbolCatalog
             AddRuntimeField(compilation, "System.Double", name);
             AddRuntimeField(compilation, "System.Single", name);
         }
+    }
+
+    private void RegistertypeNameMinValueThroughtypeNameMaxValue(CSharpCompilation compilation)
+    {
         foreach (var typeName in new[]
         {
             "System.SByte", "System.Byte", "System.Int16", "System.UInt16",
@@ -345,9 +385,9 @@ internal sealed class CudaSymbolCatalog
     public bool IsAttributeType(ITypeSymbol? type, string metadataName) =>
         packageAttributes.TryGetValue(metadataName, out var attributeType)
             ? IsType(type, attributeType)
-            : metadataName == "System.Runtime.InteropServices.StructLayoutAttribute"
-                ? IsType(type, StructLayoutAttributeType)
-                : metadataName == "System.Runtime.InteropServices.FieldOffsetAttribute" &&
+            : string.Equals(metadataName, "System.Runtime.InteropServices.StructLayoutAttribute"
+, StringComparison.Ordinal) ? IsType(type, StructLayoutAttributeType)
+                : string.Equals(metadataName, "System.Runtime.InteropServices.FieldOffsetAttribute", StringComparison.Ordinal) &&
                     IsType(type, FieldOffsetAttributeType);
 
     public AttributeData? GetStructLayoutAttribute(INamedTypeSymbol type) =>
@@ -381,14 +421,18 @@ internal sealed class CudaSymbolCatalog
         string fieldName,
         string? emittedCode = null)
     {
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
         var field = compilation.GetTypeByMetadataName(metadataType)?
             .GetMembers(fieldName)
             .OfType<IFieldSymbol>()
             .SingleOrDefault(static candidate => candidate.IsStatic);
+#pragma warning restore HLQ005
         if (field is not null && (field.HasConstantValue || emittedCode is not null))
             runtimeFields[field.OriginalDefinition] = emittedCode;
     }
 
+    // A duplicate runtime overload is a catalog error; taking the first hides it.
+#pragma warning disable HLQ005
     private static IMethodSymbol? ResolveMethod(
         INamedTypeSymbol? type,
         string name,
@@ -400,14 +444,14 @@ internal sealed class CudaSymbolCatalog
             method.Parameters.Length == parameterTypes.Length &&
             method.Parameters.Select(static parameter => parameter.Type.SpecialType)
                 .SequenceEqual(parameterTypes));
+#pragma warning restore HLQ005
 
     private static INamedTypeSymbol? ResolvePackageType(
         CSharpCompilation compilation,
         string metadataName)
     {
         var packageAssembly = compilation.SourceModule.ReferencedAssemblySymbols
-            .FirstOrDefault(static assembly =>
-                assembly.Identity.Name == PackageAssemblyName);
+            .FirstOrDefault(static assembly => string.Equals(assembly.Identity.Name, PackageAssemblyName, StringComparison.Ordinal));
         return packageAssembly?.GetTypeByMetadataName(metadataName);
     }
 

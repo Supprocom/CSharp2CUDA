@@ -1,0 +1,4 @@
+# Security policy: never disable certificate validation or use obsolete cryptography.
+T:System.Security.Cryptography.MD5; Use SHA-256 for package, source, and evidence integrity.
+T:System.Security.Cryptography.SHA1; Use SHA-256 for package, source, and evidence integrity.
+M:System.Net.ServicePointManager.set_ServerCertificateValidationCallback(System.Net.Security.RemoteCertificateValidationCallback); Preserve platform TLS certificate validation.

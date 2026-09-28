@@ -65,7 +65,7 @@ internal static class CudaMethodSelector
         var canonical = Normalize(candidate.CanonicalName);
         if (string.Equals(canonical, request, StringComparison.Ordinal))
             return true;
-        if (!request.Contains('('))
+        if (!request.Contains('(', StringComparison.Ordinal))
         {
             return canonical.EndsWith('.' + request, StringComparison.Ordinal) ||
                 string.Equals(candidate.Symbol.Name, request, StringComparison.Ordinal);
@@ -115,7 +115,3 @@ internal static class CudaMethodSelector
             .Where(static character => !char.IsWhiteSpace(character))
             .ToArray());
 }
-
-internal sealed record CudaMethodSelection(
-    IMethodSymbol Symbol,
-    string CanonicalName);

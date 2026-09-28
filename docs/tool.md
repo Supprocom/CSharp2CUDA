@@ -12,7 +12,7 @@ can create a separate, compile-checked CUDA adapter project.
 ## Install
 
 ```text
-dotnet tool install --global Supprocom.CSharp2CUDA.Tool --version 0.3.1
+dotnet tool install --global Supprocom.CSharp2CUDA.Tool --version 0.3.2
 csharp2cuda --help
 ```
 
@@ -42,7 +42,7 @@ csharp2cuda scaffold \
 
 The output directory must be empty. The tool creates a normal C# project, a
 generated `CudaAdapter.cs`, and `csharp2cuda.json`. It links the source files
-needed to compile the selected method and references the matching 0.3.1 core
+needed to compile the selected method and references the matching 0.3.2 core
 package. It does not modify the source project.
 
 The generated adapter project can be built normally:

@@ -39,82 +39,12 @@ internal sealed class CudaCppBodyEmitter(
                     EmitStatement(item);
                 break;
             case CudaVariableDeclarationStatementIr declaration:
-                WriteIndent();
-                if (declaration.IsConst)
-                    output.Append("const ");
-                output.Append(declaration.TypeName)
-                    .Append(' ')
-                    .Append(declaration.Name);
-                if (declaration.Initializer is not null)
-                    output.Append(" = ").Append(declaration.Initializer.Code);
-                WriteLine(";");
+
+                EmitVariableDeclaration(declaration);
                 break;
             case CudaFixedArrayDeclarationStatementIr array:
-                WriteIndent();
-                if (array.IsConst)
-                    output.Append("const ");
-                output.Append(array.ElementTypeName)
-                    .Append(' ')
-                    .Append(array.Name)
-                    .Append('[')
-                    .Append(array.Length.ToString(CultureInfo.InvariantCulture))
-                    .Append(']');
-                if (!array.Initializers.IsEmpty)
-                {
-                    output.Append(" = { ");
-                    for (var index = 0; index < array.Initializers.Length; index++)
-                    {
-                        if (index > 0)
-                            output.Append(", ");
-                        output.Append(array.Initializers[index].Code);
-                    }
-                    output.Append(" }");
-                }
-                else if (array.ZeroInitialize)
-                {
-                    output.Append(" = {}");
-                }
-                WriteLine(";");
-                if (array.BindingName is not null)
-                {
-                    WriteIndent();
-                    switch (array.BindingKind)
-                    {
-                        case CudaFixedArrayBindingKind.Pointer:
-                            output.Append(array.ElementTypeName)
-                                .Append("* ")
-                                .Append(array.BindingName)
-                                .Append(" = ")
-                                .Append(array.Name);
-                            break;
-                        case CudaFixedArrayBindingKind.WritableView:
-                            output.Append("csharp2cuda_array_view<")
-                                .Append(array.ElementTypeName)
-                                .Append("> ")
-                                .Append(array.BindingName)
-                                .Append('(')
-                                .Append(array.Name)
-                                .Append(", ")
-                                .Append(array.Length.ToString(CultureInfo.InvariantCulture))
-                                .Append(", false)");
-                            break;
-                        case CudaFixedArrayBindingKind.ReadOnlyView:
-                            output.Append("csharp2cuda_readonly_array_view<")
-                                .Append(array.ElementTypeName)
-                                .Append("> ")
-                                .Append(array.BindingName)
-                                .Append('(')
-                                .Append(array.Name)
-                                .Append(", ")
-                                .Append(array.Length.ToString(CultureInfo.InvariantCulture))
-                                .Append(", false)");
-                            break;
-                        default:
-                            throw new InvalidOperationException(
-                                $"Unknown fixed-array binding '{array.BindingKind}'.");
-                    }
-                    WriteLine(";");
-                }
+
+                EmitFixedArray(array);
                 break;
             case CudaStorageDeclarationStatementIr storage:
                 EmitStorage(storage);
@@ -143,6 +73,20 @@ internal sealed class CudaCppBodyEmitter(
             case CudaReturnStatementIr returned:
                 EmitReturn(returned);
                 break;
+            case CudaBreakStatementIr or CudaGotoStatementIr or CudaLabelStatementIr or
+                CudaContinueStatementIr or CudaEmptyStatementIr or CudaTrapStatementIr:
+                EmitControlTransfer(statement);
+                break;
+            default:
+                throw new InvalidOperationException(
+                    $"Unknown CUDA statement IR '{statement.GetType().Name}'.");
+        }
+    }
+
+    private void EmitControlTransfer(CudaStatementIr statement)
+    {
+        switch (statement)
+        {
             case CudaBreakStatementIr:
                 WriteIndentedLine("break;");
                 break;
@@ -162,10 +106,105 @@ internal sealed class CudaCppBodyEmitter(
                 WriteIndentedLine("asm volatile(\"trap;\");");
                 break;
             default:
-                throw new InvalidOperationException(
-                    $"Unknown CUDA statement IR '{statement.GetType().Name}'.");
+                throw new InvalidOperationException($"Invalid CUDA control IR '{statement.GetType().Name}'.");
         }
     }
+    private void EmitVariableDeclaration(CudaVariableDeclarationStatementIr declaration)
+    {
+        WriteIndent();
+
+        if (declaration.IsConst)
+            output.Append("const ");
+
+        output.Append(declaration.TypeName)
+            .Append(' ')
+            .Append(declaration.Name);
+
+        if (declaration.Initializer is not null)
+            output.Append(" = ").Append(declaration.Initializer.Code);
+
+        WriteLine(";");
+
+    }
+
+    private void EmitArrayBinding(CudaFixedArrayDeclarationStatementIr array)
+    {
+        WriteIndent();
+        switch (array.BindingKind)
+        {
+            case CudaFixedArrayBindingKind.Pointer:
+                output.Append(array.ElementTypeName)
+                    .Append("* ")
+                    .Append(array.BindingName)
+                    .Append(" = ")
+                    .Append(array.Name);
+                break;
+            case CudaFixedArrayBindingKind.WritableView:
+                output.Append("csharp2cuda_array_view<")
+                    .Append(array.ElementTypeName)
+                    .Append("> ")
+                    .Append(array.BindingName)
+                    .Append('(')
+                    .Append(array.Name)
+                    .Append(", ")
+                    .Append(array.Length.ToString(CultureInfo.InvariantCulture))
+                    .Append(", false)");
+                break;
+            case CudaFixedArrayBindingKind.ReadOnlyView:
+                output.Append("csharp2cuda_readonly_array_view<")
+                    .Append(array.ElementTypeName)
+                    .Append("> ")
+                    .Append(array.BindingName)
+                    .Append('(')
+                    .Append(array.Name)
+                    .Append(", ")
+                    .Append(array.Length.ToString(CultureInfo.InvariantCulture))
+                    .Append(", false)");
+                break;
+            default:
+                throw new InvalidOperationException(
+                    $"Unknown fixed-array binding '{array.BindingKind}'.");
+        }
+        WriteLine(";");
+    }
+
+    private void EmitFixedArray(CudaFixedArrayDeclarationStatementIr array)
+    {
+        WriteIndent();
+
+        if (array.IsConst)
+            output.Append("const ");
+
+        output.Append(array.ElementTypeName)
+            .Append(' ')
+            .Append(array.Name)
+            .Append('[')
+            .Append(array.Length.ToString(CultureInfo.InvariantCulture))
+            .Append(']');
+
+        if (!array.Initializers.IsEmpty)
+        {
+            output.Append(" = { ");
+            for (var index = 0; index < array.Initializers.Length; index++)
+            {
+                if (index > 0)
+                    output.Append(", ");
+                output.Append(array.Initializers[index].Code);
+            }
+            output.Append(" }");
+        }
+        else if (array.ZeroInitialize)
+        {
+            output.Append(" = {}");
+        }
+
+        WriteLine(";");
+
+        if (array.BindingName is not null)
+            EmitArrayBinding(array);
+
+    }
+
 
     private void EmitBlock(CudaBlockStatementIr block)
     {
@@ -427,7 +466,3 @@ internal sealed class CudaCppBodyEmitter(
         public bool Used { get; set; }
     }
 }
-
-internal sealed record CudaBodyEmission(
-    string Source,
-    ImmutableArray<CudaSourceMapEntry> SourceMap);

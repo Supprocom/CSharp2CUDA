@@ -1,0 +1,191 @@
+#nullable enable
+Supprocom.CSharp2CUDA.Cuda
+Supprocom.CSharp2CUDA.CudaConstantAttribute
+Supprocom.CSharp2CUDA.CudaConstantAttribute.CudaConstantAttribute() -> void
+Supprocom.CSharp2CUDA.CudaDeviceAttribute
+Supprocom.CSharp2CUDA.CudaDeviceAttribute.CudaDeviceAttribute() -> void
+Supprocom.CSharp2CUDA.CudaDeviceAttribute.Name.get -> string?
+Supprocom.CSharp2CUDA.CudaDeviceAttribute.Name.set -> void
+Supprocom.CSharp2CUDA.CudaDimension
+Supprocom.CSharp2CUDA.CudaDimension.CudaDimension() -> void
+Supprocom.CSharp2CUDA.CudaDimension.X.get -> int
+Supprocom.CSharp2CUDA.CudaDimension.Y.get -> int
+Supprocom.CSharp2CUDA.CudaDimension.Z.get -> int
+Supprocom.CSharp2CUDA.CudaEntryPoint
+Supprocom.CSharp2CUDA.CudaEntryPoint.<Clone>$() -> Supprocom.CSharp2CUDA.CudaEntryPoint!
+Supprocom.CSharp2CUDA.CudaEntryPoint.CudaEntryPoint(string! ManagedName, string! CudaName) -> void
+Supprocom.CSharp2CUDA.CudaEntryPoint.CudaName.get -> string!
+Supprocom.CSharp2CUDA.CudaEntryPoint.CudaName.init -> void
+Supprocom.CSharp2CUDA.CudaEntryPoint.Deconstruct(out string! ManagedName, out string! CudaName) -> void
+Supprocom.CSharp2CUDA.CudaEntryPoint.Equals(Supprocom.CSharp2CUDA.CudaEntryPoint? other) -> bool
+Supprocom.CSharp2CUDA.CudaEntryPoint.ManagedName.get -> string!
+Supprocom.CSharp2CUDA.CudaEntryPoint.ManagedName.init -> void
+Supprocom.CSharp2CUDA.CudaExternalAttribute
+Supprocom.CSharp2CUDA.CudaExternalAttribute.CudaExternalAttribute() -> void
+Supprocom.CSharp2CUDA.CudaExternalAttribute.IsPure.get -> bool
+Supprocom.CSharp2CUDA.CudaExternalAttribute.IsPure.set -> void
+Supprocom.CSharp2CUDA.CudaExternalDeviceAttribute
+Supprocom.CSharp2CUDA.CudaExternalDeviceAttribute.CudaExternalDeviceAttribute() -> void
+Supprocom.CSharp2CUDA.CudaExternalDeviceAttribute.IsPure.get -> bool
+Supprocom.CSharp2CUDA.CudaExternalDeviceAttribute.IsPure.set -> void
+Supprocom.CSharp2CUDA.CudaExternalDeviceAttribute.Name.get -> string?
+Supprocom.CSharp2CUDA.CudaExternalDeviceAttribute.Name.set -> void
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.AllowUnsafe.get -> bool
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.AllowUnsafe.init -> void
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.AssemblyName.get -> string!
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.AssemblyName.init -> void
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.CheckOverflow.get -> bool
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.CheckOverflow.init -> void
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.CudaFileCompilationOptions() -> void
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.LanguageVersion.get -> string!
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.LanguageVersion.init -> void
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.MainTypeName.get -> string?
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.MainTypeName.init -> void
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.MetadataReferencePaths.get -> System.Collections.Generic.IReadOnlyCollection<string!>!
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.MetadataReferencePaths.init -> void
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.Nullable.get -> string!
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.Nullable.init -> void
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.Optimize.get -> bool
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.Optimize.init -> void
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.OutputKind.get -> Microsoft.CodeAnalysis.OutputKind
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.OutputKind.init -> void
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.PreprocessorSymbols.get -> System.Collections.Generic.IReadOnlyCollection<string!>!
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.PreprocessorSymbols.init -> void
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.UseDefaultReferences.get -> bool
+Supprocom.CSharp2CUDA.CudaFileCompilationOptions.UseDefaultReferences.init -> void
+Supprocom.CSharp2CUDA.CudaGlobalAttribute
+Supprocom.CSharp2CUDA.CudaGlobalAttribute.CudaGlobalAttribute() -> void
+Supprocom.CSharp2CUDA.CudaGlobalAttribute.ExternC.get -> bool
+Supprocom.CSharp2CUDA.CudaGlobalAttribute.ExternC.set -> void
+Supprocom.CSharp2CUDA.CudaGlobalAttribute.Name.get -> string?
+Supprocom.CSharp2CUDA.CudaGlobalAttribute.Name.set -> void
+Supprocom.CSharp2CUDA.CudaInlineArrayAttribute
+Supprocom.CSharp2CUDA.CudaInlineArrayAttribute.CudaInlineArrayAttribute(int length) -> void
+Supprocom.CSharp2CUDA.CudaInlineArrayAttribute.Length.get -> int
+Supprocom.CSharp2CUDA.CudaInt32
+Supprocom.CSharp2CUDA.CudaInt32.CudaInt32() -> void
+Supprocom.CSharp2CUDA.CudaInt32.Equals(Supprocom.CSharp2CUDA.CudaInt32 other) -> bool
+Supprocom.CSharp2CUDA.CudaReadOnlyAttribute
+Supprocom.CSharp2CUDA.CudaReadOnlyAttribute.CudaReadOnlyAttribute() -> void
+Supprocom.CSharp2CUDA.CudaSourceMapEntry
+Supprocom.CSharp2CUDA.CudaSourceMapEntry.<Clone>$() -> Supprocom.CSharp2CUDA.CudaSourceMapEntry!
+Supprocom.CSharp2CUDA.CudaSourceMapEntry.CudaSourceMapEntry(string! SourcePath, int SourceLine, int GeneratedLine) -> void
+Supprocom.CSharp2CUDA.CudaSourceMapEntry.Deconstruct(out string! SourcePath, out int SourceLine, out int GeneratedLine) -> void
+Supprocom.CSharp2CUDA.CudaSourceMapEntry.Equals(Supprocom.CSharp2CUDA.CudaSourceMapEntry? other) -> bool
+Supprocom.CSharp2CUDA.CudaSourceMapEntry.GeneratedLine.get -> int
+Supprocom.CSharp2CUDA.CudaSourceMapEntry.GeneratedLine.init -> void
+Supprocom.CSharp2CUDA.CudaSourceMapEntry.SourceLine.get -> int
+Supprocom.CSharp2CUDA.CudaSourceMapEntry.SourceLine.init -> void
+Supprocom.CSharp2CUDA.CudaSourceMapEntry.SourcePath.get -> string!
+Supprocom.CSharp2CUDA.CudaSourceMapEntry.SourcePath.init -> void
+Supprocom.CSharp2CUDA.CudaTranspilationOptions
+Supprocom.CSharp2CUDA.CudaTranspilationOptions.CudaTranspilationOptions() -> void
+Supprocom.CSharp2CUDA.CudaTranspilationOptions.EmitLineDirectives.get -> bool
+Supprocom.CSharp2CUDA.CudaTranspilationOptions.EmitLineDirectives.init -> void
+Supprocom.CSharp2CUDA.CudaTranspilationOptions.NewLine.get -> string!
+Supprocom.CSharp2CUDA.CudaTranspilationOptions.NewLine.init -> void
+Supprocom.CSharp2CUDA.CudaTranspilationOptions.SourceRoot.get -> string?
+Supprocom.CSharp2CUDA.CudaTranspilationOptions.SourceRoot.init -> void
+Supprocom.CSharp2CUDA.CudaTranspilationResult
+Supprocom.CSharp2CUDA.CudaTranspilationResult.Diagnostics.get -> System.Collections.Immutable.ImmutableArray<Microsoft.CodeAnalysis.Diagnostic!>
+Supprocom.CSharp2CUDA.CudaTranspilationResult.EntryPoints.get -> System.Collections.Immutable.ImmutableArray<Supprocom.CSharp2CUDA.CudaEntryPoint!>
+Supprocom.CSharp2CUDA.CudaTranspilationResult.Source.get -> string!
+Supprocom.CSharp2CUDA.CudaTranspilationResult.SourceMap.get -> System.Collections.Immutable.ImmutableArray<Supprocom.CSharp2CUDA.CudaSourceMapEntry!>
+Supprocom.CSharp2CUDA.CudaTranspilationResult.Succeeded.get -> bool
+Supprocom.CSharp2CUDA.CudaTranspiler
+Supprocom.CSharp2CUDA.TranspileToCUDAAttribute
+Supprocom.CSharp2CUDA.TranspileToCUDAAttribute.OutputPath.get -> string?
+Supprocom.CSharp2CUDA.TranspileToCUDAAttribute.TranspileToCUDAAttribute() -> void
+Supprocom.CSharp2CUDA.TranspileToCUDAAttribute.TranspileToCUDAAttribute(string! outputPath) -> void
+override Supprocom.CSharp2CUDA.CudaEntryPoint.Equals(object? obj) -> bool
+override Supprocom.CSharp2CUDA.CudaEntryPoint.GetHashCode() -> int
+override Supprocom.CSharp2CUDA.CudaEntryPoint.ToString() -> string!
+override Supprocom.CSharp2CUDA.CudaInt32.Equals(object? instance) -> bool
+override Supprocom.CSharp2CUDA.CudaInt32.GetHashCode() -> int
+override Supprocom.CSharp2CUDA.CudaSourceMapEntry.Equals(object? obj) -> bool
+override Supprocom.CSharp2CUDA.CudaSourceMapEntry.GetHashCode() -> int
+override Supprocom.CSharp2CUDA.CudaSourceMapEntry.ToString() -> string!
+static Supprocom.CSharp2CUDA.Cuda.Array<T>(T* address, int length) -> T[]!
+static Supprocom.CSharp2CUDA.Cuda.AtomicAdd(ref Supprocom.CSharp2CUDA.CudaInt32 location, int value) -> Supprocom.CSharp2CUDA.CudaInt32
+static Supprocom.CSharp2CUDA.Cuda.AtomicAdd(ref int location, int value) -> int
+static Supprocom.CSharp2CUDA.Cuda.AtomicAdd(ref long location, long value) -> long
+static Supprocom.CSharp2CUDA.Cuda.AtomicAdd(ref uint location, uint value) -> uint
+static Supprocom.CSharp2CUDA.Cuda.AtomicAdd(ref ulong location, ulong value) -> ulong
+static Supprocom.CSharp2CUDA.Cuda.AtomicAdd<T>(ref T location, T value) -> T
+static Supprocom.CSharp2CUDA.Cuda.AtomicCompareExchange(ref int location, int compare, int value) -> int
+static Supprocom.CSharp2CUDA.Cuda.AtomicCompareExchange(ref long location, long compare, long value) -> long
+static Supprocom.CSharp2CUDA.Cuda.AtomicCompareExchange(ref uint location, uint compare, uint value) -> uint
+static Supprocom.CSharp2CUDA.Cuda.AtomicCompareExchange(ref ulong location, ulong compare, ulong value) -> ulong
+static Supprocom.CSharp2CUDA.Cuda.AtomicCompareExchange<T>(ref T location, T compare, T value) -> T
+static Supprocom.CSharp2CUDA.Cuda.AtomicExchange(ref Supprocom.CSharp2CUDA.CudaInt32 location, int value) -> Supprocom.CSharp2CUDA.CudaInt32
+static Supprocom.CSharp2CUDA.Cuda.AtomicExchange(ref int location, int value) -> int
+static Supprocom.CSharp2CUDA.Cuda.AtomicExchange(ref long location, long value) -> long
+static Supprocom.CSharp2CUDA.Cuda.AtomicExchange(ref uint location, uint value) -> uint
+static Supprocom.CSharp2CUDA.Cuda.AtomicExchange(ref ulong location, ulong value) -> ulong
+static Supprocom.CSharp2CUDA.Cuda.AtomicExchange<T>(ref T location, T value) -> T
+static Supprocom.CSharp2CUDA.Cuda.AtomicMin(ref int location, int value) -> int
+static Supprocom.CSharp2CUDA.Cuda.AtomicMin(ref long location, long value) -> long
+static Supprocom.CSharp2CUDA.Cuda.AtomicMin(ref uint location, uint value) -> uint
+static Supprocom.CSharp2CUDA.Cuda.AtomicMin(ref ulong location, ulong value) -> ulong
+static Supprocom.CSharp2CUDA.Cuda.AtomicMin<T>(ref T location, T value) -> T
+static Supprocom.CSharp2CUDA.Cuda.AtomicXor(ref int location, int value) -> int
+static Supprocom.CSharp2CUDA.Cuda.AtomicXor(ref long location, long value) -> long
+static Supprocom.CSharp2CUDA.Cuda.AtomicXor(ref uint location, uint value) -> uint
+static Supprocom.CSharp2CUDA.Cuda.AtomicXor(ref ulong location, ulong value) -> ulong
+static Supprocom.CSharp2CUDA.Cuda.AtomicXor<T>(ref T location, T value) -> T
+static Supprocom.CSharp2CUDA.Cuda.BlockDim.get -> Supprocom.CSharp2CUDA.CudaDimension
+static Supprocom.CSharp2CUDA.Cuda.BlockIdx.get -> Supprocom.CSharp2CUDA.CudaDimension
+static Supprocom.CSharp2CUDA.Cuda.Bool(int value) -> bool
+static Supprocom.CSharp2CUDA.Cuda.DoubleAddRoundNearest(double left, double right) -> double
+static Supprocom.CSharp2CUDA.Cuda.DoubleDivideRoundNearest(double left, double right) -> double
+static Supprocom.CSharp2CUDA.Cuda.DoubleMultiplyRoundNearest(double left, double right) -> double
+static Supprocom.CSharp2CUDA.Cuda.DoubleSubtractRoundNearest(double left, double right) -> double
+static Supprocom.CSharp2CUDA.Cuda.DynamicSharedBytes(int alignment) -> byte*
+static Supprocom.CSharp2CUDA.Cuda.DynamicSharedView<T>(byte* storage, ulong elementOffset) -> T*
+static Supprocom.CSharp2CUDA.Cuda.Exp(double value) -> double
+static Supprocom.CSharp2CUDA.Cuda.FloatingRemainder(double left, double right) -> double
+static Supprocom.CSharp2CUDA.Cuda.GlobalTimer() -> ulong
+static Supprocom.CSharp2CUDA.Cuda.GridDim.get -> Supprocom.CSharp2CUDA.CudaDimension
+static Supprocom.CSharp2CUDA.Cuda.Int(bool value) -> int
+static Supprocom.CSharp2CUDA.Cuda.Log(double value) -> double
+static Supprocom.CSharp2CUDA.Cuda.Log1p(double value) -> double
+static Supprocom.CSharp2CUDA.Cuda.NaN() -> double
+static Supprocom.CSharp2CUDA.Cuda.NanoSleep(uint nanoseconds) -> void
+static Supprocom.CSharp2CUDA.Cuda.NearbyInteger(double value) -> double
+static Supprocom.CSharp2CUDA.Cuda.Pow(double value, double power) -> double
+static Supprocom.CSharp2CUDA.Cuda.ReadOnly<T>(T* pointer) -> T*
+static Supprocom.CSharp2CUDA.Cuda.ReadOnlyArray<T>(T* address, int length) -> T[]!
+static Supprocom.CSharp2CUDA.Cuda.Shared<T>() -> T
+static Supprocom.CSharp2CUDA.Cuda.SharedArray<T>(int length) -> T*
+static Supprocom.CSharp2CUDA.Cuda.ShuffleDownSync(uint mask, int value, uint delta, int width) -> int
+static Supprocom.CSharp2CUDA.Cuda.SignBit(double value) -> bool
+static Supprocom.CSharp2CUDA.Cuda.Sqrt(double value) -> double
+static Supprocom.CSharp2CUDA.Cuda.SyncThreads() -> void
+static Supprocom.CSharp2CUDA.Cuda.SyncWarp() -> void
+static Supprocom.CSharp2CUDA.Cuda.SyncWarp(uint mask) -> void
+static Supprocom.CSharp2CUDA.Cuda.ThreadFence() -> void
+static Supprocom.CSharp2CUDA.Cuda.ThreadFenceSystem() -> void
+static Supprocom.CSharp2CUDA.Cuda.ThreadIdx.get -> Supprocom.CSharp2CUDA.CudaDimension
+static Supprocom.CSharp2CUDA.Cuda.Unsigned(long value) -> ulong
+static Supprocom.CSharp2CUDA.Cuda.VolatileLoad(int* address) -> int
+static Supprocom.CSharp2CUDA.Cuda.VolatileLoad(ulong* address) -> ulong
+static Supprocom.CSharp2CUDA.Cuda.VolatileLoadInt32(byte* address, ulong byteOffset) -> int
+static Supprocom.CSharp2CUDA.Cuda.VolatileLoadUInt64(byte* address, ulong byteOffset) -> ulong
+static Supprocom.CSharp2CUDA.Cuda.VolatileStore(int* address, int value) -> void
+static Supprocom.CSharp2CUDA.Cuda.VolatileStore(ulong* address, ulong value) -> void
+static Supprocom.CSharp2CUDA.Cuda.VolatileStoreInt32(byte* address, ulong byteOffset, int value) -> void
+static Supprocom.CSharp2CUDA.Cuda.VolatileStoreUInt64(byte* address, ulong byteOffset, ulong value) -> void
+static Supprocom.CSharp2CUDA.CudaEntryPoint.operator !=(Supprocom.CSharp2CUDA.CudaEntryPoint? left, Supprocom.CSharp2CUDA.CudaEntryPoint? right) -> bool
+static Supprocom.CSharp2CUDA.CudaEntryPoint.operator ==(Supprocom.CSharp2CUDA.CudaEntryPoint? left, Supprocom.CSharp2CUDA.CudaEntryPoint? right) -> bool
+static Supprocom.CSharp2CUDA.CudaInt32.implicit operator Supprocom.CSharp2CUDA.CudaInt32(bool value) -> Supprocom.CSharp2CUDA.CudaInt32
+static Supprocom.CSharp2CUDA.CudaInt32.implicit operator Supprocom.CSharp2CUDA.CudaInt32(int value) -> Supprocom.CSharp2CUDA.CudaInt32
+static Supprocom.CSharp2CUDA.CudaInt32.implicit operator bool(Supprocom.CSharp2CUDA.CudaInt32 value) -> bool
+static Supprocom.CSharp2CUDA.CudaInt32.implicit operator int(Supprocom.CSharp2CUDA.CudaInt32 value) -> int
+static Supprocom.CSharp2CUDA.CudaInt32.operator !=(Supprocom.CSharp2CUDA.CudaInt32 left, Supprocom.CSharp2CUDA.CudaInt32 right) -> bool
+static Supprocom.CSharp2CUDA.CudaInt32.operator ==(Supprocom.CSharp2CUDA.CudaInt32 left, Supprocom.CSharp2CUDA.CudaInt32 right) -> bool
+static Supprocom.CSharp2CUDA.CudaSourceMapEntry.operator !=(Supprocom.CSharp2CUDA.CudaSourceMapEntry? left, Supprocom.CSharp2CUDA.CudaSourceMapEntry? right) -> bool
+static Supprocom.CSharp2CUDA.CudaSourceMapEntry.operator ==(Supprocom.CSharp2CUDA.CudaSourceMapEntry? left, Supprocom.CSharp2CUDA.CudaSourceMapEntry? right) -> bool
+static Supprocom.CSharp2CUDA.CudaTranspiler.Transpile(Microsoft.CodeAnalysis.CSharp.CSharpCompilation! compilation, Supprocom.CSharp2CUDA.CudaTranspilationOptions? options = null) -> Supprocom.CSharp2CUDA.CudaTranspilationResult!
+static Supprocom.CSharp2CUDA.CudaTranspiler.TranspileFile(string! sourcePath, Supprocom.CSharp2CUDA.CudaFileCompilationOptions? compilationOptions = null, Supprocom.CSharp2CUDA.CudaTranspilationOptions? options = null) -> Supprocom.CSharp2CUDA.CudaTranspilationResult!
+static Supprocom.CSharp2CUDA.CudaTranspiler.TranspileFiles(System.Collections.Generic.IEnumerable<string!>! sourcePaths, Supprocom.CSharp2CUDA.CudaFileCompilationOptions? compilationOptions = null, Supprocom.CSharp2CUDA.CudaTranspilationOptions? options = null) -> Supprocom.CSharp2CUDA.CudaTranspilationResult!

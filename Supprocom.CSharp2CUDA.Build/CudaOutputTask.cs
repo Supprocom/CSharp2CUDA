@@ -14,6 +14,7 @@ public sealed class CudaOutputTask : Microsoft.Build.Utilities.Task
     [Required]
     public string IntermediatePayloadPath { get; set; } = string.Empty;
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Performance", "CA1819:Properties should not return arrays", Justification = "MSBuild binds item lists to ITaskItem[] task properties; changing this type breaks the host contract.")]
     public ITaskItem[] ManagedOutputFiles { get; set; } = [];
 
     public bool TranspileEntireProject { get; set; }
@@ -27,6 +28,7 @@ public sealed class CudaOutputTask : Microsoft.Build.Utilities.Task
     [Output]
     public string GeneratedFile { get; private set; } = string.Empty;
 
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1031:Do not catch general exception types", Justification = "The MSBuild task boundary converts all failures into a logged CS2CUDA023 and a false task result.")]
     public override bool Execute()
     {
         try
@@ -72,7 +74,7 @@ public sealed class CudaOutputTask : Microsoft.Build.Utilities.Task
 
         var payload = File.ReadAllText(IntermediatePayloadPath, Encoding.UTF8);
         DeleteIntermediatePayload();
-        var separator = payload.IndexOf('\n');
+        var separator = payload.IndexOf('\n', StringComparison.Ordinal);
         if (separator <= 0)
             throw new InvalidOperationException("The CUDA compiler payload is invalid.");
 
@@ -227,7 +229,7 @@ public sealed class CudaOutputTask : Microsoft.Build.Utilities.Task
     {
         try
         {
-            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != (FileAttributes)0;
         }
         catch (Exception exception) when (exception is FileNotFoundException or
             DirectoryNotFoundException)

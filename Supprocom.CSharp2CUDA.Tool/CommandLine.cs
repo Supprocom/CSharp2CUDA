@@ -54,15 +54,15 @@ internal static class CommandLine
           csharp2cuda refresh --output <directory>
         """;
 
-    private static Dictionary<string, string> ParseOptions(IReadOnlyList<string> arguments)
+    private static Dictionary<string, string> ParseOptions(string[] arguments)
     {
         var result = new Dictionary<string, string>(StringComparer.Ordinal);
-        for (var index = 0; index < arguments.Count; index += 2)
+        for (var index = 0; index < arguments.Length; index += 2)
         {
             var name = arguments[index];
             if (!name.StartsWith("--", StringComparison.Ordinal) ||
                 name.Length == 2 ||
-                index + 1 >= arguments.Count)
+                index + 1 >= arguments.Length)
             {
                 throw new ToolException(
                     "CS2CUDA100",
@@ -80,7 +80,7 @@ internal static class CommandLine
     }
 
     private static string GetRequired(
-        IReadOnlyDictionary<string, string> values,
+        Dictionary<string, string> values,
         string name)
     {
         if (!values.TryGetValue(name, out var value) || string.IsNullOrWhiteSpace(value))
@@ -121,9 +121,4 @@ internal static class CommandLine
                 $"Argument '--{invalid}' is not valid for this command.");
         }
     }
-}
-
-internal sealed class ToolException(string code, string message) : Exception(message)
-{
-    public string Code { get; } = code;
 }

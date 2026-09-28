@@ -14,7 +14,7 @@ public sealed class CudaMaintenanceRealExecutionTests
     private const int SequenceCount = 8;
 
     [Fact]
-    public void Transpile_AcceptsFixedPointerStorageAtExternalDeviceBoundary()
+    public void TranspileAcceptsFixedPointerStorageAtExternalDeviceBoundary()
     {
         var result = CudaTestCompiler.Transpile(
             ExternalDeviceConsumerSource,
@@ -26,7 +26,7 @@ public sealed class CudaMaintenanceRealExecutionTests
     }
 
     [CudaFact]
-    public async Task Cuda_MappedRingObservesHostClearsAndRejectsStaleHeaders()
+    public async Task CudaMappedRingObservesHostClearsAndRejectsStaleHeaders()
     {
         var result = CudaTestCompiler.Transpile(MappedRingSource, path: "MappedRingModule.cs");
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
@@ -56,8 +56,8 @@ public sealed class CudaMaintenanceRealExecutionTests
             }
         });
 
-        runtime.LaunchAsync("mapped_ring", 1, 1, 0, mapped.DevicePointer);
-        await worker.WaitAsync(TimeSpan.FromSeconds(15));
+        runtime.LaunchOnStream("mapped_ring", 1, 1, 0, mapped.DevicePointer);
+        await worker.WaitAsync(TimeSpan.FromSeconds(15)).ConfigureAwait(true);
         runtime.Synchronize();
 
         Assert.Equal(
@@ -68,7 +68,7 @@ public sealed class CudaMaintenanceRealExecutionTests
     }
 
     [CudaFact]
-    public void Cuda_GlobalTimerProducesStrictlyOrderedReadings()
+    public void CudaGlobalTimerProducesStrictlyOrderedReadings()
     {
         var result = CudaTestCompiler.Transpile(GlobalTimerSource, path: "GlobalTimerModule.cs");
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
@@ -93,7 +93,7 @@ public sealed class CudaMaintenanceRealExecutionTests
     }
 
     [CudaFact]
-    public void Cuda_InlineArrayAbiMatchesNativeReference()
+    public void CudaInlineArrayAbiMatchesNativeReference()
     {
         var result = CudaTestCompiler.Transpile(InlineArraySource, path: "InlineArrayModule.cs");
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
@@ -108,7 +108,7 @@ public sealed class CudaMaintenanceRealExecutionTests
     }
 
     [CudaFact]
-    public void Cuda_LinksExternalDeviceProducerAndConsumerUnits()
+    public void CudaLinksExternalDeviceProducerAndConsumerUnits()
     {
         var result = CudaTestCompiler.Transpile(
             ExternalDeviceConsumerSource,
@@ -149,7 +149,7 @@ public sealed class CudaMaintenanceRealExecutionTests
     }
 
     [ExactPackageCudaFact]
-    public void Cuda_ExactPackageExternalDispatchBoundaryCompilesAndLinks()
+    public void CudaExactPackageExternalDispatchBoundaryCompilesAndLinks()
     {
         var generatedPath = Environment.GetEnvironmentVariable(
             "CSHARP2CUDA_EXACT_PACKAGE_CUDA");

@@ -1,0 +1,5 @@
+#nullable enable
+override Supprocom.CSharp2CUDA.Compiler.CudaTranspilationAnalyzer.Initialize(Microsoft.CodeAnalysis.Diagnostics.AnalysisContext! context) -> void
+override Supprocom.CSharp2CUDA.Compiler.CudaTranspilationAnalyzer.SupportedDiagnostics.get -> System.Collections.Immutable.ImmutableArray<Microsoft.CodeAnalysis.DiagnosticDescriptor!>
+Supprocom.CSharp2CUDA.Compiler.CudaTranspilationAnalyzer
+Supprocom.CSharp2CUDA.Compiler.CudaTranspilationAnalyzer.CudaTranspilationAnalyzer() -> void

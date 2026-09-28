@@ -32,47 +32,8 @@ public static class CudaTranspiler
         compilationOptions ??= new CudaFileCompilationOptions();
         ValidateFileCompilationOptions(compilationOptions);
 
-        var pathComparer = OperatingSystem.IsWindows()
-            ? StringComparer.OrdinalIgnoreCase
-            : StringComparer.Ordinal;
-        var paths = new List<string>();
-        var uniquePaths = new HashSet<string>(pathComparer);
-        foreach (var sourcePath in sourcePaths)
-        {
-            ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
-            var path = Path.GetFullPath(sourcePath);
-            if (!string.Equals(Path.GetExtension(path), ".cs", StringComparison.OrdinalIgnoreCase))
-            {
-                throw new ArgumentException(
-                    $"Source path '{path}' must identify a .cs file.",
-                    nameof(sourcePaths));
-            }
-            if (!uniquePaths.Add(path))
-            {
-                throw new ArgumentException(
-                    $"Source path '{path}' is specified more than once.",
-                    nameof(sourcePaths));
-            }
-            if (!File.Exists(path))
-                throw new FileNotFoundException("The C# source file does not exist.", path);
-            paths.Add(path);
-        }
-
-        if (paths.Count == 0)
-            throw new ArgumentException("At least one C# source file is required.", nameof(sourcePaths));
-
-        if (!LanguageVersionFacts.TryParse(
-                compilationOptions.LanguageVersion,
-                out var languageVersion))
-        {
-            throw new ArgumentException(
-                $"Language version '{compilationOptions.LanguageVersion}' is invalid.",
-                nameof(compilationOptions));
-        }
-
-        var parseOptions = new CSharpParseOptions(
-            languageVersion,
-            preprocessorSymbols: compilationOptions.PreprocessorSymbols);
+        var paths = ResolveSourcePaths(sourcePaths);
+        var parseOptions = CreateParseOptions(compilationOptions);
         var syntaxTrees = paths.Select(path =>
         {
             using var stream = File.OpenRead(path);
@@ -99,6 +60,54 @@ public static class CudaTranspiler
                 mainTypeName: compilationOptions.MainTypeName));
 
         return Transpile(compilation, options);
+    }
+
+    private static List<string> ResolveSourcePaths(IEnumerable<string> sourcePaths)
+    {
+        var pathComparer = OperatingSystem.IsWindows()
+            ? StringComparer.OrdinalIgnoreCase
+            : StringComparer.Ordinal;
+        var paths = new List<string>();
+        var uniquePaths = new HashSet<string>(pathComparer);
+        foreach (var sourcePath in sourcePaths)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath, nameof(sourcePaths));
+            var path = Path.GetFullPath(sourcePath);
+            if (!string.Equals(Path.GetExtension(path), ".cs", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException(
+                    $"Source path '{path}' must identify a .cs file.",
+                    nameof(sourcePaths));
+            }
+            if (!uniquePaths.Add(path))
+            {
+                throw new ArgumentException(
+                    $"Source path '{path}' is specified more than once.",
+                    nameof(sourcePaths));
+            }
+            if (!File.Exists(path))
+                throw new FileNotFoundException("The C# source file does not exist.", path);
+            paths.Add(path);
+        }
+
+        if (paths.Count == 0)
+            throw new ArgumentException("At least one C# source file is required.", nameof(sourcePaths));
+        return paths;
+    }
+
+    private static CSharpParseOptions CreateParseOptions(CudaFileCompilationOptions compilationOptions)
+    {
+        if (!LanguageVersionFacts.TryParse(
+                compilationOptions.LanguageVersion,
+                out var languageVersion))
+        {
+            throw new ArgumentException(
+                $"Language version '{compilationOptions.LanguageVersion}' is invalid.",
+                nameof(compilationOptions));
+        }
+        return new CSharpParseOptions(
+            languageVersion,
+            preprocessorSymbols: compilationOptions.PreprocessorSymbols);
     }
 
     public static CudaTranspilationResult Transpile(
@@ -212,24 +221,7 @@ public static class CudaTranspiler
             var root = tree.GetRoot();
             var model = compilation.GetSemanticModel(tree, ignoreAccessibility: true);
             if (attributedClassesOnly)
-            {
-                foreach (var candidate in root.DescendantNodes().OfType<ClassDeclarationSyntax>()
-                             .Where(candidate => candidate.Ancestors()
-                                 .OfType<TypeDeclarationSyntax>()
-                                 .Any()))
-                {
-                    if (model.GetDeclaredSymbol(candidate) is not INamedTypeSymbol nestedSymbol)
-                        continue;
-                    var nestedMarker = GetMarker(nestedSymbol, attribute);
-                    if (nestedMarker is null)
-                        continue;
-
-                    diagnostics.Add(Diagnostic.Create(
-                        CudaDiagnostics.InvalidTranslationUnit,
-                        candidate.Identifier.GetLocation(),
-                        candidate.Identifier.ValueText));
-                }
-            }
+                ValidateNestedTranslationUnitMarkers(root, model, attribute, diagnostics);
 
             foreach (var member in EnumerateTopLevelMembers(root))
             {
@@ -277,6 +269,29 @@ public static class CudaTranspiler
         }
 
         return new TranslationUnitSelection(units, requestedOutputPath);
+    }
+
+    private static void ValidateNestedTranslationUnitMarkers(
+        SyntaxNode root,
+        SemanticModel model,
+        INamedTypeSymbol? attribute,
+        ImmutableArray<Diagnostic>.Builder diagnostics)
+    {
+        foreach (var candidate in root.DescendantNodes().OfType<ClassDeclarationSyntax>()
+                     .Where(candidate => candidate.Ancestors()
+                         .OfType<TypeDeclarationSyntax>()
+                         .Any()))
+        {
+            if (model.GetDeclaredSymbol(candidate) is not INamedTypeSymbol nestedSymbol)
+                continue;
+            if (GetMarker(nestedSymbol, attribute) is null)
+                continue;
+
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InvalidTranslationUnit,
+                candidate.Identifier.GetLocation(),
+                candidate.Identifier.ValueText));
+        }
     }
 
     private static AttributeData? GetMarker(ISymbol symbol, INamedTypeSymbol? attribute) =>
@@ -362,13 +377,13 @@ public static class CudaTranspiler
 
     private static void ValidateFileCompilationOptions(CudaFileCompilationOptions options)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(options.AssemblyName);
-        ArgumentException.ThrowIfNullOrWhiteSpace(options.LanguageVersion);
-        ArgumentException.ThrowIfNullOrWhiteSpace(options.Nullable);
+        ArgumentException.ThrowIfNullOrWhiteSpace(options.AssemblyName, nameof(options));
+        ArgumentException.ThrowIfNullOrWhiteSpace(options.LanguageVersion, nameof(options));
+        ArgumentException.ThrowIfNullOrWhiteSpace(options.Nullable, nameof(options));
         if (options.MainTypeName is not null)
-            ArgumentException.ThrowIfNullOrWhiteSpace(options.MainTypeName);
-        ArgumentNullException.ThrowIfNull(options.MetadataReferencePaths);
-        ArgumentNullException.ThrowIfNull(options.PreprocessorSymbols);
+            ArgumentException.ThrowIfNullOrWhiteSpace(options.MainTypeName, nameof(options));
+        ArgumentNullException.ThrowIfNull(options.MetadataReferencePaths, nameof(options));
+        ArgumentNullException.ThrowIfNull(options.PreprocessorSymbols, nameof(options));
         if (!Enum.IsDefined(options.OutputKind))
         {
             throw new ArgumentException(
@@ -378,15 +393,15 @@ public static class CudaTranspiler
     }
 
     private static NullableContextOptions ParseNullableContext(string value) =>
-        value.Trim().ToLowerInvariant() switch
+        value.Trim().ToUpperInvariant() switch
         {
-            "disable" => NullableContextOptions.Disable,
-            "enable" => NullableContextOptions.Enable,
-            "warnings" => NullableContextOptions.Warnings,
-            "annotations" => NullableContextOptions.Annotations,
+            "DISABLE" => NullableContextOptions.Disable,
+            "ENABLE" => NullableContextOptions.Enable,
+            "WARNINGS" => NullableContextOptions.Warnings,
+            "ANNOTATIONS" => NullableContextOptions.Annotations,
             _ => throw new ArgumentException(
                 $"Nullable context '{value}' is invalid.",
-                nameof(CudaFileCompilationOptions))
+                nameof(value))
         };
 
     private static ImmutableArray<MetadataReference> CreateReferences(
@@ -409,7 +424,7 @@ public static class CudaTranspiler
         var productFileName = Path.GetFileName(productPath);
         foreach (var referencePath in options.MetadataReferencePaths)
         {
-            ArgumentException.ThrowIfNullOrWhiteSpace(referencePath);
+            ArgumentException.ThrowIfNullOrWhiteSpace(referencePath, nameof(options));
             var path = Path.GetFullPath(referencePath);
             if (!File.Exists(path))
                 throw new FileNotFoundException("The metadata reference does not exist.", path);

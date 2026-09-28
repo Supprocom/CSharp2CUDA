@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.InteropServices;
 using Microsoft.CodeAnalysis;
 using Supprocom.CSharp2CUDA.Compilation;
 
@@ -31,114 +32,7 @@ internal sealed class CudaLayoutEngine(
 
         try
         {
-            var attribute = symbols.GetStructLayoutAttribute(structure.Symbol);
-            var layoutKind = attribute is
-            { ConstructorArguments: [{ Value: int value }] }
-                ? value
-                : 0;
-            if (layoutKind == 3)
-            {
-                layout = null!;
-                reason = "automatic layout is not supported";
-                return false;
-            }
-            if (layoutKind is not (0 or 2))
-            {
-                layout = null!;
-                reason = $"layout kind {layoutKind} is not supported";
-                return false;
-            }
-
-            var pack = GetNamedInt(attribute, "Pack");
-            if (pack == 0)
-                pack = 8;
-            if (pack is not (1 or 2 or 4 or 8 or 16 or 32 or 64 or 128))
-            {
-                layout = null!;
-                reason = $"pack value {pack} is invalid";
-                return false;
-            }
-
-            var explicitLayout = layoutKind == 2;
-            var offset = 0;
-            var maximumEnd = 0;
-            var structureAlignment = 1;
-            var fields = ImmutableArray.CreateBuilder<CudaFieldLayout>();
-            foreach (var field in structure.Fields)
-            {
-                var offsetAttribute = symbols.GetFieldOffsetAttribute(field.Symbol);
-                if (!explicitLayout && offsetAttribute is not null)
-                {
-                    layout = null!;
-                    reason = $"field '{field.Symbol.Name}' has an offset in sequential layout";
-                    return false;
-                }
-                if (explicitLayout &&
-                    offsetAttribute?.ConstructorArguments is not
-                        [{ Value: int { } }])
-                {
-                    layout = null!;
-                    reason = $"field '{field.Symbol.Name}' requires one nonnegative field offset";
-                    return false;
-                }
-
-                var elementType = field.InlineArrayLength > 0
-                    ? ((IPointerTypeSymbol)field.Symbol.Type).PointedAtType
-                    : field.Symbol.Type;
-                if (!TryGetTypeLayout(elementType, out var size, out var alignment, out reason))
-                {
-                    layout = null!;
-                    reason = $"field '{field.Symbol.Name}' {reason}";
-                    return false;
-                }
-                if (field.InlineArrayLength > 0)
-                    size = checked(size * field.InlineArrayLength);
-                alignment = Math.Min(alignment, pack);
-                var fieldOffset = explicitLayout
-                    ? (int)offsetAttribute!.ConstructorArguments[0].Value!
-                    : Align(offset, alignment);
-                if (fieldOffset < 0)
-                {
-                    layout = null!;
-                    reason = $"field '{field.Symbol.Name}' has a negative field offset";
-                    return false;
-                }
-                if (fieldOffset % alignment != 0)
-                {
-                    layout = null!;
-                    reason = $"field '{field.Symbol.Name}' has an unaligned explicit offset";
-                    return false;
-                }
-                fields.Add(new CudaFieldLayout(field, fieldOffset, size, alignment));
-                var fieldEnd = checked(fieldOffset + size);
-                maximumEnd = Math.Max(maximumEnd, fieldEnd);
-                if (!explicitLayout)
-                    offset = fieldEnd;
-                structureAlignment = Math.Max(structureAlignment, alignment);
-            }
-
-            var declaredSize = GetNamedInt(attribute, "Size");
-            var computedSize = Math.Max(1, Align(maximumEnd, structureAlignment));
-            if (declaredSize > 0)
-            {
-                if (declaredSize < computedSize)
-                {
-                    layout = null!;
-                    reason = $"declared size {declaredSize} is smaller than {computedSize}";
-                    return false;
-                }
-                computedSize = Align(declaredSize, structureAlignment);
-            }
-
-            layout = new CudaStructLayout(
-                computedSize,
-                structureAlignment,
-                pack,
-                explicitLayout,
-                fields.ToImmutable());
-            layouts.Add(structure.Symbol, layout);
-            reason = string.Empty;
-            return true;
+            return TryComputeLayout(structure, out layout, out reason);
         }
         catch (OverflowException)
         {
@@ -150,6 +44,157 @@ internal sealed class CudaLayoutEngine(
         {
             active.Remove(structure.Symbol);
         }
+    }
+
+    private bool TryComputeLayout(
+        CudaStructPlan structure,
+        out CudaStructLayout layout,
+        out string reason)
+    {
+        var attribute = symbols.GetStructLayoutAttribute(structure.Symbol);
+        if (!TryReadLayoutOptions(attribute, out var pack, out var explicitLayout, out reason) ||
+            !TryBuildFieldLayouts(structure, pack, explicitLayout,
+                out var fields, out var maximumEnd, out var structureAlignment, out reason))
+        {
+            layout = null!;
+            return false;
+        }
+
+        var declaredSize = GetNamedInt(attribute, "Size");
+        var computedSize = Math.Max(1, Align(maximumEnd, structureAlignment));
+        if (declaredSize > 0)
+        {
+            if (declaredSize < computedSize)
+            {
+                layout = null!;
+                reason = $"declared size {declaredSize} is smaller than {computedSize}";
+                return false;
+            }
+            computedSize = Align(declaredSize, structureAlignment);
+        }
+
+        layout = new CudaStructLayout(
+            computedSize, structureAlignment, pack, explicitLayout, fields);
+        layouts.Add(structure.Symbol, layout);
+        reason = string.Empty;
+        return true;
+    }
+
+    private static bool TryReadLayoutOptions(
+        AttributeData? attribute,
+        out int pack,
+        out bool explicitLayout,
+        out string reason)
+    {
+        var layoutKind = attribute is { ConstructorArguments: [{ Value: int value }] }
+            ? value
+            : 0;
+        explicitLayout = layoutKind == 2;
+        pack = 0;
+        if (layoutKind == 3)
+        {
+            reason = "automatic layout is not supported";
+            return false;
+        }
+        if (layoutKind is not (0 or 2))
+        {
+            reason = $"layout kind {layoutKind} is not supported";
+            return false;
+        }
+        pack = GetNamedInt(attribute, "Pack");
+        if (pack == 0)
+            pack = 8;
+        if (pack is not (1 or 2 or 4 or 8 or 16 or 32 or 64 or 128))
+        {
+            reason = $"pack value {pack} is invalid";
+            return false;
+        }
+        reason = string.Empty;
+        return true;
+    }
+
+    private bool TryBuildFieldLayouts(
+        CudaStructPlan structure,
+        int pack,
+        bool explicitLayout,
+        out ImmutableArray<CudaFieldLayout> fields,
+        out int maximumEnd,
+        out int structureAlignment,
+        out string reason)
+    {
+        var builder = ImmutableArray.CreateBuilder<CudaFieldLayout>();
+        var offset = 0;
+        maximumEnd = 0;
+        structureAlignment = 1;
+        fields = [];
+        foreach (ref readonly var field in CollectionsMarshal.AsSpan(structure.Fields))
+        {
+            if (!TryGetFieldLayout(field, pack, explicitLayout, offset, out var fieldLayout, out reason))
+                return false;
+            builder.Add(fieldLayout);
+            var fieldEnd = checked(fieldLayout.Offset + fieldLayout.Size);
+            maximumEnd = Math.Max(maximumEnd, fieldEnd);
+            if (!explicitLayout)
+                offset = fieldEnd;
+            structureAlignment = Math.Max(structureAlignment, fieldLayout.Alignment);
+        }
+        fields = builder.ToImmutable();
+        reason = string.Empty;
+        return true;
+    }
+
+    private bool TryGetFieldLayout(
+        CudaFieldPlan field,
+        int pack,
+        bool explicitLayout,
+        int offset,
+        out CudaFieldLayout layout,
+        out string reason)
+    {
+        var offsetAttribute = symbols.GetFieldOffsetAttribute(field.Symbol);
+        if (!explicitLayout && offsetAttribute is not null)
+        {
+            layout = null!;
+            reason = $"field '{field.Symbol.Name}' has an offset in sequential layout";
+            return false;
+        }
+        if (explicitLayout && offsetAttribute?.ConstructorArguments is not [{ Value: int { } }])
+        {
+            layout = null!;
+            reason = $"field '{field.Symbol.Name}' requires one nonnegative field offset";
+            return false;
+        }
+
+        var elementType = field.InlineArrayLength > 0
+            ? ((IPointerTypeSymbol)field.Symbol.Type).PointedAtType
+            : field.Symbol.Type;
+        if (!TryGetTypeLayout(elementType, out var size, out var alignment, out reason))
+        {
+            layout = null!;
+            reason = $"field '{field.Symbol.Name}' {reason}";
+            return false;
+        }
+        if (field.InlineArrayLength > 0)
+            size = checked(size * field.InlineArrayLength);
+        alignment = Math.Min(alignment, pack);
+        var fieldOffset = explicitLayout
+            ? (int)offsetAttribute!.ConstructorArguments[0].Value!
+            : Align(offset, alignment);
+        if (fieldOffset < 0)
+        {
+            layout = null!;
+            reason = $"field '{field.Symbol.Name}' has a negative field offset";
+            return false;
+        }
+        if (fieldOffset % alignment != 0)
+        {
+            layout = null!;
+            reason = $"field '{field.Symbol.Name}' has an unaligned explicit offset";
+            return false;
+        }
+        layout = new CudaFieldLayout(field, fieldOffset, size, alignment);
+        reason = string.Empty;
+        return true;
     }
 
     private bool TryGetTypeLayout(
@@ -218,7 +263,7 @@ internal sealed class CudaLayoutEngine(
             return 0;
         foreach (var argument in attribute.NamedArguments)
         {
-            if (argument.Key == name && argument.Value.Value is int value)
+            if (string.Equals(argument.Key, name, StringComparison.Ordinal) && argument.Value.Value is int value)
                 return value;
         }
         return 0;
@@ -227,16 +272,3 @@ internal sealed class CudaLayoutEngine(
     private static int Align(int value, int alignment) =>
         checked((value + alignment - 1) / alignment * alignment);
 }
-
-internal sealed record CudaStructLayout(
-    int Size,
-    int Alignment,
-    int Pack,
-    bool IsExplicit,
-    ImmutableArray<CudaFieldLayout> Fields);
-
-internal sealed record CudaFieldLayout(
-    CudaFieldPlan Field,
-    int Offset,
-    int Size,
-    int Alignment);

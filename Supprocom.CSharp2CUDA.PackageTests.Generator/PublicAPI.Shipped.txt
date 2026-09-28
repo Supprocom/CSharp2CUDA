@@ -1,0 +1,4 @@
+#nullable enable
+Supprocom.CSharp2CUDA.PackageTests.Generator.CudaPackageTestGenerator
+Supprocom.CSharp2CUDA.PackageTests.Generator.CudaPackageTestGenerator.CudaPackageTestGenerator() -> void
+Supprocom.CSharp2CUDA.PackageTests.Generator.CudaPackageTestGenerator.Initialize(Microsoft.CodeAnalysis.IncrementalGeneratorInitializationContext context) -> void

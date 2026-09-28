@@ -4,9 +4,11 @@ using Microsoft.CodeAnalysis.Text;
 
 namespace Supprocom.CSharp2CUDA.PackageTests.Generator;
 
+#pragma warning disable RS1041 // The package-test generator runs only in this .NET 10 build host.
 [Generator]
 public sealed class CudaPackageTestGenerator : IIncrementalGenerator
 {
+#pragma warning restore RS1041
     public void Initialize(IncrementalGeneratorInitializationContext context)
     {
         var assemblyName = context.CompilationProvider.Select(

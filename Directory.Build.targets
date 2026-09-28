@@ -1,0 +1,10 @@
+<Project>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)/PublicAPI.Shipped.txt')">
+    <PackageReference Include="Microsoft.CodeAnalysis.PublicApiAnalyzers" Version="[5.6.0]" PrivateAssets="all" />
+    <AdditionalFiles Include="$(MSBuildProjectDirectory)/PublicAPI.Shipped.txt" />
+    <AdditionalFiles Include="$(MSBuildProjectDirectory)/PublicAPI.Unshipped.txt" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(IsTestProject)' == 'true'">
+    <PackageReference Include="xunit.analyzers" Version="[2.1.0]" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

@@ -12,7 +12,7 @@ namespace Supprocom.CSharp2CUDA.Tool.Tests;
 public sealed class CudaAnalyzerDesignTimeTests
 {
     [Fact]
-    public async Task DesignTimeBuild_ReportsCudaSemanticErrorsWithoutPayload()
+    public async Task DesignTimeBuildReportsCudaSemanticErrorsWithoutPayload()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -27,12 +27,12 @@ public sealed class CudaAnalyzerDesignTimeTests
 
         var diagnostics = await AnalyzeAsync(source);
 
-        Assert.Contains(diagnostics, static diagnostic => diagnostic.Id == "CS2CUDA007");
-        Assert.DoesNotContain(diagnostics, static diagnostic => diagnostic.Id == "CS2CUDA023");
+        Assert.Contains(diagnostics, static diagnostic => string.Equals(diagnostic.Id, "CS2CUDA007", StringComparison.Ordinal));
+        Assert.DoesNotContain(diagnostics, static diagnostic => string.Equals(diagnostic.Id, "CS2CUDA023", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task DesignTimeBuild_ValidatesValidMarkerWithoutRequiringPayloadPath()
+    public async Task DesignTimeBuildValidatesValidMarkerWithoutRequiringPayloadPath()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -91,30 +91,6 @@ public sealed class CudaAnalyzerDesignTimeTests
         return await compilation.WithAnalyzers(
                 [new CudaTranspilationAnalyzer()],
                 analyzerOptions)
-            .GetAnalyzerDiagnosticsAsync();
+            .GetAnalyzerDiagnosticsAsync().ConfigureAwait(false);
     }
-}
-
-internal sealed class TestAnalyzerConfigOptionsProvider(
-    IReadOnlyDictionary<string, string> values) : AnalyzerConfigOptionsProvider
-{
-    private readonly AnalyzerConfigOptions global = new TestAnalyzerConfigOptions(values);
-
-    public override AnalyzerConfigOptions GlobalOptions => global;
-
-    public override AnalyzerConfigOptions GetOptions(SyntaxTree tree) =>
-        TestAnalyzerConfigOptions.Empty;
-
-    public override AnalyzerConfigOptions GetOptions(AdditionalText textFile) =>
-        TestAnalyzerConfigOptions.Empty;
-}
-
-internal sealed class TestAnalyzerConfigOptions(
-    IReadOnlyDictionary<string, string> values) : AnalyzerConfigOptions
-{
-    public static TestAnalyzerConfigOptions Empty { get; } = new(
-        new Dictionary<string, string>());
-
-    public override bool TryGetValue(string key, out string value) =>
-        values.TryGetValue(key, out value!);
 }

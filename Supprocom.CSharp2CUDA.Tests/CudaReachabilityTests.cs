@@ -8,7 +8,7 @@ namespace Supprocom.CSharp2CUDA.Tests;
 public sealed class CudaReachabilityTests
 {
     [Fact]
-    public void Transpile_InfersSameClassSourceHelper()
+    public void TranspileInfersSameClassSourceHelper()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -37,7 +37,7 @@ public sealed class CudaReachabilityTests
     }
 
     [Fact]
-    public void Transpile_InfersCrossClassSourceHelper()
+    public void TranspileInfersCrossClassSourceHelper()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -69,7 +69,7 @@ public sealed class CudaReachabilityTests
     }
 
     [Fact]
-    public void Transpile_UsesGeneratedSourceHelper()
+    public void TranspileUsesGeneratedSourceHelper()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -107,7 +107,7 @@ public sealed class CudaReachabilityTests
     }
 
     [Fact]
-    public void Transpile_EmitsOnlyTheReachedOverload()
+    public void TranspileEmitsOnlyTheReachedOverload()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -144,7 +144,7 @@ public sealed class CudaReachabilityTests
     }
 
     [Fact]
-    public void Transpile_IgnoresUnreachableHostMethod()
+    public void TranspileIgnoresUnreachableHostMethod()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -173,7 +173,7 @@ public sealed class CudaReachabilityTests
     }
 
     [Fact]
-    public void Transpile_KeepsExplicitUncalledDeviceExport()
+    public void TranspileKeepsExplicitUncalledDeviceExport()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -197,7 +197,7 @@ public sealed class CudaReachabilityTests
     }
 
     [Fact]
-    public void Transpile_RejectsRecursiveReachableMethods()
+    public void TranspileRejectsRecursiveReachableMethods()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -230,16 +230,18 @@ public sealed class CudaReachabilityTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
         var diagnostic = Assert.Single(
             result.Diagnostics,
-            item => item.Id == "CS2CUDA027");
+            item => string.Equals(item.Id, "CS2CUDA027", StringComparison.Ordinal));
+#pragma warning restore HLQ005
         Assert.Equal("run", diagnostic.Properties["RootSymbol"]);
-        Assert.Contains("ExistingAlgorithm.First", diagnostic.Properties["CallPath"]);
-        Assert.Contains("iterative", diagnostic.Properties["SuggestedReplacement"]);
+        Assert.Contains("ExistingAlgorithm.First", diagnostic.Properties["CallPath"], StringComparison.Ordinal);
+        Assert.Contains("iterative", diagnostic.Properties["SuggestedReplacement"], StringComparison.Ordinal);
     }
 
     [Fact]
-    public void Transpile_ReportsThePathToUnsupportedMetadataMethod()
+    public void TranspileReportsThePathToUnsupportedMetadataMethod()
     {
         const string source = """
             using System;
@@ -268,14 +270,16 @@ public sealed class CudaReachabilityTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        var diagnostic = Assert.Single(result.Diagnostics, item => item.Id == "CS2CUDA026");
-        Assert.Contains("run", diagnostic.GetMessage(), StringComparison.Ordinal);
-        Assert.Contains("ExistingAlgorithm.Calculate", diagnostic.GetMessage(), StringComparison.Ordinal);
-        Assert.Contains("System.Math.Log", diagnostic.GetMessage(), StringComparison.Ordinal);
+#pragma warning disable HLQ005 // Exactly one element is a validation invariant; First would silently accept duplicates.
+        var diagnostic = Assert.Single(result.Diagnostics, item => string.Equals(item.Id, "CS2CUDA026", StringComparison.Ordinal));
+#pragma warning restore HLQ005
+        Assert.Contains("run", diagnostic.GetMessage(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+        Assert.Contains("ExistingAlgorithm.Calculate", diagnostic.GetMessage(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
+        Assert.Contains("System.Math.Log", diagnostic.GetMessage(System.Globalization.CultureInfo.InvariantCulture), StringComparison.Ordinal);
         Assert.Equal("run", diagnostic.Properties["RootSymbol"]);
-        Assert.Contains("System.Math.Log", diagnostic.Properties["FailingSymbol"]);
-        Assert.Contains("ExistingAlgorithm.Calculate", diagnostic.Properties["CallPath"]);
-        Assert.Contains("outside", diagnostic.Properties["SuggestedReplacement"]);
+        Assert.Contains("System.Math.Log", diagnostic.Properties["FailingSymbol"], StringComparison.Ordinal);
+        Assert.Contains("ExistingAlgorithm.Calculate", diagnostic.Properties["CallPath"], StringComparison.Ordinal);
+        Assert.Contains("outside", diagnostic.Properties["SuggestedReplacement"], StringComparison.Ordinal);
     }
 
     private static string FormatDiagnostics(CudaTranspilationResult result) =>

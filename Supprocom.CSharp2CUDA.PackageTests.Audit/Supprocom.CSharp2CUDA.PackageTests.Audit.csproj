@@ -3,6 +3,7 @@
     <AssemblyName>Supprocom.CSharp2CUDA.PackageTests.Audit</AssemblyName>
     <RootNamespace>Supprocom.CSharp2CUDA.PackageTests.Audit</RootNamespace>
     <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
     <TargetFramework>net10.0</TargetFramework>
     <LangVersion>14.0</LangVersion>
     <Nullable>enable</Nullable>

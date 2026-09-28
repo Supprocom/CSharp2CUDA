@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using Microsoft.CodeAnalysis;
 using Supprocom.CSharp2CUDA.Emission;
 
@@ -122,6 +123,20 @@ internal sealed class CudaModuleEmitter(
         output.Write(structure.EmittedName);
         output.WriteLine();
         output.WriteLine("{");
+        EmitStructMembers(output, structure);
+        output.Write("};");
+        if (structure.Layout is { Pack: not 8 })
+        {
+            output.WriteLine();
+            output.Write("#pragma pack(pop)");
+        }
+        if (structure.Layout is { } layout && plan.RequiresAbiLayout(structure))
+            EmitStructLayoutAssertions(output, structure, layout);
+        return output.ToString();
+    }
+
+    private void EmitStructMembers(TextWriter output, CudaStructPlan structure)
+    {
         if (structure.Layout is { IsExplicit: true } rawLayout)
         {
             output.Write("    unsigned char csharp2cuda_storage[");
@@ -130,7 +145,7 @@ internal sealed class CudaModuleEmitter(
         }
         else
         {
-            foreach (var field in structure.Fields)
+            foreach (ref readonly var field in CollectionsMarshal.AsSpan(structure.Fields))
             {
                 output.Write("    ");
                 var fieldType = field.InlineArrayLength > 0
@@ -151,7 +166,7 @@ internal sealed class CudaModuleEmitter(
                 output.WriteLine(";");
             }
         }
-        foreach (var property in structure.Properties)
+        foreach (ref readonly var property in CollectionsMarshal.AsSpan(structure.Properties))
         {
             output.Write("    ");
             output.Write(plan.FormatType(
@@ -162,40 +177,37 @@ internal sealed class CudaModuleEmitter(
             output.Write(plan.GetIdentifier(property.Symbol));
             output.WriteLine(";");
         }
-        output.Write("};");
-        if (structure.Layout is { Pack: not 8 })
+    }
+
+    private void EmitStructLayoutAssertions(
+        TextWriter output,
+        CudaStructPlan structure,
+        CudaStructLayout layout)
+    {
+        output.WriteLine();
+        output.Write("static_assert(sizeof(");
+        output.Write(structure.EmittedName);
+        output.Write(") == ");
+        output.Write(layout.Size.ToString(CultureInfo.InvariantCulture));
+        output.WriteLine(", \"CUDA structure size mismatch\");");
+        output.Write("static_assert(alignof(");
+        output.Write(structure.EmittedName);
+        output.Write(") == ");
+        output.Write(layout.Alignment.ToString(CultureInfo.InvariantCulture));
+        output.WriteLine(", \"CUDA structure alignment mismatch\");");
+        foreach (var field in layout.Fields)
         {
-            output.WriteLine();
-            output.Write("#pragma pack(pop)");
-        }
-        if (structure.Layout is { } layout && plan.RequiresAbiLayout(structure))
-        {
-            output.WriteLine();
-            output.Write("static_assert(sizeof(");
-            output.Write(structure.EmittedName);
-            output.Write(") == ");
-            output.Write(layout.Size.ToString(CultureInfo.InvariantCulture));
-            output.WriteLine(", \"CUDA structure size mismatch\");");
-            output.Write("static_assert(alignof(");
-            output.Write(structure.EmittedName);
-            output.Write(") == ");
-            output.Write(layout.Alignment.ToString(CultureInfo.InvariantCulture));
-            output.WriteLine(", \"CUDA structure alignment mismatch\");");
-            foreach (var field in layout.Fields)
+            if (!layout.IsExplicit)
             {
-                if (!layout.IsExplicit)
-                {
-                    output.Write("static_assert(offsetof(");
-                    output.Write(structure.EmittedName);
-                    output.Write(", ");
-                    output.Write(plan.GetIdentifier(field.Field.Symbol));
-                    output.Write(") == ");
-                    output.Write(field.Offset.ToString(CultureInfo.InvariantCulture));
-                    output.WriteLine(", \"CUDA structure field offset mismatch\");");
-                }
+                output.Write("static_assert(offsetof(");
+                output.Write(structure.EmittedName);
+                output.Write(", ");
+                output.Write(plan.GetIdentifier(field.Field.Symbol));
+                output.Write(") == ");
+                output.Write(field.Offset.ToString(CultureInfo.InvariantCulture));
+                output.WriteLine(", \"CUDA structure field offset mismatch\");");
             }
         }
-        return output.ToString();
     }
 
     private CudaModuleSection EmitFunctionPrototype(CudaFunctionPlan function)
@@ -273,16 +285,12 @@ internal sealed class CudaModuleEmitter(
         var parameterText = parameters.SyntaxTree is { } tree
             ? tree.GetText().ToString(parameters.Span)
             : parameters.ToString();
-        var multiline = parameterText.Contains('\n') || parameterText.Contains('\r');
+        var multiline = parameterText.Contains('\n', StringComparison.Ordinal) || parameterText.Contains('\r', StringComparison.Ordinal);
         output.Write('(');
         var wroteParameter = false;
         if (function.HasInstance)
         {
-            if (multiline)
-            {
-                output.WriteLine();
-                output.Write("    ");
-            }
+            WriteParameterStart(output, multiline, false);
             if (function.IsReadOnlyInstance)
                 output.Write("const ");
             output.Write(plan.FormatType(
@@ -294,17 +302,7 @@ internal sealed class CudaModuleEmitter(
         }
         for (var index = 0; index < parameters.Parameters.Count; index++)
         {
-            if (wroteParameter)
-            {
-                output.Write(',');
-                if (!multiline)
-                    output.Write(' ');
-            }
-            if (multiline)
-            {
-                output.WriteLine();
-                output.Write("    ");
-            }
+            WriteParameterStart(output, multiline, wroteParameter);
             output.Write(plan.FormatParameterType(function, index));
             output.Write(' ');
             output.Write(plan.GetIdentifier(function.Symbol.Parameters[index]));
@@ -312,17 +310,7 @@ internal sealed class CudaModuleEmitter(
         }
         foreach (var capture in function.Captures)
         {
-            if (wroteParameter)
-            {
-                output.Write(',');
-                if (!multiline)
-                    output.Write(' ');
-            }
-            if (multiline)
-            {
-                output.WriteLine();
-                output.Write("    ");
-            }
+            WriteParameterStart(output, multiline, wroteParameter);
             if (capture.ByReference && capture.IsReadOnly)
                 output.Write("const ");
             output.Write(plan.FormatType(
@@ -336,6 +324,21 @@ internal sealed class CudaModuleEmitter(
             wroteParameter = true;
         }
         output.Write(')');
+    }
+
+    private static void WriteParameterStart(TextWriter output, bool multiline, bool hasPrevious)
+    {
+        if (hasPrevious)
+            output.Write(',');
+        if (multiline)
+        {
+            output.WriteLine();
+            output.Write("    ");
+        }
+        else if (hasPrevious)
+        {
+            output.Write(' ');
+        }
     }
 
     private CudaBodyEmission TranslateBody(CudaFunctionPlan function)
@@ -366,8 +369,8 @@ internal sealed class CudaModuleEmitter(
             [new CudaSourceMapEntry(mapped.SourcePath, mapped.SourceLine, generatedLine)]);
     }
 
-    private ImmutableArray<CudaSourceMapEntry> CombineSourceMaps(
-        IReadOnlyList<CudaModuleSection> sections)
+    private static ImmutableArray<CudaSourceMapEntry> CombineSourceMaps(
+        List<CudaModuleSection> sections)
     {
         var result = ImmutableArray.CreateBuilder<CudaSourceMapEntry>();
         var sectionStartLine = 1;
@@ -1412,16 +1415,4 @@ internal sealed class CudaModuleEmitter(
         static __device__ __forceinline__ short csharp2cuda_i16_post_decrement(short& target) { short result = target; target = csharp2cuda_i16_from_bits((unsigned int)(int)target - 1u); return result; }
         #endif
         """;
-}
-
-internal sealed record CudaModuleEmission(
-    string Source,
-    ImmutableArray<CudaEntryPoint> EntryPoints,
-    ImmutableArray<CudaSourceMapEntry> SourceMap);
-
-internal sealed record CudaModuleSection(
-    string Source,
-    ImmutableArray<CudaSourceMapEntry> SourceMap)
-{
-    public static CudaModuleSection Raw(string source) => new(source, []);
 }

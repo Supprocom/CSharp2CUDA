@@ -6,7 +6,7 @@ namespace Supprocom.CSharp2CUDA.Tests;
 public sealed class CudaPortableProfileTests
 {
     [Fact]
-    public void Transpile_FollowsOrdinaryArrayAlgorithm()
+    public void TranspileFollowsOrdinaryArrayAlgorithm()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -49,7 +49,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void ArrayViewContracts_RejectManagedExecution()
+    public void ArrayViewContractsRejectManagedExecution()
     {
         Assert.Throws<InvalidOperationException>(() => InvokeArray());
         Assert.Throws<InvalidOperationException>(() => InvokeReadOnlyArray());
@@ -68,7 +68,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_RejectsWriteThroughReadOnlyArrayView()
+    public void TranspileRejectsWriteThroughReadOnlyArrayView()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -96,11 +96,11 @@ public sealed class CudaPortableProfileTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA031");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA031", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Transpile_AllowsWriteThroughWritableArrayView()
+    public void TranspileAllowsWriteThroughWritableArrayView()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -132,7 +132,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_PreservesArrayNullStateAndSpanDefaultState()
+    public void TranspilePreservesArrayNullStateAndSpanDefaultState()
     {
         const string source = """
             using System;
@@ -174,7 +174,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_UsesNormalReadOnlySpanAndSlice()
+    public void TranspileUsesNormalReadOnlySpanAndSlice()
     {
         const string source = """
             using System;
@@ -215,7 +215,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_ConvertsWritableSpanToReadOnlySpan()
+    public void TranspileConvertsWritableSpanToReadOnlySpan()
     {
         const string source = """
             using System;
@@ -249,7 +249,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_ConvertsArrayViewsToSpanParameters()
+    public void TranspileConvertsArrayViewsToSpanParameters()
     {
         const string source = """
             using System;
@@ -286,7 +286,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_BlocksOrderedPrefixesInsideEmbeddedStatements()
+    public void TranspileBlocksOrderedPrefixesInsideEmbeddedStatements()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -313,7 +313,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_LowersArrayForeach()
+    public void TranspileLowersArrayForeach()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -348,7 +348,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_LowersEnumSwitchWithUnderlyingValues()
+    public void TranspileLowersEnumSwitchWithUnderlyingValues()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -395,7 +395,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_DiscoversOrdinaryStructureAndExpressionBody()
+    public void TranspileDiscoversOrdinaryStructureAndExpressionBody()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -433,7 +433,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_LowersReadOnlyStructureInstanceMethod()
+    public void TranspileLowersReadOnlyStructureInstanceMethod()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -465,7 +465,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_SpecializesClosedGenericMethodConstructions()
+    public void TranspileSpecializesClosedGenericMethodConstructions()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -497,7 +497,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_SpecializesClosedGenericStructure()
+    public void TranspileSpecializesClosedGenericStructure()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -531,7 +531,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_UsesExactRuntimeSymbolsInsteadOfLookalikeNames()
+    public void TranspileUsesExactRuntimeSymbolsInsteadOfLookalikeNames()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -559,10 +559,7 @@ public sealed class CudaPortableProfileTests
         Assert.DoesNotContain("fabs(", result.Source, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void Transpile_MapsExactFrameworkMathAndBitSymbols()
-    {
-        const string source = """
+    private const string TranspileMapsExactFrameworkMathAndBitSymbolsSource1 = """
             using System;
             using System.Numerics;
             using Supprocom.CSharp2CUDA;
@@ -601,6 +598,11 @@ public sealed class CudaPortableProfileTests
             }
             """;
 
+    [Fact]
+    public void TranspileMapsExactFrameworkMathAndBitSymbols()
+    {
+        const string source = TranspileMapsExactFrameworkMathAndBitSymbolsSource1;
+
         var result = CudaTestCompiler.Transpile(source);
 
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
@@ -625,8 +627,9 @@ public sealed class CudaPortableProfileTests
     [InlineData("ref int value")]
     [InlineData("out int value")]
     [InlineData("in int value")]
-    public void Transpile_RejectsManagedOrByReferenceKernelParameters(string parameter)
+    public void TranspileRejectsManagedOrByReferenceKernelParameters(string parameter)
     {
+        ArgumentNullException.ThrowIfNull(parameter);
         var source = $$"""
             using Supprocom.CSharp2CUDA;
 
@@ -645,13 +648,13 @@ public sealed class CudaPortableProfileTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA028");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA028", StringComparison.Ordinal));
     }
 
     [Theory]
     [InlineData("object value = new object();")]
     [InlineData("object value = 1;")]
-    public void Transpile_RejectsManagedAllocationAndObjectStorage(string statement)
+    public void TranspileRejectsManagedAllocationAndObjectStorage(string statement)
     {
         var source = $$"""
             using Supprocom.CSharp2CUDA;
@@ -671,11 +674,11 @@ public sealed class CudaPortableProfileTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA030");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA030", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Transpile_LowersRefInOutAndOptionalArguments()
+    public void TranspileLowersRefInOutAndOptionalArguments()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -714,7 +717,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_LowersOrdinaryExtensionMethod()
+    public void TranspileLowersOrdinaryExtensionMethod()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -743,7 +746,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_LowersDoLoopAndSwitchExpression()
+    public void TranspileLowersDoLoopAndSwitchExpression()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -800,7 +803,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_LowersNoncapturingLocalFunction()
+    public void TranspileLowersNoncapturingLocalFunction()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -832,7 +835,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_LowersStructureConstructor()
+    public void TranspileLowersStructureConstructor()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -879,7 +882,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_LowersInternalStructureAutoProperty()
+    public void TranspileLowersInternalStructureAutoProperty()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -925,7 +928,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_RejectsAutoPropertyAcrossKernelAbi()
+    public void TranspileRejectsAutoPropertyAcrossKernelAbi()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -950,11 +953,11 @@ public sealed class CudaPortableProfileTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA032");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA032", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Transpile_LowersSourceDefinedStructureProperty()
+    public void TranspileLowersSourceDefinedStructureProperty()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -999,7 +1002,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_LowersSourceDefinedStructureIndexer()
+    public void TranspileLowersSourceDefinedStructureIndexer()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -1052,7 +1055,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_LowersSourceDefinedPropertyMutations()
+    public void TranspileLowersSourceDefinedPropertyMutations()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -1098,7 +1101,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_EmitsSequentialKernelAbiLayoutChecks()
+    public void TranspileEmitsSequentialKernelAbiLayoutChecks()
     {
         const string source = """
             using System.Runtime.InteropServices;
@@ -1132,7 +1135,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_EmitsAlignedExplicitKernelAbiStorage()
+    public void TranspileEmitsAlignedExplicitKernelAbiStorage()
     {
         const string source = """
             using System.Runtime.InteropServices;
@@ -1169,7 +1172,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_RejectsUnalignedExplicitKernelAbiField()
+    public void TranspileRejectsUnalignedExplicitKernelAbiField()
     {
         const string source = """
             using System.Runtime.InteropServices;
@@ -1195,11 +1198,11 @@ public sealed class CudaPortableProfileTests
 
         Assert.False(result.Succeeded);
         Assert.Empty(result.Source);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Id == "CS2CUDA032");
+        Assert.Contains(result.Diagnostics, diagnostic => string.Equals(diagnostic.Id, "CS2CUDA032", StringComparison.Ordinal));
     }
 
     [Fact]
-    public void Transpile_ValidatesNestedKernelAbiLayouts()
+    public void TranspileValidatesNestedKernelAbiLayouts()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -1234,7 +1237,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_PreservesNarrowSignedIntegralConversions()
+    public void TranspilePreservesNarrowSignedIntegralConversions()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -1262,7 +1265,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_PreservesFloatingToIntegralConversionBoundaries()
+    public void TranspilePreservesFloatingToIntegralConversionBoundaries()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -1299,7 +1302,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_PreservesLogicalRightShiftForSignedValues()
+    public void TranspilePreservesLogicalRightShiftForSignedValues()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -1323,7 +1326,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_UsesNoncontractingFloatingArithmetic()
+    public void TranspileUsesNoncontractingFloatingArithmetic()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;
@@ -1354,7 +1357,7 @@ public sealed class CudaPortableProfileTests
     }
 
     [Fact]
-    public void Transpile_PreservesNarrowIntegralMutation()
+    public void TranspilePreservesNarrowIntegralMutation()
     {
         const string source = """
             using Supprocom.CSharp2CUDA;

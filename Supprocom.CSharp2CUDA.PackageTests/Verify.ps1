@@ -230,7 +230,8 @@ function Invoke-RepeatCase {
     Assert-NoCompilerPayload -Case $Case
 }
 
-$auditProject = Join-Path $PSScriptRoot 'Audit/Audit.csproj'
+$auditProject = Join-Path (Split-Path -Parent $PSScriptRoot) `
+    'Supprocom.CSharp2CUDA.PackageTests.Audit/Supprocom.CSharp2CUDA.PackageTests.Audit.csproj'
 $auditOutput = Join-Path $runRoot 'Audit/bin/'
 $auditIntermediate = Join-Path $runRoot 'Audit/obj/'
 $auditCommon = @(
