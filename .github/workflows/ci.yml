@@ -58,38 +58,40 @@ jobs:
             -p:ContinuousIntegrationBuild=true
 
       - name: Verify package build integration
-        shell: pwsh
         env:
           CSHARP2CUDA_RUN_DIRECTORY: ${{ runner.temp }}/CSharp2CUDA
         run: >-
-          ./Supprocom.CSharp2CUDA.PackageTests/Verify.ps1
-          -PackageDirectory artifacts/package
-          -RunDirectory $env:CSHARP2CUDA_RUN_DIRECTORY
-          -PackageVersion $env:CSHARP2CUDA_PACKAGE_VERSION
-          -ExpectedCommit $env:GITHUB_SHA
-          -ExpectedBranch $env:GITHUB_REF_NAME
+          dotnet run --project Supprocom.CSharp2CUDA.PackageTests.Verify
+          --configuration Release --no-build --
+          package
+          --package-directory artifacts/package
+          --run-directory "$CSHARP2CUDA_RUN_DIRECTORY"
+          --package-version "$CSHARP2CUDA_PACKAGE_VERSION"
+          --expected-commit "$GITHUB_SHA"
+          --expected-branch "$GITHUB_REF_NAME"
 
       - name: Verify installed tool
-        shell: pwsh
         env:
           CSHARP2CUDA_RUN_DIRECTORY: ${{ runner.temp }}/CSharp2CUDA
         run: >-
-          ./Supprocom.CSharp2CUDA.PackageTests/VerifyTool.ps1
-          -PackageDirectory artifacts/package
-          -RunDirectory $env:CSHARP2CUDA_RUN_DIRECTORY
-          -PackageVersion $env:CSHARP2CUDA_PACKAGE_VERSION
+          dotnet run --project Supprocom.CSharp2CUDA.PackageTests.Verify
+          --configuration Release --no-build --
+          tool
+          --package-directory artifacts/package
+          --run-directory "$CSHARP2CUDA_RUN_DIRECTORY"
+          --package-version "$CSHARP2CUDA_PACKAGE_VERSION"
 
       - name: Verify exact-package source suite
-        shell: pwsh
         env:
           CSHARP2CUDA_RUN_DIRECTORY: ${{ runner.temp }}/CSharp2CUDA
         run: >-
-          ./Supprocom.CSharp2CUDA.PackageTests/VerifySourceSuite.ps1
-          -PackageDirectory artifacts/package
-          -RunDirectory $env:CSHARP2CUDA_RUN_DIRECTORY
-          -PackageVersion $env:CSHARP2CUDA_PACKAGE_VERSION
-          -ResultsDirectory (Join-Path
-          $env:CSHARP2CUDA_RUN_DIRECTORY 'package-source-tests/trx')
+          dotnet run --project Supprocom.CSharp2CUDA.PackageTests.Verify
+          --configuration Release --no-build --
+          source-suite
+          --package-directory artifacts/package
+          --run-directory "$CSHARP2CUDA_RUN_DIRECTORY"
+          --package-version "$CSHARP2CUDA_PACKAGE_VERSION"
+          --results-directory "$CSHARP2CUDA_RUN_DIRECTORY/package-source-tests/trx"
 
       - name: Retain exact packages and verification evidence
         uses: actions/upload-artifact@v4
