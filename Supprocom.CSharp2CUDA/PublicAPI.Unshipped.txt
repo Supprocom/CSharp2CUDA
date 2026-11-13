@@ -1,1 +1,3 @@
 #nullable enable
+Supprocom.CSharp2CUDA.CudaTranspilationOptions.MaxInlineArrayLength.get -> int
+Supprocom.CSharp2CUDA.CudaTranspilationOptions.MaxInlineArrayLength.init -> void

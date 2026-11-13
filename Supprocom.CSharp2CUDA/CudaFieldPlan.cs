@@ -15,4 +15,16 @@ internal sealed record CudaFieldPlan(
     FieldDeclarationSyntax Declaration,
     VariableDeclaratorSyntax Variable,
     IFieldSymbol Symbol,
-    int InlineArrayLength);
+    int InlineArrayLength)
+{
+    // A pointer-typed field with an inline length is a fixed buffer or [CudaInlineArray] storage
+    // and its element is the pointee. The element field of an [InlineArray] structure already has
+    // the element type.
+    public ITypeSymbol ElementType =>
+        InlineArrayLength > 0 && Symbol.Type is IPointerTypeSymbol pointer
+            ? pointer.PointedAtType
+            : Symbol.Type;
+
+    public bool IsInlineArrayElementField =>
+        InlineArrayLength > 0 && Symbol.Type is not IPointerTypeSymbol;
+}

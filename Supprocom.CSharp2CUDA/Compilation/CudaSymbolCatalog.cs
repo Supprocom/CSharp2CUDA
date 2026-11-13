@@ -28,6 +28,8 @@ internal sealed class CudaSymbolCatalog
             "System.Runtime.InteropServices.StructLayoutAttribute");
         FieldOffsetAttributeType = compilation.GetTypeByMetadataName(
             "System.Runtime.InteropServices.FieldOffsetAttribute");
+        InlineArrayStructAttributeType = compilation.GetTypeByMetadataName(
+            CudaEmissionPlan.InlineArrayStructAttributeName);
         CudaLogMethod = ResolveMethod(
             CudaType,
             nameof(Cuda.Log),
@@ -341,6 +343,8 @@ internal sealed class CudaSymbolCatalog
 
     public INamedTypeSymbol? FieldOffsetAttributeType { get; }
 
+    public INamedTypeSymbol? InlineArrayStructAttributeType { get; }
+
     public IMethodSymbol? CudaLogMethod { get; }
 
     public bool IsCudaType(ITypeSymbol? type) => IsType(type, CudaType);
@@ -387,14 +391,19 @@ internal sealed class CudaSymbolCatalog
             ? IsType(type, attributeType)
             : string.Equals(metadataName, "System.Runtime.InteropServices.StructLayoutAttribute"
 , StringComparison.Ordinal) ? IsType(type, StructLayoutAttributeType)
-                : string.Equals(metadataName, "System.Runtime.InteropServices.FieldOffsetAttribute", StringComparison.Ordinal) &&
-                    IsType(type, FieldOffsetAttributeType);
+                : string.Equals(metadataName, "System.Runtime.InteropServices.FieldOffsetAttribute", StringComparison.Ordinal)
+                    ? IsType(type, FieldOffsetAttributeType)
+                    : string.Equals(metadataName, CudaEmissionPlan.InlineArrayStructAttributeName, StringComparison.Ordinal) &&
+                        IsType(type, InlineArrayStructAttributeType);
 
     public AttributeData? GetStructLayoutAttribute(INamedTypeSymbol type) =>
         GetExactAttribute(type, StructLayoutAttributeType);
 
     public AttributeData? GetFieldOffsetAttribute(IFieldSymbol field) =>
         GetExactAttribute(field, FieldOffsetAttributeType);
+
+    public AttributeData? GetInlineArrayStructAttribute(INamedTypeSymbol type) =>
+        GetExactAttribute(type, InlineArrayStructAttributeType);
 
     private void AddRuntime(
         CSharpCompilation compilation,

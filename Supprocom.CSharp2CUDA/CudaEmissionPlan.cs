@@ -20,6 +20,8 @@ internal sealed class CudaEmissionPlan
         "Supprocom.CSharp2CUDA.CudaExternalDeviceAttribute";
     internal const string InlineArrayAttributeName =
         "Supprocom.CSharp2CUDA.CudaInlineArrayAttribute";
+    internal const string InlineArrayStructAttributeName =
+        "System.Runtime.CompilerServices.InlineArrayAttribute";
     internal const string ConstantAttributeName = "Supprocom.CSharp2CUDA.CudaConstantAttribute";
     internal const string DeviceAttributeName = "Supprocom.CSharp2CUDA.CudaDeviceAttribute";
     internal const string GlobalAttributeName = "Supprocom.CSharp2CUDA.CudaGlobalAttribute";
@@ -63,7 +65,8 @@ internal sealed class CudaEmissionPlan
         SyntaxKind.PrivateKeyword,
         SyntaxKind.PublicKeyword,
         SyntaxKind.ProtectedKeyword,
-        SyntaxKind.ReadOnlyKeyword
+        SyntaxKind.ReadOnlyKeyword,
+        SyntaxKind.FixedKeyword
     ];
 
     private static readonly HashSet<SyntaxKind> ConstantFieldModifiers =
@@ -86,6 +89,8 @@ internal sealed class CudaEmissionPlan
     ];
 
     private readonly CSharpCompilation compilation;
+    private readonly IReadOnlyList<TypeDeclarationSyntax> topLevelStructs;
+    private readonly CudaTranspilationOptions options;
     private readonly ImmutableArray<Diagnostic>.Builder diagnostics;
     private readonly CudaSymbolCatalog symbols;
     private readonly Dictionary<ISymbol, string> identifierNames =
@@ -116,9 +121,13 @@ internal sealed class CudaEmissionPlan
     private CudaEmissionPlan(
         CSharpCompilation compilation,
         IReadOnlyList<ClassDeclarationSyntax> units,
+        IReadOnlyList<TypeDeclarationSyntax> topLevelStructs,
+        CudaTranspilationOptions options,
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
         this.compilation = compilation;
+        this.topLevelStructs = topLevelStructs;
+        this.options = options;
         this.diagnostics = diagnostics;
         symbols = new CudaSymbolCatalog(compilation);
         Units = units.Select(unit => new CudaUnitPlan(
@@ -142,9 +151,11 @@ internal sealed class CudaEmissionPlan
     public static CudaEmissionPlan Create(
         CSharpCompilation compilation,
         IReadOnlyList<ClassDeclarationSyntax> units,
+        IReadOnlyList<TypeDeclarationSyntax> topLevelStructs,
+        CudaTranspilationOptions options,
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
-        var plan = new CudaEmissionPlan(compilation, units, diagnostics);
+        var plan = new CudaEmissionPlan(compilation, units, topLevelStructs, options, diagnostics);
         plan.Build();
         return plan;
     }
@@ -646,6 +657,8 @@ string.Equals(method.Name, "AsSpan", StringComparison.Ordinal) &&
 
     public bool IsCudaInt32Type(ITypeSymbol? type) => symbols.IsCudaInt32Type(type);
 
+    public bool IsIndexType(ITypeSymbol? type) => symbols.IsIndexType(type);
+
     public bool TryGetRuntimeField(IFieldSymbol field, out string? code) =>
         symbols.TryGetRuntimeField(field, out code);
 
@@ -696,6 +709,8 @@ string.Equals(method.Name, "AsSpan", StringComparison.Ordinal) &&
 
     public bool UsesTupleTypes { get; private set; }
 
+    public bool UsesInlineArrayIndex { get; set; }
+
     private void Build()
     {
         var structures = new List<CudaStructPlan>();
@@ -733,6 +748,9 @@ string.Equals(method.Name, "AsSpan", StringComparison.Ordinal) &&
                 }
             }
         }
+
+        foreach (var structure in topLevelStructs)
+            RegisterStruct(GetSemanticModel(structure), structure, structures);
 
         DiscoverReachableFunctions(functions);
         DiscoverReachableStructs(functions, structures);
@@ -1254,7 +1272,8 @@ string.Equals(method.Name, "AsSpan", StringComparison.Ordinal) &&
             !HasOnlyAttributes(
                 syntax.AttributeLists,
                 ExternalAttributeName,
-                StructLayoutAttributeName))
+                StructLayoutAttributeName,
+                InlineArrayStructAttributeName))
         {
             ReportUnsupportedSyntax(syntax);
         }
@@ -1270,8 +1289,86 @@ string.Equals(method.Name, "AsSpan", StringComparison.Ordinal) &&
                 structure.Symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat)));
         }
 
+        ValidateInlineArrayStruct(structure);
         foreach (var member in syntax.Members)
             ValidateStructMember(structure, member);
+    }
+
+    private void ValidateInlineArrayStruct(CudaStructPlan structure)
+    {
+        var attribute = symbols.GetInlineArrayStructAttribute(structure.Symbol);
+        if (attribute is null)
+            return;
+        structure.IsInlineArray = true;
+
+        var name = structure.Symbol.ToDisplayString();
+        var location = structure.Syntax.Identifier.GetLocation();
+        var valid = true;
+        if (symbols.GetStructLayoutAttribute(structure.Symbol) is
+            { ConstructorArguments: [{ Value: int layoutKind and not 0 }] })
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InvalidInlineArrayLayout,
+                location,
+                name,
+                layoutKind switch { 2 => "explicit", 3 => "automatic", _ => "unsupported" }));
+            valid = false;
+        }
+
+        var length = attribute.ConstructorArguments is [{ Value: int declaredLength }]
+            ? declaredLength
+            : 0;
+        valid &= ValidateInlineArrayLength(name, length, location);
+
+        IFieldSymbol? element = null;
+        foreach (var member in structure.Symbol.GetMembers())
+        {
+            if (member is IFieldSymbol { IsStatic: false } candidate)
+            {
+                element = candidate;
+                break;
+            }
+        }
+        if (element is null)
+        {
+            ReportUnsupportedSyntax(structure.Syntax);
+            valid = false;
+        }
+        else if (!IsSupportedInlineArrayStructElement(element.Type))
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InvalidInlineArrayElement,
+                location,
+                name,
+                element.Type.ToDisplayString()));
+            valid = false;
+        }
+
+        structure.InlineArrayLength = valid ? length : 0;
+    }
+
+    private bool ValidateInlineArrayLength(string name, int length, Location location)
+    {
+        if (length <= 0)
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InvalidInlineArrayLength,
+                location,
+                name,
+                length));
+            return false;
+        }
+        if (length > options.MaxInlineArrayLength)
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InlineArrayLengthLimit,
+                location,
+                name,
+                length,
+                options.MaxInlineArrayLength));
+            return false;
+        }
+        return true;
     }
 
     private void ValidateStructMember(CudaStructPlan structure, MemberDeclarationSyntax member)
@@ -1329,11 +1426,48 @@ string.Equals(method.Name, "AsSpan", StringComparison.Ordinal) &&
             .FirstOrDefault(candidate => SymbolEqualityComparer.Default.Equals(
                 candidate.OriginalDefinition,
                 definitionField)) ?? definitionField;
-        RegisterIdentifier(symbol, variable.Identifier.ValueText, variable.Identifier.GetLocation());
+        if (structure.IsInlineArray &&
+            !symbol.IsStatic &&
+            CudaIdentifier.IsValidInlineArrayElement(variable.Identifier.ValueText))
+        {
+            // The element field of an [InlineArray] structure is never named by translated code.
+            identifierNames[symbol] = variable.Identifier.ValueText;
+        }
+        else
+        {
+            RegisterIdentifier(symbol, variable.Identifier.ValueText, variable.Identifier.GetLocation());
+        }
         identifierNames[definitionField] = GetIdentifier(symbol);
         var inlineArray = GetAttribute(symbol, InlineArrayAttributeName);
         var inlineArrayLength = 0;
-        if (inlineArray is not null &&
+        if (symbol.IsFixedSizeBuffer)
+        {
+            if (inlineArray is null &&
+                !structure.IsExternal &&
+                symbol.Type is IPointerTypeSymbol fixedPointer &&
+                IsSupportedInlineArrayElement(fixedPointer.PointedAtType))
+            {
+                if (ValidateInlineArrayLength(symbol.Name, symbol.FixedSize, field.GetLocation()))
+                {
+                    inlineArrayLength = symbol.FixedSize;
+                    FormatType(fixedPointer.PointedAtType, false, field.Declaration.Type.GetLocation());
+                }
+            }
+            else
+            {
+                diagnostics.Add(Diagnostic.Create(
+                    CudaDiagnostics.InvalidInlineArray,
+                    field.GetLocation(),
+                    symbol.Name));
+            }
+        }
+        else if (structure.IsInlineArray && !symbol.IsStatic && inlineArray is null)
+        {
+            inlineArrayLength = structure.InlineArrayLength;
+            if (inlineArrayLength > 0)
+                FormatType(symbol.Type, false, field.Declaration.Type.GetLocation());
+        }
+        else if (inlineArray is not null &&
             !structure.IsExternal &&
             symbol.Type is IPointerTypeSymbol pointer &&
             IsSupportedInlineArrayElement(pointer.PointedAtType) &&
@@ -1534,11 +1668,70 @@ string.Equals(method.Name, "AsSpan", StringComparison.Ordinal) &&
             !elementPlan.IsExternal;
     }
 
+    private bool IsSupportedInlineArrayStructElement(ITypeSymbol elementType) =>
+        IsSupportedInlineArrayElement(elementType) ||
+        elementType is INamedTypeSymbol
+        {
+            TypeKind: TypeKind.Enum,
+            EnumUnderlyingType: { } underlyingType
+        } &&
+        IsSupportedInlineArrayElement(underlyingType);
+
+    public bool HasInlineArrayLayout(CudaStructPlan structure) =>
+        ContainsInlineArray(structure, new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default));
+
+    private bool ContainsInlineArray(
+        CudaStructPlan structure,
+        HashSet<INamedTypeSymbol> visited)
+    {
+        if (!visited.Add(structure.Symbol))
+            return false;
+        if (structure.IsInlineArray)
+            return true;
+        foreach (ref readonly var field in CollectionsMarshal.AsSpan(structure.Fields))
+        {
+            if (field.Symbol.IsFixedSizeBuffer ||
+                field.ElementType is INamedTypeSymbol named &&
+                structPlans.TryGetValue(named, out var nested) &&
+                ContainsInlineArray(nested, visited))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public bool TryGetInlineArray(
+        ITypeSymbol? type,
+        out CudaFieldPlan element,
+        out int length)
+    {
+        if (type is INamedTypeSymbol named &&
+            TryGetStruct(named, out var structure) &&
+            structure.InlineArrayLength > 0)
+        {
+            foreach (ref readonly var field in CollectionsMarshal.AsSpan(structure.Fields))
+            {
+                if (field.IsInlineArrayElementField && !field.Symbol.IsStatic)
+                {
+                    element = field;
+                    length = structure.InlineArrayLength;
+                    return true;
+                }
+            }
+        }
+        element = null!;
+        length = 0;
+        return false;
+    }
+
     private void ValidateStructLayouts(IEnumerable<CudaStructPlan> structures)
     {
         var layoutEngine = new CudaLayoutEngine(symbols, structPlans);
         foreach (var structure in structures.Where(static item => !item.IsExternal))
         {
+            if (structure.IsInlineArray && structure.InlineArrayLength == 0)
+                continue;
             if (structure.Properties.Count > 0 && !IsKernelAbiType(structure.Symbol))
                 continue;
             if (layoutEngine.TryGetLayout(structure, out var layout, out var reason))
@@ -3348,9 +3541,7 @@ string.Equals(method.Name, nameof(Cuda.DynamicSharedView), StringComparison.Ordi
                          static item => item.Symbol.Name,
                          StringComparer.Ordinal))
             {
-                var fieldType = field.InlineArrayLength > 0
-                    ? ((IPointerTypeSymbol)field.Symbol.Type).PointedAtType
-                    : field.Symbol.Type;
+                var fieldType = field.ElementType;
                 if (field.Symbol.IsStatic ||
                     fieldType is IPointerTypeSymbol ||
                     fieldType is not INamedTypeSymbol named ||

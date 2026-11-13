@@ -148,7 +148,7 @@ public static class CudaTranspiler
             return new CudaTranspilationResult(string.Empty, diagnostics.ToImmutable());
         }
 
-        var plan = CudaEmissionPlan.Create(compilation, units, diagnostics);
+        var plan = CudaEmissionPlan.Create(compilation, units, selection.Structures, options, diagnostics);
         if (diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
             return new CudaTranspilationResult(string.Empty, diagnostics.ToImmutable());
 
@@ -205,6 +205,12 @@ public static class CudaTranspiler
                 "SourceRoot must be a fully qualified path when it is specified.",
                 nameof(options));
         }
+        if (options.MaxInlineArrayLength <= 0)
+        {
+            throw new ArgumentException(
+                "MaxInlineArrayLength must be greater than zero.",
+                nameof(options));
+        }
     }
 
     private static TranslationUnitSelection FindTranslationUnits(
@@ -214,6 +220,7 @@ public static class CudaTranspiler
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
         var units = new List<ClassDeclarationSyntax>();
+        var structures = new List<TypeDeclarationSyntax>();
         string? requestedOutputPath = null;
 
         foreach (var tree in compilation.SyntaxTrees)
@@ -225,6 +232,12 @@ public static class CudaTranspiler
 
             foreach (var member in EnumerateTopLevelMembers(root))
             {
+                if (!attributedClassesOnly && TryGetStructDeclaration(member, out var structure))
+                {
+                    structures.Add(structure);
+                    continue;
+                }
+
                 if (member is not ClassDeclarationSyntax candidate)
                 {
                     var declaredSymbol = model.GetDeclaredSymbol(member);
@@ -268,7 +281,23 @@ public static class CudaTranspiler
             }
         }
 
-        return new TranslationUnitSelection(units, requestedOutputPath);
+        return new TranslationUnitSelection(units, structures, requestedOutputPath);
+    }
+
+    private static bool TryGetStructDeclaration(
+        MemberDeclarationSyntax member,
+        out TypeDeclarationSyntax structure)
+    {
+        if (member is TypeDeclarationSyntax
+            {
+                RawKind: (int)SyntaxKind.StructDeclaration or (int)SyntaxKind.RecordStructDeclaration
+            } declaration)
+        {
+            structure = declaration;
+            return true;
+        }
+        structure = null!;
+        return false;
     }
 
     private static void ValidateNestedTranslationUnitMarkers(
@@ -469,5 +498,6 @@ public static class CudaTranspiler
 
     private sealed record TranslationUnitSelection(
         List<ClassDeclarationSyntax> Units,
+        List<TypeDeclarationSyntax> Structures,
         string? RequestedOutputPath);
 }

@@ -1130,8 +1130,9 @@ public sealed class CudaPortableProfileTests
         Assert.True(result.Succeeded, FormatDiagnostics(result.Diagnostics));
         Assert.Contains("#pragma pack(push, 4)", result.Source, StringComparison.Ordinal);
         Assert.Contains("static_assert(sizeof(Entry) == 8", result.Source, StringComparison.Ordinal);
-        Assert.Contains("offsetof(Entry, Kind) == 0", result.Source, StringComparison.Ordinal);
-        Assert.Contains("offsetof(Entry, Value) == 4", result.Source, StringComparison.Ordinal);
+        Assert.Contains("__builtin_offsetof(Entry, Kind) == 0", result.Source, StringComparison.Ordinal);
+        Assert.Contains("__builtin_offsetof(Entry, Value) == 4", result.Source, StringComparison.Ordinal);
+        Assert.DoesNotContain("stddef.h", result.Source, StringComparison.Ordinal);
     }
 
     [Fact]

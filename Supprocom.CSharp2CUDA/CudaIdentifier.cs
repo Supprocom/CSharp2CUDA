@@ -91,6 +91,15 @@ internal static class CudaIdentifier
         return true;
     }
 
+    // The element field of an [InlineArray] structure is usually named with a leading underscore,
+    // which IsValid rejects. Translated code never names that field, so a leading underscore is
+    // accepted when the rest is a valid identifier that starts with a lowercase letter.
+    public static bool IsValidInlineArrayElement(string name) =>
+        name.Length > 1 &&
+        name[0] == '_' &&
+        char.IsAsciiLetterLower(name[1]) &&
+        IsValid(name[1..]);
+
     private static bool IsAsciiLetter(char character) =>
         character is >= 'A' and <= 'Z' or >= 'a' and <= 'z';
 }

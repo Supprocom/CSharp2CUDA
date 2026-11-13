@@ -12,3 +12,8 @@ CS2CUDA037 | Supprocom.CSharp2CUDA | Error | Reports a pattern outside the porta
 CS2CUDA038 | Supprocom.CSharp2CUDA | Error | Reports a user-defined operator or conversion without a portable reachable body.
 CS2CUDA039 | Supprocom.CSharp2CUDA | Error | Reports a range or Span operation whose required semantics cannot be preserved.
 CS2CUDA040 | Supprocom.CSharp2CUDA | Error | Reports fixed local storage that exceeds the deterministic per-declaration element limit.
+CS2CUDA041 | Supprocom.CSharp2CUDA | Error | Reports an inline array whose element type is not a supported primitive, enumeration, or emitted structure.
+CS2CUDA042 | Supprocom.CSharp2CUDA | Error | Reports an inline array whose length is not positive.
+CS2CUDA043 | Supprocom.CSharp2CUDA | Error | Reports an inline array that exceeds the configured MaxInlineArrayLength.
+CS2CUDA044 | Supprocom.CSharp2CUDA | Error | Reports an inline array structure whose layout is not sequential.
+CS2CUDA045 | Supprocom.CSharp2CUDA | Error | Reports an inline array conversion to Span or ReadOnlySpan.

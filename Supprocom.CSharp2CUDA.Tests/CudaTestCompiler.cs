@@ -8,6 +8,9 @@ namespace Supprocom.CSharp2CUDA.Tests;
 
 internal static class CudaTestCompiler
 {
+    private static readonly int DefaultMaxInlineArrayLength =
+        new CudaTranspilationOptions().MaxInlineArrayLength;
+
     private static readonly Lazy<ImmutableArray<MetadataReference>> References =
         new(CreateReferences, LazyThreadSafetyMode.ExecutionAndPublication);
 
@@ -47,6 +50,21 @@ internal static class CudaTestCompiler
                 nullableContextOptions: NullableContextOptions.Enable));
     }
 
+    public static CSharpCompilation AddSource(
+        CSharpCompilation compilation,
+        string source,
+        string path)
+    {
+        ArgumentNullException.ThrowIfNull(compilation);
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        return compilation.AddSyntaxTrees(CSharpSyntaxTree.ParseText(
+            SourceText.From(source, Encoding.UTF8),
+            new CSharpParseOptions(LanguageVersion.CSharp14),
+            path));
+    }
+
     public static CudaTranspilationResult Transpile(
         CSharpCompilation compilation,
         CudaTranspilationOptions? options = null) =>
@@ -58,6 +76,7 @@ internal static class CudaTestCompiler
             NewLine = options?.NewLine ?? "\n",
             EmitLineDirectives = options?.EmitLineDirectives ?? true,
             SourceRoot = options?.SourceRoot,
+            MaxInlineArrayLength = options?.MaxInlineArrayLength ?? DefaultMaxInlineArrayLength,
             TranspileAttributedClassesOnly = true
         };
 

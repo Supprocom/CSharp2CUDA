@@ -214,7 +214,8 @@ internal sealed class CudaOperationLowerer(
             statements.Add(new CudaVariableDeclarationStatementIr(
                 FormatType(
                     local.Type,
-                    deepReadOnly || viewMutability == CudaViewMutability.ReadOnly,
+                    deepReadOnly || viewMutability == CudaViewMutability.ReadOnly ||
+                    initializer?.Value.PointsToReadOnly == true && local.Type is IPointerTypeSymbol,
                     declaration.Type.GetLocation()),
                 plan.GetIdentifier(local),
                 initializer?.Value,
@@ -538,7 +539,10 @@ internal sealed class CudaOperationLowerer(
                 pointerType,
                 place.Effects,
                 false,
-                operation.Syntax.GetLocation()));
+                operation.Syntax.GetLocation())
+            {
+                PointsToReadOnly = place.IsReadOnly
+            });
     }
 
     private CudaExpressionIr LowerOperation(IOperation operation)
@@ -563,6 +567,7 @@ internal sealed class CudaOperationLowerer(
             IPropertyReferenceOperation property => LowerProperty(property),
             IArrayElementReferenceOperation element => LowerElement(element),
             IImplicitIndexerReferenceOperation indexer => LowerImplicitIndexer(indexer),
+            IInlineArrayAccessOperation inlineArray => LowerInlineArrayAccess(inlineArray),
             IAddressOfOperation address => LowerAddress(address),
             IInvocationOperation invocation => LowerInvocation(invocation),
             IArrayCreationOperation array => ManagedAllocationExpression(array),
@@ -737,7 +742,8 @@ internal sealed class CudaOperationLowerer(
                     false,
                     field.Syntax.GetLocation()));
         }
-        if (!plan.TryGetIdentifier(field.Field, out var name))
+        if (!plan.TryGetIdentifier(field.Field, out var name) ||
+            IsInlineArrayElementField(field.Field))
         {
             ReportUnsupported(field.Syntax);
             return InvalidExpression(field.Syntax.GetLocation());
@@ -800,7 +806,10 @@ internal sealed class CudaOperationLowerer(
                 field.Type,
                 CudaEffectIr.Read,
                 false,
-                field.Syntax.GetLocation()));
+                field.Syntax.GetLocation())
+            {
+                PointsToReadOnly = IsInlineArrayBufferField(field.Field) && IsReadOnlyPlace(field)
+            });
     }
 
     private CudaExpressionIr LowerParameterReference(IParameterReferenceOperation parameter)
@@ -942,6 +951,19 @@ internal sealed class CudaOperationLowerer(
             {
                 ViewMutability = target.ViewMutability
             });
+    }
+
+    private CudaExpressionIr LowerInlineArrayAccess(IInlineArrayAccessOperation access)
+    {
+        var place = LowerInlineArrayAccessPlace(access);
+        return new CudaExpressionIr(
+            place.Prefix,
+            new CudaValueIr(
+                place.AccessCode,
+                access.Type,
+                place.Effects,
+                false,
+                access.Syntax.GetLocation()));
     }
 
     private CudaExpressionIr LowerRangeAccess(
@@ -1125,7 +1147,10 @@ string.Equals(conversion.Type?.ContainingNamespace?.ToDisplayString(), "System",
                 elementType,
                 CudaEffectIr.Read,
                 false,
-                element.Syntax.GetLocation()));
+                element.Syntax.GetLocation())
+            {
+                PointsToReadOnly = IsReadOnlyPointerExpression(element)
+            });
     }
 
     private CudaExpressionIr LowerPointerElement(ElementAccessExpressionSyntax syntax)
@@ -1166,7 +1191,10 @@ string.Equals(conversion.Type?.ContainingNamespace?.ToDisplayString(), "System",
                 indirection.Type,
                 CudaEffectIr.Read,
                 false,
-                indirection.Syntax.GetLocation()));
+                indirection.Syntax.GetLocation())
+            {
+                PointsToReadOnly = IsReadOnlyPointerExpression(indirection)
+            });
     }
 
     private CudaExpressionIr LowerAddress(IAddressOfOperation address)
@@ -1179,7 +1207,10 @@ string.Equals(conversion.Type?.ContainingNamespace?.ToDisplayString(), "System",
                 address.Type,
                 place.Effects,
                 false,
-                address.Syntax.GetLocation()));
+                address.Syntax.GetLocation())
+            {
+                PointsToReadOnly = place.IsReadOnly
+            });
     }
 
     private CudaExpressionIr LowerInvocation(
@@ -1353,7 +1384,10 @@ string.Equals(conversion.Type?.ContainingNamespace?.ToDisplayString(), "System",
                 resultType,
                 effects,
                 false,
-                invocation.Syntax.GetLocation()));
+                invocation.Syntax.GetLocation())
+            {
+                PointsToReadOnly = preserveReference && targetMethod.ReturnsByRefReadonly
+            });
     }
 
     private void PopulateInvocationArguments(
@@ -1961,6 +1995,14 @@ string.Equals(conversion.Type?.ContainingNamespace?.ToDisplayString(), "System",
 
     private CudaExpressionIr LowerConversion(IConversionOperation conversion)
     {
+        if (conversion.GetConversion().IsInlineArray)
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InlineArraySpanConversion,
+                conversion.Syntax.GetLocation(),
+                conversion.Operand.Syntax.ToString()));
+            return InvalidExpression(conversion.Syntax.GetLocation());
+        }
         if (conversion.IsChecked)
         {
             ReportUnsupported(conversion.Syntax);
@@ -2250,7 +2292,10 @@ string.Equals(conversion.Type?.ContainingNamespace?.ToDisplayString(), "System",
                 binary.Type,
                 effects,
                 false,
-                binary.Syntax.GetLocation()));
+                binary.Syntax.GetLocation())
+            {
+                PointsToReadOnly = IsReadOnlyPointerExpression(binary)
+            });
     }
 
     private bool TryLowerViewNullComparison(
@@ -3921,7 +3966,10 @@ string.Equals(conversion.Type?.ContainingNamespace?.ToDisplayString(), "System",
             instance.Syntax.GetLocation()));
     }
 
-    private CudaPlaceIr LowerPlace(IOperation operation)
+    private CudaPlaceIr LowerPlace(IOperation operation) =>
+        LowerPlaceCore(operation) with { IsReadOnly = IsReadOnlyPlace(operation) };
+
+    private CudaPlaceIr LowerPlaceCore(IOperation operation)
     {
         while (operation is IConversionOperation { Conversion.IsIdentity: true } conversion)
             operation = conversion.Operand;
@@ -4001,6 +4049,8 @@ string.Equals(conversion.Type?.ContainingNamespace?.ToDisplayString(), "System",
             case IImplicitIndexerReferenceOperation indexer when
                 indexer.Argument is not IRangeOperation:
                 return LowerImplicitIndexerPlace(indexer);
+            case IInlineArrayAccessOperation inlineArray:
+                return LowerInlineArrayAccessPlace(inlineArray);
             case IPropertyReferenceOperation property when
                 plan.TryGetProperty(property.Property, out var propertyPlan) &&
                 property.Instance is not null:
@@ -4076,7 +4126,8 @@ string.Equals(conversion.Type?.ContainingNamespace?.ToDisplayString(), "System",
                 CudaEffectIr.Read,
                 field.Syntax.GetLocation());
         }
-        if (!plan.TryGetIdentifier(field.Field, out var name))
+        if (!plan.TryGetIdentifier(field.Field, out var name) ||
+            IsInlineArrayElementField(field.Field))
         {
             ReportUnsupported(field.Syntax);
             name = "csharp2cuda_invalid";
@@ -4172,8 +4223,7 @@ string.Equals(conversion.Type?.ContainingNamespace?.ToDisplayString(), "System",
             $"((unsigned char*)({instanceAddress}) + {layout.Offset.ToString(CultureInfo.InvariantCulture)})";
         if (fieldPlan.InlineArrayLength > 0)
         {
-            var elementType = ((IPointerTypeSymbol)fieldPlan.Symbol.Type).PointedAtType;
-            var pointerType = FormatType(elementType, false, field.Syntax.GetLocation()) + "*";
+            var pointerType = FormatType(fieldPlan.ElementType, false, field.Syntax.GetLocation()) + "*";
             var address = $"(({pointerType})({byteAddress}))";
             return new CudaPlaceIr(
                 prefix.ToImmutable(),
@@ -4244,6 +4294,75 @@ string.Equals(conversion.Type?.ContainingNamespace?.ToDisplayString(), "System",
         {
             ViewMutability = target.ViewMutability
         };
+    }
+
+    private CudaPlaceIr LowerInlineArrayAccessPlace(IInlineArrayAccessOperation access)
+    {
+        if (plan.IsSpanType(access.Type, out _))
+        {
+            diagnostics.Add(Diagnostic.Create(
+                CudaDiagnostics.InlineArraySpanConversion,
+                access.Syntax.GetLocation(),
+                access.Syntax.ToString()));
+            return InvalidInlineArrayPlace(access);
+        }
+        if (!plan.TryGetInlineArray(
+                ResolveType(access.Instance.Type),
+                out var element,
+                out var length))
+        {
+            ReportUnsupported(access.Syntax);
+            return InvalidInlineArrayPlace(access);
+        }
+
+        var prefix = ImmutableArray.CreateBuilder<CudaStatementIr>();
+        string instanceCode;
+        if (IsAddressable(access.Instance))
+        {
+            var instance = LowerPlace(access.Instance);
+            prefix.AddRange(instance.Prefix);
+            instanceCode = instance.AccessCode;
+        }
+        else
+        {
+            instanceCode = Materialize(LowerOperation(access.Instance), prefix).Code;
+        }
+        var lengthCode = length.ToString(CultureInfo.InvariantCulture);
+        var indexCode = LowerInlineArrayIndex(access.Argument, lengthCode, prefix);
+        var elementAccess =
+            $"({instanceCode}).{plan.GetIdentifier(element.Symbol)}" +
+            $"[csharp2cuda_inline_index({indexCode}, {lengthCode})]";
+        plan.UsesInlineArrayIndex = true;
+        return new CudaPlaceIr(
+            prefix.ToImmutable(),
+            elementAccess,
+            $"&({elementAccess})",
+            access.Type!,
+            CudaEffectIr.Read | CudaEffectIr.Trap,
+            access.Syntax.GetLocation());
+    }
+
+    private static CudaPlaceIr InvalidInlineArrayPlace(IInlineArrayAccessOperation access) => new(
+        [],
+        "csharp2cuda_invalid",
+        "nullptr",
+        access.Type!,
+        CudaEffectIr.None,
+        access.Syntax.GetLocation());
+
+    private string LowerInlineArrayIndex(
+        IOperation argument,
+        string lengthCode,
+        ImmutableArray<CudaStatementIr>.Builder prefix)
+    {
+        while (argument is IConversionOperation conversion && plan.IsIndexType(conversion.Type))
+            argument = conversion.Operand;
+        if (argument is IUnaryOperation { OperatorKind: UnaryOperatorKind.Hat } fromEnd)
+        {
+            var value = Materialize(LowerOperation(fromEnd.Operand), prefix);
+            return $"csharp2cuda_index_from_end({lengthCode}, {value.Code})";
+        }
+        return Materialize(LowerOperation(argument), prefix).Code;
     }
 
     private CudaPlaceIr LowerIndexerPlace(IPropertyReferenceOperation property)
@@ -4338,7 +4457,8 @@ string.Equals(conversion.Type?.ContainingNamespace?.ToDisplayString(), "System",
         prefix.Add(new CudaVariableDeclarationStatementIr(
             FormatType(
                 value.Type,
-                value.ViewMutability == CudaViewMutability.ReadOnly,
+                value.ViewMutability == CudaViewMutability.ReadOnly ||
+                value.PointsToReadOnly && value.Type is IPointerTypeSymbol,
                 value.Location),
             name,
             value,
@@ -4375,7 +4495,8 @@ string.Equals(conversion.Type?.ContainingNamespace?.ToDisplayString(), "System",
         prefix.Add(new CudaVariableDeclarationStatementIr(
             FormatType(
                 value.Type,
-                value.ViewMutability == CudaViewMutability.ReadOnly,
+                value.ViewMutability == CudaViewMutability.ReadOnly ||
+                value.PointsToReadOnly && value.Type is IPointerTypeSymbol,
                 value.Location),
             name,
             value,
@@ -4403,7 +4524,10 @@ string.Equals(conversion.Type?.ContainingNamespace?.ToDisplayString(), "System",
             pointerType,
             place.Effects,
             false,
-            place.Location);
+            place.Location)
+        {
+            PointsToReadOnly = place.IsReadOnly
+        };
         return MaterializeValue(value, prefix);
     }
 
@@ -5110,6 +5234,88 @@ string.Equals(conversion.Type?.ContainingNamespace?.ToDisplayString(), "System",
     private static bool IsPointerIndirection(IOperation operation) =>
         operation.Syntax.IsKind(SyntaxKind.PointerIndirectionExpression);
 
+    // A place is read-only when it is an in parameter, a ref readonly local, a readonly field
+    // outside constructors, a member of a read-only place, or storage reached through a
+    // [CudaReadOnly] pointer.
+    private bool IsReadOnlyPlace(IOperation operation)
+    {
+        while (operation is IConversionOperation { Conversion.IsIdentity: true } conversion)
+            operation = conversion.Operand;
+        if (IsPointerIndirection(operation))
+            return IsReadOnlyPointerExpression(operation.ChildOperations.First());
+        if (IsPointerElement(operation))
+        {
+            var children = operation.ChildOperations.ToArray();
+            return children.Length == 2 && IsReadOnlyPointerExpression(children[0]);
+        }
+        switch (operation)
+        {
+            case IParameterReferenceOperation parameter:
+                return parameter.Parameter.RefKind == RefKind.In ||
+                    function.TryGetCapture(parameter.Parameter, out var parameterCapture) &&
+                    parameterCapture.IsReadOnly;
+            case ILocalReferenceOperation local:
+                return local.Local.RefKind == RefKind.RefReadOnly ||
+                    function.TryGetCapture(local.Local, out var localCapture) &&
+                    localCapture.IsReadOnly;
+            case IInstanceReferenceOperation:
+                return function.HasInstance && function.IsReadOnlyInstance;
+            case IInlineArrayAccessOperation inlineArray:
+                return IsReadOnlyPlace(inlineArray.Instance);
+            case IFieldReferenceOperation field:
+                if (field.Field.IsReadOnly && !field.Field.IsStatic && !function.IsConstructor)
+                    return true;
+                if (field.Instance is null)
+                    return false;
+                if (IsPointerMemberAccess(field))
+                    return IsReadOnlyPointerExpression(field.Instance);
+                if (IsPointerIndirection(field.Instance))
+                    return IsReadOnlyPointerExpression(field.Instance.ChildOperations.First());
+                return IsReadOnlyPlace(field.Instance);
+            default:
+                return false;
+        }
+    }
+
+    // A pointer expression is read-only when it is a [CudaReadOnly] pointer parameter, an
+    // offset of one, or a pointer loaded through one (read-only storage is deep).
+    private bool IsReadOnlyPointerExpression(IOperation operation)
+    {
+        while (operation is IParenthesizedOperation or
+            IConversionOperation { Conversion.IsIdentity: true } or
+            IConversionOperation { Type: IPointerTypeSymbol })
+        {
+            operation = operation.ChildOperations.First();
+        }
+        if (operation.Type is not IPointerTypeSymbol)
+            return false;
+        if (operation is IParameterReferenceOperation { Parameter: { RefKind: RefKind.None } parameter })
+            return plan.HasAttribute(parameter, CudaEmissionPlan.ReadOnlyAttributeName);
+        if (operation is IBinaryOperation { OperatorKind: BinaryOperatorKind.Add } binary)
+        {
+            return IsReadOnlyPointerExpression(binary.LeftOperand) ||
+                IsReadOnlyPointerExpression(binary.RightOperand);
+        }
+        if (IsPointerIndirection(operation))
+            return IsReadOnlyPointerExpression(operation.ChildOperations.First());
+        if (IsPointerElement(operation))
+        {
+            var children = operation.ChildOperations.ToArray();
+            return children.Length == 2 && IsReadOnlyPointerExpression(children[0]);
+        }
+        return false;
+    }
+
+    // A fixed buffer or [CudaInlineArray] field is a pointer-typed value that decays from an array
+    // stored inline in its structure.
+    private bool IsInlineArrayBufferField(IFieldSymbol field) =>
+        plan.TryGetField(field, out var fieldPlan) &&
+        fieldPlan.InlineArrayLength > 0 &&
+        fieldPlan.Symbol.Type is IPointerTypeSymbol;
+
+    private bool IsInlineArrayElementField(IFieldSymbol field) =>
+        plan.TryGetField(field, out var fieldPlan) && fieldPlan.IsInlineArrayElementField;
+
     private static bool IsPointerElement(IOperation operation) =>
         operation.Kind == OperationKind.None &&
         operation.Syntax.IsKind(SyntaxKind.ElementAccessExpression);
@@ -5126,6 +5332,7 @@ string.Equals(conversion.Type?.ContainingNamespace?.ToDisplayString(), "System",
             IFieldReferenceOperation or
             IArrayElementReferenceOperation or
             IImplicitIndexerReferenceOperation or
+            IInlineArrayAccessOperation or
             IPropertyReferenceOperation { Property.IsIndexer: true } ||
             IsPointerIndirection(operation) ||
             IsPointerElement(operation);

@@ -165,10 +165,7 @@ internal sealed class CudaLayoutEngine(
             return false;
         }
 
-        var elementType = field.InlineArrayLength > 0
-            ? ((IPointerTypeSymbol)field.Symbol.Type).PointedAtType
-            : field.Symbol.Type;
-        if (!TryGetTypeLayout(elementType, out var size, out var alignment, out reason))
+        if (!TryGetTypeLayout(field.ElementType, out var size, out var alignment, out reason))
         {
             layout = null!;
             reason = $"field '{field.Symbol.Name}' {reason}";

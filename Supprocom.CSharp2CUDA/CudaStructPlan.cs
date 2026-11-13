@@ -29,4 +29,6 @@ internal sealed class CudaStructPlan(
     public List<CudaFieldPlan> Fields { get; } = [];
     public List<CudaPropertyPlan> Properties { get; } = [];
     public CudaStructLayout? Layout { get; set; }
+    public bool IsInlineArray { get; set; }
+    public int InlineArrayLength { get; set; }
 }

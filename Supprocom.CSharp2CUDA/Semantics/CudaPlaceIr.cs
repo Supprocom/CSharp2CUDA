@@ -12,4 +12,6 @@ internal sealed record CudaPlaceIr(
     Location Location)
 {
     public CudaViewMutability ViewMutability { get; init; }
+
+    public bool IsReadOnly { get; init; }
 }

@@ -327,6 +327,46 @@ internal static class CudaDiagnostics
         DiagnosticSeverity.Error,
         isEnabledByDefault: true);
 
+    public static readonly DiagnosticDescriptor InvalidInlineArrayElement = new(
+        "CS2CUDA041",
+        "Inline array element type is not supported",
+        "Inline array '{0}' has element type '{1}', which is not a supported primitive, enumeration, or emitted structure",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InvalidInlineArrayLength = new(
+        "CS2CUDA042",
+        "Inline array length is not positive",
+        "Inline array '{0}' has length {1}; the length must be greater than zero",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InlineArrayLengthLimit = new(
+        "CS2CUDA043",
+        "Inline array is too long",
+        "Inline array '{0}' has {1} elements; the configured limit is {2} elements (MaxInlineArrayLength)",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InvalidInlineArrayLayout = new(
+        "CS2CUDA044",
+        "Inline array layout is not supported",
+        "Inline array structure '{0}' uses {1} layout; only sequential layout is supported",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
+    public static readonly DiagnosticDescriptor InlineArraySpanConversion = new(
+        "CS2CUDA045",
+        "Inline array to span conversion is not supported",
+        "Inline array expression '{0}' cannot be converted to Span or ReadOnlySpan; this conversion is not supported",
+        Category,
+        DiagnosticSeverity.Error,
+        isEnabledByDefault: true);
+
     public static ImmutableArray<DiagnosticDescriptor> All { get; } =
     [
         MissingTranslationUnit,
@@ -368,6 +408,11 @@ internal static class CudaDiagnostics
         UnsupportedPattern,
         UnsupportedOperator,
         UnsupportedRangeOperation,
-        FixedLocalStorageLimit
+        FixedLocalStorageLimit,
+        InvalidInlineArrayElement,
+        InvalidInlineArrayLength,
+        InlineArrayLengthLimit,
+        InvalidInlineArrayLayout,
+        InlineArraySpanConversion
     ];
 }

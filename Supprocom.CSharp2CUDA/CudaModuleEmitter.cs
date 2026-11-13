@@ -26,12 +26,12 @@ internal sealed class CudaModuleEmitter(
             sections.Add(CudaModuleSection.Raw(NormalizeNewLines(TupleTypes)));
         if (plan.UsesArrayViews)
             sections.Add(CudaModuleSection.Raw(NormalizeNewLines(ArrayViewTypes)));
+        if (plan.UsesInlineArrayIndex)
+            sections.Add(CudaModuleSection.Raw(NormalizeNewLines(InlineArrayIndex)));
         if (plan.UsesVolatileMappedMemory)
             sections.Add(CudaModuleSection.Raw(NormalizeNewLines(VolatileMappedMemoryIntrinsics)));
         if (plan.UsesGlobalTimer)
             sections.Add(CudaModuleSection.Raw(NormalizeNewLines(GlobalTimerIntrinsic)));
-        if (structures.Any(plan.RequiresAbiLayout))
-            sections.Add(CudaModuleSection.Raw("#include <stddef.h>"));
         foreach (var constant in plan.ConstantArrays)
         {
             sections.Add(CreateMappedSection(
@@ -130,8 +130,11 @@ internal sealed class CudaModuleEmitter(
             output.WriteLine();
             output.Write("#pragma pack(pop)");
         }
-        if (structure.Layout is { } layout && plan.RequiresAbiLayout(structure))
+        if (structure.Layout is { } layout &&
+            (plan.HasInlineArrayLayout(structure) || plan.RequiresAbiLayout(structure)))
+        {
             EmitStructLayoutAssertions(output, structure, layout);
+        }
         return output.ToString();
     }
 
@@ -148,11 +151,8 @@ internal sealed class CudaModuleEmitter(
             foreach (ref readonly var field in CollectionsMarshal.AsSpan(structure.Fields))
             {
                 output.Write("    ");
-                var fieldType = field.InlineArrayLength > 0
-                    ? ((IPointerTypeSymbol)field.Symbol.Type).PointedAtType
-                    : field.Symbol.Type;
                 output.Write(plan.FormatType(
-                    fieldType,
+                    field.ElementType,
                     false,
                     field.Declaration.Declaration.Type.GetLocation()));
                 output.Write(' ');
@@ -199,7 +199,7 @@ internal sealed class CudaModuleEmitter(
         {
             if (!layout.IsExplicit)
             {
-                output.Write("static_assert(offsetof(");
+                output.Write("static_assert(__builtin_offsetof(");
                 output.Write(structure.EmittedName);
                 output.Write(", ");
                 output.Write(plan.GetIdentifier(field.Field.Symbol));
@@ -458,6 +458,18 @@ internal sealed class CudaModuleEmitter(
             unsigned long long value)
         {
             *((volatile unsigned long long*)(address + byte_offset)) = value;
+        }
+        #endif
+        """;
+
+    private const string InlineArrayIndex = """
+        #ifndef CSHARP2CUDA_INLINE_ARRAY_INDEX_0_3_3
+        #define CSHARP2CUDA_INLINE_ARRAY_INDEX_0_3_3
+        static __device__ __forceinline__ int csharp2cuda_inline_index(int index, int length)
+        {
+            if ((unsigned int)index >= (unsigned int)length)
+                asm volatile("trap;");
+            return index;
         }
         #endif
         """;
