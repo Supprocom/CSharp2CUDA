@@ -16,6 +16,9 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
     private static readonly Lock InitializationLock = new();
     private static bool initialized;
     private static nint nvrtcHandle;
+    private static nint driverHandle;
+    private static string nvrtcLibraryName = string.Empty;
+    private static string driverLibraryName = "nvcuda.dll";
     private static string unavailableReason = "CUDA initialization did not run.";
     private readonly nint context;
     private readonly nint module;
@@ -218,6 +221,12 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
             {
                 if (!TryLoadNvrtc(out nvrtcHandle, out unavailableReason))
                     return;
+                if (!OperatingSystem.IsWindows()
+                    && !TryLoadDriver(out driverHandle, out unavailableReason))
+                {
+                    nvrtcHandle = 0;
+                    return;
+                }
                 NativeLibrary.SetDllImportResolver(
                     typeof(CudaTestRuntime).Assembly,
                     ResolveLibrary);
@@ -237,6 +246,55 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
                 nvrtcHandle = 0;
             }
         }
+    }
+
+    public static string DescribeLibraries()
+    {
+        EnsureInitialized();
+        if (!IsAvailable(out var reason))
+            return reason;
+        Require(cuDriverGetVersion(out var driverVersion), "cuDriverGetVersion");
+        Require(nvrtcVersion(out var nvrtcMajor, out var nvrtcMinor), "nvrtcVersion");
+        return string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"driver library {driverLibraryName}, CUDA driver API {driverVersion}; "
+            + $"NVRTC library {nvrtcLibraryName}, version {nvrtcMajor}.{nvrtcMinor}");
+    }
+
+    public static bool TryGetVersions(out int driverVersion, out int nvrtcMajor, out int nvrtcMinor)
+    {
+        driverVersion = 0;
+        nvrtcMajor = 0;
+        nvrtcMinor = 0;
+        EnsureInitialized();
+        return IsAvailable(out _)
+            && cuDriverGetVersion(out driverVersion) == 0
+            && nvrtcVersion(out nvrtcMajor, out nvrtcMinor) == 0;
+    }
+
+    private static bool TryLoadDriver(out nint handle, out string reason)
+    {
+        var candidates = new List<string>();
+        var configuredLibrary = Environment.GetEnvironmentVariable(
+            "CSHARP2CUDA_CUDA_DRIVER_LIBRARY");
+        if (!string.IsNullOrWhiteSpace(configuredLibrary))
+            candidates.Add(configuredLibrary);
+        candidates.Add("libcuda.so.1");
+        candidates.Add("libcuda.so");
+
+        foreach (ref readonly var candidate in CollectionsMarshal.AsSpan(candidates))
+        {
+            if (NativeLibrary.TryLoad(candidate, out handle))
+            {
+                driverLibraryName = candidate;
+                reason = string.Empty;
+                return true;
+            }
+        }
+
+        handle = 0;
+        reason = "CUDA tests are unavailable: the CUDA driver library (libcuda.so.1) was not found.";
+        return false;
     }
 
     private static bool TryLoadNvrtc(out nint handle, out string reason)
@@ -276,6 +334,7 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
         {
             if (NativeLibrary.TryLoad(candidate, out handle))
             {
+                nvrtcLibraryName = candidate;
                 reason = string.Empty;
                 return true;
             }
@@ -344,7 +403,9 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
     {
         _ = assembly;
         _ = searchPath;
-        return string.Equals(libraryName, "nvrtc64_120_0.dll", StringComparison.Ordinal) ? nvrtcHandle : 0;
+        if (string.Equals(libraryName, "nvrtc64_120_0.dll", StringComparison.Ordinal))
+            return nvrtcHandle;
+        return string.Equals(libraryName, "nvcuda.dll", StringComparison.Ordinal) ? driverHandle : 0;
     }
 
     private static byte[] CompilePtx(
@@ -506,6 +567,14 @@ internal sealed unsafe class CudaTestRuntime : IDisposable
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvrtc64_120_0.dll", CallingConvention = CallingConvention.Cdecl)]
     private static extern int nvrtcDestroyProgram(ref nint program);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    [DllImport("nvrtc64_120_0.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int nvrtcVersion(out int major, out int minor);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
+    [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
+    private static extern int cuDriverGetVersion(out int version);
 
     [DefaultDllImportSearchPaths(DllImportSearchPath.SafeDirectories)]
     [DllImport("nvcuda.dll", CallingConvention = CallingConvention.Cdecl)]
